@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/internal/probe"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/internal/probe"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )
 

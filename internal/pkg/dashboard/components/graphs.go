@@ -8,7 +8,7 @@ import (
 	"github.com/gizak/termui/v3/widgets"
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
 )
 
 // BaseGraph represents the widget with some usage graph.

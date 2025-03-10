@@ -10,7 +10,7 @@ import (
 
 	"github.com/siderolabs/gen/pair/ordered"
 
-	networkadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/network"
+	networkadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/network"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

@@ -12,8 +12,8 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/blkid"
 	"github.com/siderolabs/go-copy/copy"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

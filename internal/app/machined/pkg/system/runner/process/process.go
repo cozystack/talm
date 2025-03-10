@@ -26,12 +26,12 @@ import (
 	"github.com/siderolabs/go-cmd/pkg/cmd/proc/reaper"
 	"kernel.org/pub/linux/libs/security/libcap/cap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner"
-	"github.com/aenix-io/talm/internal/pkg/cgroup"
-	"github.com/aenix-io/talm/internal/pkg/selinux"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner"
+	"github.com/cozystack/talm/internal/pkg/cgroup"
+	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

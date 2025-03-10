@@ -24,11 +24,11 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/components"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/logdata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resolver"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/components"
+	"github.com/cozystack/talm/internal/pkg/dashboard/logdata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resolver"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 

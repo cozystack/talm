@@ -21,7 +21,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/selinux"
+	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/secrets"

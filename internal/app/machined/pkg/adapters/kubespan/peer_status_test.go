@@ -12,8 +12,8 @@ import (
 	"github.com/siderolabs/gen/value"
 	"github.com/stretchr/testify/assert"
 
-	kubespanadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/kubespan"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/adapters/wireguard"
+	kubespanadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/kubespan"
+	"github.com/cozystack/talm/internal/app/machined/pkg/adapters/wireguard"
 	"github.com/siderolabs/talos/pkg/machinery/resources/kubespan"
 )
 

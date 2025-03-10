@@ -12,8 +12,8 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
 	"github.com/siderolabs/talos/pkg/conditions"
 )
 

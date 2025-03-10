@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
 )
 
 type SystemServicesSuite struct {

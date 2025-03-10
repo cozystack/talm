@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aenix-io/talm/pkg/generated"
+	"github.com/cozystack/talm/pkg/generated"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 

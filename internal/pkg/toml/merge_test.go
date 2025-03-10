@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/toml"
+	"github.com/cozystack/talm/internal/pkg/toml"
 )
 
 //go:embed testdata/expected.toml

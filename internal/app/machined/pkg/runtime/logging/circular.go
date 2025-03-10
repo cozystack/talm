@@ -21,7 +21,7 @@ import (
 	"github.com/siderolabs/go-debug"
 	"github.com/siderolabs/go-tail"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 // These constants should some day move to config.

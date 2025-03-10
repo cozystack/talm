@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 var maxEpochTS = float64(time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC).Unix())

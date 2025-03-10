@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	netctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	netctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"

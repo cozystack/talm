@@ -23,7 +23,7 @@ import (
 	"go.uber.org/zap"
 	"go4.org/netipx"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

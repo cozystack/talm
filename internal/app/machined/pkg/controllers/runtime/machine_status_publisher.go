@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"go.uber.org/zap"
 
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

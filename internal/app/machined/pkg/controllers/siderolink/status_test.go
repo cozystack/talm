@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	siderolinkctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/siderolink"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	siderolinkctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/siderolink"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/siderolink"
 )

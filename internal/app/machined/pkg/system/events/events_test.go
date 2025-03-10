@@ -11,7 +11,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
 )
 
 type EventsSuite struct {

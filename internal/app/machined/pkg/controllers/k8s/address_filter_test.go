@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap/zaptest"
 
-	k8sctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s"
+	k8sctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

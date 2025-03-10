@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv"
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv/talos"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv/talos"
 )
 
 func TestMarshalUnmarshal(t *testing.T) {

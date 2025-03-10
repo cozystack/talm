@@ -21,7 +21,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/volumes"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/volumes"
 	blockpb "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/block"
 	"github.com/siderolabs/talos/pkg/machinery/proto"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"

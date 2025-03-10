@@ -10,9 +10,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
-	"github.com/aenix-io/talm/internal/pkg/secureboot/measure"
-	"github.com/aenix-io/talm/internal/pkg/secureboot/pesign"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot/measure"
+	"github.com/cozystack/talm/internal/pkg/secureboot/pesign"
 )
 
 // section is a UKI file section.

@@ -17,7 +17,7 @@ import (
 	"github.com/foxboron/go-uefi/efivar"
 	"github.com/google/uuid"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot/pesign"
+	"github.com/cozystack/talm/internal/pkg/secureboot/pesign"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

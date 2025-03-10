@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/pkg/containers/cri/containerd"
+	"github.com/cozystack/talm/internal/pkg/containers/cri/containerd"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cri"
 	"github.com/siderolabs/talos/pkg/machinery/resources/files"

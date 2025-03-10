@@ -20,8 +20,8 @@ import (
 	"github.com/vmware/vmw-guestinfo/vmcheck"
 	yaml "gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	platformerrors "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	platformerrors "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

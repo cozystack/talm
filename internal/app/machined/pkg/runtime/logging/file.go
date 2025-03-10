@@ -16,7 +16,7 @@ import (
 	"github.com/siderolabs/gen/containers"
 	"github.com/siderolabs/go-tail"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/follow"
 )
 

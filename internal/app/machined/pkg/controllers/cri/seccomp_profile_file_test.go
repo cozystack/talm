@@ -15,8 +15,8 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/cri"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/cri"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
 	criseccompresource "github.com/siderolabs/talos/pkg/machinery/resources/cri"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

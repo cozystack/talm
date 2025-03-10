@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/logging"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

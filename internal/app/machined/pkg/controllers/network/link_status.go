@@ -24,10 +24,10 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	networkadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/network"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/watch"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
-	"github.com/aenix-io/talm/internal/pkg/pci"
+	networkadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/watch"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
+	"github.com/cozystack/talm/internal/pkg/pci"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

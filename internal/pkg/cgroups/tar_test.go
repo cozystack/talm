@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/cgroups"
+	"github.com/cozystack/talm/internal/pkg/cgroups"
 )
 
 func TestTreeFromTarGz(t *testing.T) {

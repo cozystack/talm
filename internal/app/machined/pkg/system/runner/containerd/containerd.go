@@ -20,10 +20,10 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner"
-	"github.com/aenix-io/talm/internal/pkg/cgroup"
-	"github.com/aenix-io/talm/internal/pkg/selinux"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner"
+	"github.com/cozystack/talm/internal/pkg/cgroup"
+	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

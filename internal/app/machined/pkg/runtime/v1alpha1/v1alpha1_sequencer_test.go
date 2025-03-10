@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 func TestNewSequencer(t *testing.T) {

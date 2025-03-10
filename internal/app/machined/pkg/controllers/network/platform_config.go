@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

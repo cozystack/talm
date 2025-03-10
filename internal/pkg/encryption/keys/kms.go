@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/aenix-io/talm/internal/pkg/encryption/helpers"
-	"github.com/aenix-io/talm/internal/pkg/endpoint"
+	"github.com/cozystack/talm/internal/pkg/encryption/helpers"
+	"github.com/cozystack/talm/internal/pkg/endpoint"
 	"github.com/siderolabs/talos/pkg/httpdefaults"
 )
 

@@ -20,13 +20,13 @@ import (
 	"github.com/stretchr/testify/suite"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/logging"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner/process"
-	ctrs "github.com/aenix-io/talm/internal/pkg/containers"
-	"github.com/aenix-io/talm/internal/pkg/containers/cri"
-	criclient "github.com/aenix-io/talm/internal/pkg/cri"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner/process"
+	ctrs "github.com/cozystack/talm/internal/pkg/containers"
+	"github.com/cozystack/talm/internal/pkg/containers/cri"
+	criclient "github.com/cozystack/talm/internal/pkg/cri"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

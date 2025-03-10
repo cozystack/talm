@@ -23,7 +23,7 @@ import (
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 	schedulerv1 "k8s.io/kube-scheduler/config/v1"
 
-	"github.com/aenix-io/talm/internal/pkg/selinux"
+	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 )

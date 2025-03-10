@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	"github.com/siderolabs/talos/pkg/download"
 )
 

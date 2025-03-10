@@ -20,9 +20,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	networkutils "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/utils"
-	machinedruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/logging"
+	networkutils "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/utils"
+	machinedruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

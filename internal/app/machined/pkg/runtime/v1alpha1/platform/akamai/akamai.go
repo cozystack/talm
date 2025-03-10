@@ -16,8 +16,8 @@ import (
 	akametadata "github.com/linode/go-metadata"
 	"github.com/siderolabs/go-procfs/procfs"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	"github.com/aenix-io/talm/internal/app/apid/pkg/backend"
+	"github.com/cozystack/talm/internal/app/apid/pkg/backend"
 	"github.com/siderolabs/talos/pkg/grpc/middleware/authz"
 	"github.com/siderolabs/talos/pkg/machinery/api/cluster"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"

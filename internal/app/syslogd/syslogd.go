@@ -11,8 +11,8 @@ import (
 	"io"
 	"net"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/syslogd/internal/parser"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/syslogd/internal/parser"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

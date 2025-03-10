@@ -20,7 +20,7 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/sirupsen/logrus"
 
-	containerdrunner "github.com/aenix-io/talm/internal/app/machined/pkg/system/runner/containerd"
+	containerdrunner "github.com/cozystack/talm/internal/app/machined/pkg/system/runner/containerd"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

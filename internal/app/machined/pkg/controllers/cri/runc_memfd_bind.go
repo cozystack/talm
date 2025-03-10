@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
-	runtimetalos "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	runtimetalos "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 // RuncMemFDBindController created a locked memfd bind for the runc binary, so that it can be used instead of copying the actual runc binary everytime.

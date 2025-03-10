@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/discovery/registry"
+	"github.com/cozystack/talm/internal/pkg/discovery/registry"
 	"github.com/siderolabs/talos/pkg/conditions"
 	"github.com/siderolabs/talos/pkg/kubernetes"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

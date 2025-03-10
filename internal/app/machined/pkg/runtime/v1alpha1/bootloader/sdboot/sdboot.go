@@ -17,10 +17,10 @@ import (
 	"github.com/siderolabs/gen/xerrors"
 	"github.com/siderolabs/go-blockdevice/v2/blkid"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
-	mountv2 "github.com/aenix-io/talm/internal/pkg/mount/v2"
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
+	mountv2 "github.com/cozystack/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/imager/utils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

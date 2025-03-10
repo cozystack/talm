@@ -18,9 +18,9 @@ import (
 	"github.com/siderolabs/go-pointer"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/pkg/cgroup"
-	"github.com/aenix-io/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/pkg/cgroup"
+	"github.com/cozystack/talm/internal/pkg/mount/v2"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

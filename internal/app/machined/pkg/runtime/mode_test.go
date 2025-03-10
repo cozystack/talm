@@ -8,7 +8,7 @@ package runtime_test
 import (
 	"testing"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 func TestMode_String(t *testing.T) {

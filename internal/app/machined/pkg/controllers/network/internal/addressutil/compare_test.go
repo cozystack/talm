@@ -13,7 +13,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
 )
 
 func toNetip(prefixes ...string) []netip.Prefix {

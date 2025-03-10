@@ -19,7 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/cluster"
 	"github.com/siderolabs/talos/pkg/cluster/check"
 	"github.com/siderolabs/talos/pkg/conditions"

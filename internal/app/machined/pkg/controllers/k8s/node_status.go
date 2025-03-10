@@ -17,7 +17,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s/internal/nodewatch"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s/internal/nodewatch"
 	"github.com/siderolabs/talos/pkg/conditions"
 	"github.com/siderolabs/talos/pkg/kubernetes"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

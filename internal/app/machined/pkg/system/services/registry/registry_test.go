@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services/registry"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services/registry"
 	"github.com/siderolabs/talos/pkg/imager/cache"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

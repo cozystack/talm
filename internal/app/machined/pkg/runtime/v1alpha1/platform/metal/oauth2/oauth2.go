@@ -20,7 +20,7 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"golang.org/x/oauth2"
 
-	metalurl "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal/url"
+	metalurl "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal/url"
 	"github.com/siderolabs/talos/pkg/httpdefaults"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

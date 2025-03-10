@@ -13,7 +13,7 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/partitioning"
 	"github.com/siderolabs/go-pointer"
 
-	"github.com/aenix-io/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/pkg/mount/v2"
 )
 
 // Spec specifies what has to be mounted.

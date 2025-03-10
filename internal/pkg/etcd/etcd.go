@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

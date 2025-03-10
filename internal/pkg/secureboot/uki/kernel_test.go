@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot/uki"
+	"github.com/cozystack/talm/internal/pkg/secureboot/uki"
 )
 
 func TestKernelVersion(t *testing.T) {

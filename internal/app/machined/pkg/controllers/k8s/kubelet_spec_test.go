@@ -24,8 +24,8 @@ import (
 	v1 "k8s.io/component-base/logs/api/v1"
 	kubeletconfig "k8s.io/kubelet/config/v1beta1"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	k8sctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	k8sctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

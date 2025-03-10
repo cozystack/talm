@@ -17,7 +17,7 @@ import (
 	"github.com/siderolabs/go-pcidb/pkg/pcidb"
 	"go.uber.org/zap"
 
-	runtimetalos "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	runtimetalos "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/hardware"
 )
 

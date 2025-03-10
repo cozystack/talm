@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/kubespan"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/kubespan"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

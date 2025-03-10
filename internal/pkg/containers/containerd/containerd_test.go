@@ -22,13 +22,13 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/logging"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner"
-	containerdrunner "github.com/aenix-io/talm/internal/app/machined/pkg/system/runner/containerd"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner/process"
-	ctrd "github.com/aenix-io/talm/internal/pkg/containers/containerd"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner"
+	containerdrunner "github.com/cozystack/talm/internal/app/machined/pkg/system/runner/containerd"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner/process"
+	ctrd "github.com/cozystack/talm/internal/pkg/containers/containerd"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

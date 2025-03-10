@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/aenix-io/talm/internal/pkg/ntp"
+	"github.com/cozystack/talm/internal/pkg/ntp"
 	timeapi "github.com/siderolabs/talos/pkg/machinery/api/time"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

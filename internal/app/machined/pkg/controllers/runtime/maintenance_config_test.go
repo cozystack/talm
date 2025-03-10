@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	runtimectrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	runtimectrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"

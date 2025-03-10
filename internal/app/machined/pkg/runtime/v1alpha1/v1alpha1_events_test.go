@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/time/rate"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 )
 

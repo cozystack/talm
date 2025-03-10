@@ -15,7 +15,7 @@ import (
 	blockdev "github.com/siderolabs/go-blockdevice/v2/block"
 	"go.uber.org/zap"
 
-	mountv2 "github.com/aenix-io/talm/internal/pkg/mount/v2"
+	mountv2 "github.com/cozystack/talm/internal/pkg/mount/v2"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	"github.com/siderolabs/talos/pkg/makefs"
 )

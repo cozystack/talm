@@ -13,9 +13,9 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/blkid"
 	"github.com/siderolabs/go-cmd/pkg/cmd"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/imager/utils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

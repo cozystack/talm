@@ -31,9 +31,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	kubeletconfig "k8s.io/kubelet/config/v1beta1"
 
-	runtimetalos "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services"
+	runtimetalos "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/files"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"

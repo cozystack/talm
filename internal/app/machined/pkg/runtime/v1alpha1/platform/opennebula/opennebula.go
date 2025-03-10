@@ -18,9 +18,9 @@ import (
 	"github.com/hashicorp/go-envparse"
 	"github.com/siderolabs/go-procfs/procfs"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/address"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/address"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

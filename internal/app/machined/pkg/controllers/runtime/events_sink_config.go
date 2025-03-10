@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"go.uber.org/zap"
 
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"

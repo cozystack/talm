@@ -20,8 +20,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/kubeaccess/serviceaccount"
-	"github.com/aenix-io/talm/internal/pkg/etcd"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/kubeaccess/serviceaccount"
+	"github.com/cozystack/talm/internal/pkg/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/kubeaccess"

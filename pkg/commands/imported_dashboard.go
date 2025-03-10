@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard"
+	"github.com/cozystack/talm/internal/pkg/dashboard"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 

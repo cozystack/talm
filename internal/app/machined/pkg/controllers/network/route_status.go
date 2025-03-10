@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/watch"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/watch"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

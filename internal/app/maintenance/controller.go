@@ -4,7 +4,7 @@
 
 package maintenance
 
-import "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+import "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 
 var runtimeController runtime.Controller
 

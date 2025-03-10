@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	networkadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/network"
+	networkadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/network"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

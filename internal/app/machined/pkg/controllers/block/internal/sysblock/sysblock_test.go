@@ -10,7 +10,7 @@ import (
 	"github.com/mdlayher/kobject"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/sysblock"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/sysblock"
 )
 
 func TestWalk(t *testing.T) {

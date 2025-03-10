@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/aenix-io/talm/internal/pkg/dns"
+	"github.com/cozystack/talm/internal/pkg/dns"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

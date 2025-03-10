@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aenix-io/talm/pkg/modeline"
+	"github.com/cozystack/talm/pkg/modeline"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 

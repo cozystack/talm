@@ -8,7 +8,7 @@ import (
 	"debug/pe"
 	"errors"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
 )
 
 // GetSBAT returns the SBAT section from the PE file.

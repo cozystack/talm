@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/pkg/cgroup"
+	"github.com/cozystack/talm/internal/pkg/cgroup"
 )
 
 func TestAvailableMillicores(t *testing.T) {

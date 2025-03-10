@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resolver"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resolver"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 

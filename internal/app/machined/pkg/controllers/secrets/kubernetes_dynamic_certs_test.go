@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	secretsctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/secrets"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	secretsctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

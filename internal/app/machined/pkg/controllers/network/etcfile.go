@@ -24,8 +24,8 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"go.uber.org/zap"
 
-	efiles "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/files"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	efiles "github.com/cozystack/talm/internal/app/machined/pkg/controllers/files"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

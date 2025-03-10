@@ -16,10 +16,10 @@ import (
 	"github.com/cosi-project/runtime/pkg/state"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/inotify"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/kobject"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/sysblock"
-	machineruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/inotify"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/kobject"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/sysblock"
+	machineruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 

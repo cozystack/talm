@@ -13,7 +13,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/state"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/internal/probe"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/internal/probe"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )
 

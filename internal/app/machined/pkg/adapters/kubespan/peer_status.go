@@ -12,7 +12,7 @@ import (
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/adapters/wireguard"
+	"github.com/cozystack/talm/internal/app/machined/pkg/adapters/wireguard"
 	"github.com/siderolabs/talos/pkg/machinery/resources/kubespan"
 )
 

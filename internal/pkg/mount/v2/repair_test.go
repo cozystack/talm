@@ -18,14 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/pkg/mount/v2"
 	"github.com/siderolabs/talos/pkg/makefs"
 )
 
 // Some tests in this package cannot be run under buildkit, as buildkit doesn't propagate partition devices
 // like /dev/loopXpY into the sandbox. To run the tests on your local computer, do the following:
 //
-//  go test -exec sudo -v --count 1 github.com/aenix-io/talm/internal/pkg/mount/v2
+//  go test -exec sudo -v --count 1 github.com/cozystack/talm/internal/pkg/mount/v2
 
 const diskSize = 4 * 1024 * 1024 * 1024 // 4 GiB
 

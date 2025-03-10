@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/health"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/health"
 )
 
 type CheckSuite struct {

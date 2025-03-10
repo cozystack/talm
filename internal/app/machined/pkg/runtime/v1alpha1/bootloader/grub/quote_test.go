@@ -7,7 +7,7 @@ package grub_test
 import (
 	"testing"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/grub"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/grub"
 )
 
 //nolint:dupl

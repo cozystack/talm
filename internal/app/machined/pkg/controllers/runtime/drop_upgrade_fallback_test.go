@@ -18,10 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
-	machineruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/pkg/meta"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
+	machineruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/pkg/meta"
 	metaconsts "github.com/siderolabs/talos/pkg/machinery/meta"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

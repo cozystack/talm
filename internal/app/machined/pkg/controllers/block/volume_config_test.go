@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	blockctrls "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	blockctrls "github.com/cozystack/talm/internal/app/machined/pkg/controllers/block"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/machinery/cel"
 	"github.com/siderolabs/talos/pkg/machinery/cel/celenv"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"

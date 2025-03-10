@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/volumes"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/volumes"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 

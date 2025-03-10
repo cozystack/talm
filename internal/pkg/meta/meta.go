@@ -21,9 +21,9 @@ import (
 	blockdev "github.com/siderolabs/go-blockdevice/v2/block"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv"
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv/syslinux"
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv/talos"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv/syslinux"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv/talos"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"

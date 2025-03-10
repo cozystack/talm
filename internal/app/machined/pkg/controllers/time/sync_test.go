@@ -22,9 +22,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	timectrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/time"
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	timectrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/time"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

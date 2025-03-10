@@ -22,7 +22,7 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"github.com/hashicorp/go-multierror"
 
-	ctrs "github.com/aenix-io/talm/internal/pkg/containers"
+	ctrs "github.com/cozystack/talm/internal/pkg/containers"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

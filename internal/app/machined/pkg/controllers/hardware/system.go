@@ -16,9 +16,9 @@ import (
 	"github.com/siderolabs/go-smbios/smbios"
 	"go.uber.org/zap"
 
-	hwadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/hardware"
-	runtimetalos "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	pkgSMBIOS "github.com/aenix-io/talm/internal/pkg/smbios"
+	hwadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/hardware"
+	runtimetalos "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	pkgSMBIOS "github.com/cozystack/talm/internal/pkg/smbios"
 	"github.com/siderolabs/talos/pkg/machinery/meta"
 	"github.com/siderolabs/talos/pkg/machinery/resources/hardware"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"

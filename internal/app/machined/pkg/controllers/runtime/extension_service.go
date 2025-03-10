@@ -15,8 +15,8 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services"
 	extservices "github.com/siderolabs/talos/pkg/machinery/extensions/services"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

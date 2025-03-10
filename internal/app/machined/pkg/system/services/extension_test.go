@@ -16,8 +16,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services/mocks"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services/mocks"
 	extservices "github.com/siderolabs/talos/pkg/machinery/extensions/services"
 )
 

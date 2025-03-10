@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	netctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	netctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
 	configs "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"

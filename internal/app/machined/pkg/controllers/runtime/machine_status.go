@@ -18,8 +18,8 @@ import (
 	"go.uber.org/zap"
 	v1 "k8s.io/api/core/v1"
 
-	k8sadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/k8s"
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	k8sadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/k8s"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"

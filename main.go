@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/pkg/commands"
+	"github.com/cozystack/talm/pkg/commands"
 	_ "github.com/siderolabs/talos/cmd/talosctl/acompat"
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/common"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

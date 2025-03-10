@@ -13,8 +13,8 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	etcdctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/etcd"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	etcdctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/v1alpha1"
 )

@@ -19,9 +19,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
-	metalurl "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal/url"
-	"github.com/aenix-io/talm/internal/pkg/dashboard"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
+	metalurl "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal/url"
+	"github.com/cozystack/talm/internal/pkg/dashboard"
 	"github.com/siderolabs/talos/pkg/grpc/middleware/authz"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner/restart"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner/restart"
 )
 
 type RestartSuite struct {

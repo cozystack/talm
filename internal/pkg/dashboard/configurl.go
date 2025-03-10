@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/meta"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"

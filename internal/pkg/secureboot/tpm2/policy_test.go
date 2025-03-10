@@ -11,7 +11,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/stretchr/testify/require"
 
-	tpm2internal "github.com/aenix-io/talm/internal/pkg/secureboot/tpm2"
+	tpm2internal "github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
 )
 
 func TestCalculatePolicy(t *testing.T) {

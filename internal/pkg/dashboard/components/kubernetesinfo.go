@@ -11,8 +11,8 @@ import (
 	"github.com/rivo/tview"
 	"github.com/siderolabs/gen/maps"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"

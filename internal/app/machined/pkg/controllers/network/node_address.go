@@ -18,7 +18,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

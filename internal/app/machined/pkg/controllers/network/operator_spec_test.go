@@ -22,9 +22,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	netctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/operator"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	netctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/operator"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

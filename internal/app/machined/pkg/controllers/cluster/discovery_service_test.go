@@ -23,9 +23,9 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap/zaptest"
 
-	clusteradapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/cluster"
-	clusterctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/cluster"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
+	clusteradapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/cluster"
+	clusterctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/cluster"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/proto"

@@ -10,7 +10,7 @@ import (
 
 	"github.com/rivo/tview"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
 

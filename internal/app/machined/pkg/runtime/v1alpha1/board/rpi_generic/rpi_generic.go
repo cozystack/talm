@@ -13,7 +13,7 @@ import (
 	"github.com/siderolabs/go-copy/copy"
 	"github.com/siderolabs/go-procfs/procfs"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

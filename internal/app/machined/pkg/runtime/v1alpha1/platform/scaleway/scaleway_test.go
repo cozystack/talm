@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/scaleway"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/scaleway"
 )
 
 //go:embed testdata/metadata-v1.json

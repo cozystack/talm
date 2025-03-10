@@ -11,8 +11,8 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/v1alpha1"
-	machineruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/v1alpha1"
+	machineruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
 

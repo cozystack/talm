@@ -14,8 +14,8 @@ import (
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/siderolabs/gen/maps"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	mountv2 "github.com/aenix-io/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	mountv2 "github.com/cozystack/talm/internal/pkg/mount/v2"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/v1alpha1"

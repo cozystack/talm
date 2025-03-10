@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	filesctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/files"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	filesctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/files"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

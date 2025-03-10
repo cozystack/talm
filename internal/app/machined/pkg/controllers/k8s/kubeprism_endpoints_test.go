@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	clusteradapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/cluster"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	clusterctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s"
+	clusteradapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/cluster"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	clusterctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"

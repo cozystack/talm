@@ -12,7 +12,7 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	runtimecontrollers "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
+	runtimecontrollers "github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

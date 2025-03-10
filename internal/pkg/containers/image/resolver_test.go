@@ -13,7 +13,7 @@ import (
 	"github.com/siderolabs/go-pointer"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/pkg/containers/image"
+	"github.com/cozystack/talm/internal/pkg/containers/image"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 )

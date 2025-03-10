@@ -25,9 +25,9 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"go.uber.org/zap"
 
-	talosruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
-	platformerrors "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	talosruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
+	platformerrors "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"

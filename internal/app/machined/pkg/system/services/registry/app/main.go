@@ -13,7 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services/registry"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services/registry"
 )
 
 func main() {

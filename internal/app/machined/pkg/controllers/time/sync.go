@@ -17,9 +17,9 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/pkg/ntp"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/pkg/ntp"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/time"

@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	secretsctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/secrets"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	secretsctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/secrets"

@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/block/internal/inotify"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/block/internal/inotify"
 )
 
 //nolint:gocyclo

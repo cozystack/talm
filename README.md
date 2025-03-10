@@ -33,7 +33,7 @@ with the official tools like talosctl and Omni.
 
 ## Installation
 
-Download binary from Github [releases page](https://github.com/aenix-io/talm/releases/latest)
+Download binary from Github [releases page](https://github.com/cozystack/talm/releases/latest)
 
 ```bash
 chmod +x ./talm-linux-amd64

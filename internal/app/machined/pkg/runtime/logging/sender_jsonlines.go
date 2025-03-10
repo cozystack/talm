@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 )
 

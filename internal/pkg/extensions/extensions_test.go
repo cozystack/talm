@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/extensions"
+	"github.com/cozystack/talm/internal/pkg/extensions"
 	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 )
 

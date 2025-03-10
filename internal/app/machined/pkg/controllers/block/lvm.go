@@ -17,7 +17,7 @@ import (
 	"github.com/siderolabs/go-cmd/pkg/cmd"
 	"go.uber.org/zap"
 
-	machineruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	machineruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	"github.com/siderolabs/talos/pkg/machinery/resources/v1alpha1"
 )

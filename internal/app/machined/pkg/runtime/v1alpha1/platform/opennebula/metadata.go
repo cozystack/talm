@@ -18,8 +18,8 @@ import (
 	"github.com/siderolabs/go-blockdevice/blockdevice/probe"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 )
 
 const (

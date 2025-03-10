@@ -20,8 +20,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	networkutils "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/utils"
-	machinedruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	networkutils "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/utils"
+	machinedruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )

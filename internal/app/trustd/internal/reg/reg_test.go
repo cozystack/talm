@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/peer"
 
-	"github.com/aenix-io/talm/internal/app/trustd/internal/reg"
+	"github.com/cozystack/talm/internal/app/trustd/internal/reg"
 	"github.com/siderolabs/talos/pkg/machinery/api/security"
 	gensecrets "github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/resources/secrets"

@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap/zaptest"
 
-	filesctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/files"
+	filesctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/files"
 	"github.com/siderolabs/talos/pkg/machinery/resources/files"
 )
 

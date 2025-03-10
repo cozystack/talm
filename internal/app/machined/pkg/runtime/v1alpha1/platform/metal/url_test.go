@@ -19,7 +19,7 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/metal"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/hardware"

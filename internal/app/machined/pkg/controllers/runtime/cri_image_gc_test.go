@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	runtimectrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	runtimectrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/v1alpha1"

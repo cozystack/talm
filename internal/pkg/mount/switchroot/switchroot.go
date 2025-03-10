@@ -15,10 +15,10 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/pkg/mount/v2"
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
-	"github.com/aenix-io/talm/internal/pkg/secureboot/tpm2"
-	"github.com/aenix-io/talm/internal/pkg/selinux"
+	"github.com/cozystack/talm/internal/pkg/mount/v2"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
+	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

@@ -15,8 +15,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
-	tpm2internal "github.com/aenix-io/talm/internal/pkg/secureboot/tpm2"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
+	tpm2internal "github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
 )
 
 // RSAKey is the input for the CalculateBankData function.

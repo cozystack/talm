@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resolver"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/util"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resolver"
+	"github.com/cozystack/talm/internal/pkg/dashboard/util"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )

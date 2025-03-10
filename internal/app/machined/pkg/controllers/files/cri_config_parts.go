@@ -14,7 +14,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/toml"
+	"github.com/cozystack/talm/internal/pkg/toml"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/files"
 )

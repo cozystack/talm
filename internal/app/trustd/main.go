@@ -25,8 +25,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/aenix-io/talm/internal/app/trustd/internal/provider"
-	"github.com/aenix-io/talm/internal/app/trustd/internal/reg"
+	"github.com/cozystack/talm/internal/app/trustd/internal/provider"
+	"github.com/cozystack/talm/internal/app/trustd/internal/reg"
 	"github.com/siderolabs/talos/pkg/grpc/factory"
 	"github.com/siderolabs/talos/pkg/grpc/middleware/auth/basic"
 	"github.com/siderolabs/talos/pkg/machinery/constants"

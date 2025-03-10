@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/crypto/x509"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot/pesign"
+	"github.com/cozystack/talm/internal/pkg/secureboot/pesign"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 )
 

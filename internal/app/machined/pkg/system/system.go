@@ -19,8 +19,8 @@ import (
 	"github.com/siderolabs/gen/maps"
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
 	"github.com/siderolabs/talos/pkg/conditions"
 )
 

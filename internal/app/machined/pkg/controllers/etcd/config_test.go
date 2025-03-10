@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	etcdctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/etcd"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	etcdctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

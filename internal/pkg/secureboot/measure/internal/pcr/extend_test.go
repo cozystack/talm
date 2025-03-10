@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot/measure/internal/pcr"
+	"github.com/cozystack/talm/internal/pkg/secureboot/measure/internal/pcr"
 )
 
 func TestExtend(t *testing.T) {

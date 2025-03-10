@@ -16,9 +16,9 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	clusteradapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/cluster"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	clusteradapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/cluster"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 	"github.com/siderolabs/talos/pkg/machinery/resources/files"

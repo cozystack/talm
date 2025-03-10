@@ -18,7 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/util"
+	"github.com/cozystack/talm/internal/pkg/dashboard/util"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

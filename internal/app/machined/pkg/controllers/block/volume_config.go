@@ -16,8 +16,8 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/encryption"
 	"go.uber.org/zap"
 
-	machinedruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	machinedruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/machinery/cel"
 	"github.com/siderolabs/talos/pkg/machinery/cel/celenv"
 	cfg "github.com/siderolabs/talos/pkg/machinery/config/config"

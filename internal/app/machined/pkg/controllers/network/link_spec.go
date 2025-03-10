@@ -21,9 +21,9 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/wgctrl"
 
-	networkadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/network"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/watch"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
+	networkadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/watch"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

@@ -172,7 +172,7 @@ func processFile(filename, cmdName string) {
 	src := string(content)
 
 	src = strings.ReplaceAll(src, "\"f\"", "\"F\"")
-	src = strings.ReplaceAll(src, "github.com/siderolabs/talos/internal", "github.com/aenix-io/talm/internal")
+	src = strings.ReplaceAll(src, "github.com/siderolabs/talos/internal", "github.com/cozystack/talm/internal")
 
 	// Create a new set of tokens and parse the source code
 	fset := token.NewFileSet()

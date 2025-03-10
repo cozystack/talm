@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap/zaptest"
 	"golang.org/x/sys/unix"
 
-	netctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
+	netctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

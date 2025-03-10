@@ -19,9 +19,9 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"github.com/siderolabs/go-pointer"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/logging"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

@@ -7,7 +7,7 @@ package poweroff_test
 import (
 	"testing"
 
-	"github.com/aenix-io/talm/internal/app/poweroff"
+	"github.com/cozystack/talm/internal/app/poweroff"
 )
 
 func TestParseArgs(t *testing.T) {

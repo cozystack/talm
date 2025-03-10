@@ -12,7 +12,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime/internal/diagnostics"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime/internal/diagnostics"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

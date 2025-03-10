@@ -8,8 +8,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/components"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/components"
 )
 
 // MonitorGrid represents the monitoring grid with a process table and various metrics.

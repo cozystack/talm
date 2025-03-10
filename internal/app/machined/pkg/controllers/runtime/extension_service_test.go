@@ -15,9 +15,9 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	runtimecontrollers "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/services"
+	runtimecontrollers "github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/services"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
 

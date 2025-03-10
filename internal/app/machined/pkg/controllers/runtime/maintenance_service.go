@@ -25,8 +25,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	machinedruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/maintenance"
+	machinedruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/maintenance"
 	"github.com/siderolabs/talos/pkg/grpc/factory"
 	"github.com/siderolabs/talos/pkg/grpc/middleware/authz"
 	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"

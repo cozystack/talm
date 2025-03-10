@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/opennebula"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/opennebula"
 )
 
 //go:embed testdata/metadata.yaml

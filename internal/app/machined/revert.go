@@ -12,9 +12,9 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/state"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
-	"github.com/aenix-io/talm/internal/pkg/meta"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
+	"github.com/cozystack/talm/internal/pkg/meta"
 	metaconsts "github.com/siderolabs/talos/pkg/machinery/meta"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )

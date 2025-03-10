@@ -14,8 +14,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/pkg/timex"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/pkg/timex"
 	"github.com/siderolabs/talos/pkg/machinery/resources/time"
 )
 

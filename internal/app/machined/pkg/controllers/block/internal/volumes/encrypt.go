@@ -15,7 +15,7 @@ import (
 	blockdev "github.com/siderolabs/go-blockdevice/v2/block"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/encryption"
+	"github.com/cozystack/talm/internal/pkg/encryption"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 

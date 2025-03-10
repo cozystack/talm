@@ -16,7 +16,7 @@ import (
 	"github.com/siderolabs/gen/maps"
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv"
 )
 
 // Basic constants configuring the ADV.

@@ -24,9 +24,9 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
-	controllerruntime "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
-	talosruntime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1"
+	controllerruntime "github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
+	talosruntime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 	"github.com/siderolabs/talos/pkg/machinery/proto"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

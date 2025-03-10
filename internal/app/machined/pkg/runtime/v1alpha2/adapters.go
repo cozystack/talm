@@ -9,9 +9,9 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/state"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/config"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/config"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform"
 )
 
 // platformConfigurator adapts a runtime.Platform to the config.PlatformConfigurator interface.

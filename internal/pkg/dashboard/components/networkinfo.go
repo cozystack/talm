@@ -14,7 +14,7 @@ import (
 	"github.com/siderolabs/gen/maps"
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	networkutils "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/utils"
+	networkutils "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/utils"
 	"github.com/siderolabs/talos/pkg/httpdefaults"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"

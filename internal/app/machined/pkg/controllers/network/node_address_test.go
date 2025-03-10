@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	netctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	netctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/internal/addressutil"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"

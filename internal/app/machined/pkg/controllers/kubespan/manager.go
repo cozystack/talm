@@ -25,7 +25,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	kubespanadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/kubespan"
+	kubespanadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/kubespan"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

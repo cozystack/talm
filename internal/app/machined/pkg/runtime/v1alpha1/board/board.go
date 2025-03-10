@@ -8,16 +8,16 @@ package board
 import (
 	"fmt"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	bananapim64 "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/bananapi_m64"
-	jetsonnano "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/jetson_nano"
-	libretechallh3cch5 "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/libretech_all_h3_cc_h5"
-	nanopir4s "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/nanopi_r4s"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/pine64"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rock64"
-	rockpi4 "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rockpi4"
-	rockpi4c "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rockpi4c"
-	rpigeneric "github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rpi_generic"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	bananapim64 "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/bananapi_m64"
+	jetsonnano "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/jetson_nano"
+	libretechallh3cch5 "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/libretech_all_h3_cc_h5"
+	nanopir4s "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/nanopi_r4s"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/pine64"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rock64"
+	rockpi4 "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rockpi4"
+	rockpi4c "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rockpi4c"
+	rpigeneric "github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/board/rpi_generic"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

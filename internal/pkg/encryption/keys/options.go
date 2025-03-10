@@ -4,7 +4,7 @@
 
 package keys
 
-import "github.com/aenix-io/talm/internal/pkg/encryption/helpers"
+import "github.com/cozystack/talm/internal/pkg/encryption/helpers"
 
 // KeyOption represents key option callback used in KeyHandler.GetKey func.
 type KeyOption func(o *KeyOptions) error

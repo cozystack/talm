@@ -18,7 +18,7 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network/operator/vip"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network/operator/vip"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"

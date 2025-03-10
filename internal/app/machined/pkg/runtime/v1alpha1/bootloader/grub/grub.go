@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/aenix-io/talm/internal/pkg/partition"
+	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/version"
 )

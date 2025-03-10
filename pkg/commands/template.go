@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aenix-io/talm/pkg/engine"
-	"github.com/aenix-io/talm/pkg/modeline"
+	"github.com/cozystack/talm/pkg/engine"
+	"github.com/cozystack/talm/pkg/modeline"
 	"github.com/spf13/cobra"
 
 	"github.com/siderolabs/talos/pkg/machinery/client"

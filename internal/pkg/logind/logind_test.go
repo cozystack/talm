@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/logind"
+	"github.com/cozystack/talm/internal/pkg/logind"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

@@ -15,10 +15,10 @@ import (
 
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/events"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/health"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/runner"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/events"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/health"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner"
 	"github.com/siderolabs/talos/pkg/conditions"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 )

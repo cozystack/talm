@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	kubespanctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/kubespan"
+	kubespanctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/kubespan"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

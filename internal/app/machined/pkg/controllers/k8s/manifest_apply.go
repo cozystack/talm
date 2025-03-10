@@ -34,8 +34,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
-	k8sadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/k8s"
-	"github.com/aenix-io/talm/internal/pkg/etcd"
+	k8sadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/k8s"
+	"github.com/cozystack/talm/internal/pkg/etcd"
 	"github.com/siderolabs/talos/pkg/logging"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"

@@ -12,7 +12,7 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/state"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 // Configuration implements the platform.Platform interface.

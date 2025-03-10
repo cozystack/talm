@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	v1 "k8s.io/api/core/v1"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	k8sctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	k8sctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"

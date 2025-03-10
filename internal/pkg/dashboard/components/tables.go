@@ -15,7 +15,7 @@ import (
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
 )
 
 // ProcessTable represents the widget with process info.

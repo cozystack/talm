@@ -15,7 +15,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 
-	"github.com/aenix-io/talm/internal/pkg/containers/image"
+	"github.com/cozystack/talm/internal/pkg/containers/image"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

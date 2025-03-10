@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	pkgetcd "github.com/aenix-io/talm/internal/pkg/etcd"
+	pkgetcd "github.com/cozystack/talm/internal/pkg/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/v1alpha1"
 )

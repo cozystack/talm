@@ -24,7 +24,7 @@ import (
 	"github.com/thejerf/suture/v4"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/aenix-io/talm/internal/pkg/dns"
+	"github.com/cozystack/talm/internal/pkg/dns"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 )
 

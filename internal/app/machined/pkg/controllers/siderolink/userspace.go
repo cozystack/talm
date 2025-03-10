@@ -21,8 +21,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/aenix-io/talm/internal/pkg/ctxutil"
-	"github.com/aenix-io/talm/internal/pkg/endpoint"
+	"github.com/cozystack/talm/internal/pkg/ctxutil"
+	"github.com/cozystack/talm/internal/pkg/endpoint"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/siderolink"
 )

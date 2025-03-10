@@ -45,4 +45,4 @@ import-internal:
 		talos-$(TALOS_VERSION)/internal/app \
 		talos-$(TALOS_VERSION)/internal/pkg
 	rm -rf internal/app/init/ internal/pkg/rng/ internal/pkg/tui/
-	sed -i 's|github.com/siderolabs/talos/internal|github.com/aenix-io/talm/internal|g' `grep -rl 'github.com/siderolabs/talos/internal' internal`
+	sed -i 's|github.com/siderolabs/talos/internal|github.com/cozystack/talm/internal|g' `grep -rl 'github.com/siderolabs/talos/internal' internal`

@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	runtime "github.com/aenix-io/talm/internal/app/machined/internal/server/v1alpha1"
+	runtime "github.com/cozystack/talm/internal/app/machined/internal/server/v1alpha1"
 	"github.com/siderolabs/talos/pkg/grpc/dialer"
 	"github.com/siderolabs/talos/pkg/grpc/factory"
 	timeapi "github.com/siderolabs/talos/pkg/machinery/api/time"

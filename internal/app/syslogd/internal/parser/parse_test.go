@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/app/syslogd/internal/parser"
+	"github.com/cozystack/talm/internal/app/syslogd/internal/parser"
 )
 
 func TestParser(t *testing.T) {

@@ -21,8 +21,8 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/encryption/token"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/encryption/helpers"
-	"github.com/aenix-io/talm/internal/pkg/encryption/keys"
+	"github.com/cozystack/talm/internal/pkg/encryption/helpers"
+	"github.com/cozystack/talm/internal/pkg/encryption/keys"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 

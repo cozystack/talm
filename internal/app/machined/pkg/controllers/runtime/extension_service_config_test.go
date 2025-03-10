@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/runtime"
 	cntrconfig "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/runtime/extensions"

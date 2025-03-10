@@ -13,8 +13,8 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	clusteradapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/cluster"
-	kubespanctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/kubespan"
+	clusteradapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/cluster"
+	kubespanctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/kubespan"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"

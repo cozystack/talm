@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/go-procfs/procfs"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/network"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/network"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	netconfig "github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

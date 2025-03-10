@@ -16,7 +16,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
 )
 
 // CreateSelector converts PCR  numbers into a bitmask.

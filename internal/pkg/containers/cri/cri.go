@@ -16,8 +16,8 @@ import (
 
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 
-	ctrs "github.com/aenix-io/talm/internal/pkg/containers"
-	criclient "github.com/aenix-io/talm/internal/pkg/cri"
+	ctrs "github.com/cozystack/talm/internal/pkg/containers"
+	criclient "github.com/cozystack/talm/internal/pkg/cri"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

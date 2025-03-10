@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
-	clusterctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/cluster"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
+	clusterctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/cluster"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 )

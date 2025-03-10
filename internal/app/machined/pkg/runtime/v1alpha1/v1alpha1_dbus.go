@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aenix-io/talm/internal/pkg/logind"
+	"github.com/cozystack/talm/internal/pkg/logind"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 

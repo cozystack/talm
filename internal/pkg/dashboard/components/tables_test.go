@@ -7,8 +7,8 @@ package components_test
 import (
 	"testing"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/components"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/components"
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 )
 

@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot/measure/internal/pcr"
+	"github.com/cozystack/talm/internal/pkg/secureboot/measure/internal/pcr"
 )
 
 func TestSign(t *testing.T) {

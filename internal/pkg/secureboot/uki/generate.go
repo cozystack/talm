@@ -14,8 +14,8 @@ import (
 	talosx509 "github.com/siderolabs/crypto/x509"
 	"github.com/siderolabs/gen/xslices"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
-	"github.com/aenix-io/talm/internal/pkg/secureboot/measure"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot/measure"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/version"
 	"github.com/siderolabs/talos/pkg/splash"

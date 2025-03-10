@@ -14,9 +14,9 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/pkg/secureboot"
-	"github.com/aenix-io/talm/internal/pkg/secureboot/measure/internal/pcr"
-	tpm2internal "github.com/aenix-io/talm/internal/pkg/secureboot/tpm2"
+	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/secureboot/measure/internal/pcr"
+	tpm2internal "github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
 )
 
 type keyWrapper struct {

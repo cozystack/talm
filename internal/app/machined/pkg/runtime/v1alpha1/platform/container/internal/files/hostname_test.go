@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/container/internal/files"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/container/internal/files"
 )
 
 func TestReadHostname(t *testing.T) {

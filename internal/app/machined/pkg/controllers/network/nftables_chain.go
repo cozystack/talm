@@ -17,7 +17,7 @@ import (
 	"github.com/siderolabs/go-pointer"
 	"go.uber.org/zap"
 
-	networkadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/network"
+	networkadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/network"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )

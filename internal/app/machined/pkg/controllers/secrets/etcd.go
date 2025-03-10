@@ -15,7 +15,7 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/etcd"
+	"github.com/cozystack/talm/internal/pkg/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/secrets"

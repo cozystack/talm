@@ -10,7 +10,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/rivo/tview"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
 )
 
 // LoadAvgInfo represents the widget with load average info.

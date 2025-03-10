@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 )
 
 // NullLoggingManager sends all the logs to /dev/null.

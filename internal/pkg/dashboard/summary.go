@@ -7,9 +7,9 @@ package dashboard
 import (
 	"github.com/rivo/tview"
 
-	"github.com/aenix-io/talm/internal/pkg/dashboard/apidata"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/components"
-	"github.com/aenix-io/talm/internal/pkg/dashboard/resourcedata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/apidata"
+	"github.com/cozystack/talm/internal/pkg/dashboard/components"
+	"github.com/cozystack/talm/internal/pkg/dashboard/resourcedata"
 )
 
 // SummaryGrid represents the summary grid with the basic node information and the logs.

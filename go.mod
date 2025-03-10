@@ -1,4 +1,4 @@
-module github.com/aenix-io/talm
+module github.com/cozystack/talm
 
 go 1.23.3
 

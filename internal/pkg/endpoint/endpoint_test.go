@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aenix-io/talm/internal/pkg/endpoint"
+	"github.com/cozystack/talm/internal/pkg/endpoint"
 )
 
 func TestParseEndpoint(t *testing.T) {

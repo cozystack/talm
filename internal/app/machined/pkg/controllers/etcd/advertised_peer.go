@@ -21,7 +21,7 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.uber.org/zap"
 
-	etcdcli "github.com/aenix-io/talm/internal/pkg/etcd"
+	etcdcli "github.com/cozystack/talm/internal/pkg/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/etcd"

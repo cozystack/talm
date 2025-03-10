@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/aenix-io/talm/internal/app/apid/pkg/director"
+	"github.com/cozystack/talm/internal/app/apid/pkg/director"
 )
 
 type DirectorSuite struct {

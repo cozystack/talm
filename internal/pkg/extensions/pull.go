@@ -17,7 +17,7 @@ import (
 	"github.com/containerd/containerd/v2/defaults"
 	"github.com/opencontainers/image-spec/identity"
 
-	"github.com/aenix-io/talm/internal/pkg/containers/image"
+	"github.com/cozystack/talm/internal/pkg/containers/image"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )

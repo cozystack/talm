@@ -17,8 +17,8 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	kubespanadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/kubespan"
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers"
+	kubespanadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/kubespan"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/kubespan"

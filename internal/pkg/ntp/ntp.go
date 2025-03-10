@@ -23,8 +23,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sys/unix"
 
-	"github.com/aenix-io/talm/internal/pkg/ntp/internal/spike"
-	"github.com/aenix-io/talm/internal/pkg/timex"
+	"github.com/cozystack/talm/internal/pkg/ntp/internal/spike"
+	"github.com/cozystack/talm/internal/pkg/timex"
 )
 
 // Syncer performs time sync via NTP on schedule.

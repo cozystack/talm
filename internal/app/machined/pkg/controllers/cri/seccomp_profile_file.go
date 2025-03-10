@@ -21,7 +21,7 @@ import (
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
 
-	runtimetalos "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	runtimetalos "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/cri"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"

@@ -14,7 +14,7 @@ import (
 	"github.com/vultr/metadata"
 	"gopkg.in/yaml.v3"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/vultr"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/vultr"
 )
 
 //go:embed testdata/metadata.json

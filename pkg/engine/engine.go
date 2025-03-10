@@ -14,8 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	helmEngine "github.com/aenix-io/talm/pkg/engine/helm"
-	"github.com/aenix-io/talm/pkg/yamltools"
+	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
+	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/resource/meta"
 	"github.com/hashicorp/go-multierror"

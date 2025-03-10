@@ -10,7 +10,7 @@ import (
 	"github.com/siderolabs/gen/xslices"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/system/health"
+	"github.com/cozystack/talm/internal/app/machined/pkg/system/health"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 )
 

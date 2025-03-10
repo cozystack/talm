@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	k8sadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/k8s"
+	k8sadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/k8s"
 	"github.com/siderolabs/talos/pkg/argsbuilder"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"

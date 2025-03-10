@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/procfs"
 	"go.uber.org/zap"
 
-	perfadapter "github.com/aenix-io/talm/internal/app/machined/pkg/adapters/perf"
+	perfadapter "github.com/cozystack/talm/internal/app/machined/pkg/adapters/perf"
 	"github.com/siderolabs/talos/pkg/machinery/resources/perf"
 )
 

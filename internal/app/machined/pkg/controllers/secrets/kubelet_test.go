@@ -15,8 +15,8 @@ import (
 	"github.com/siderolabs/go-retry/retry"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/ctest"
-	secretsctrl "github.com/aenix-io/talm/internal/app/machined/pkg/controllers/secrets"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/ctest"
+	secretsctrl "github.com/cozystack/talm/internal/app/machined/pkg/controllers/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"

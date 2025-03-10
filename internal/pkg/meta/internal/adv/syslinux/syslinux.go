@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/aenix-io/talm/internal/pkg/meta/internal/adv"
+	"github.com/cozystack/talm/internal/pkg/meta/internal/adv"
 )
 
 const (

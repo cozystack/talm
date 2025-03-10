@@ -12,7 +12,7 @@ import (
 	"github.com/siderolabs/gen/xerrors"
 	"go.uber.org/zap"
 
-	"github.com/aenix-io/talm/internal/pkg/encryption"
+	"github.com/cozystack/talm/internal/pkg/encryption"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 

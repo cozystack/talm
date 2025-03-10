@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/aenix-io/talm/internal/app/machined/pkg/controllers/k8s/internal/nodename"
+	"github.com/cozystack/talm/internal/app/machined/pkg/controllers/k8s/internal/nodename"
 )
 
 func TestFromHostname(t *testing.T) {

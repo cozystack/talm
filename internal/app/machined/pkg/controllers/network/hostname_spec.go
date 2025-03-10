@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
-	v1alpha1runtime "github.com/aenix-io/talm/internal/app/machined/pkg/runtime"
+	v1alpha1runtime "github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )
 
