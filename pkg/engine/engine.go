@@ -14,10 +14,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
-	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/resource/meta"
+	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
+	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -95,10 +95,10 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 }
 
 // FullConfigProcess handles the full process of creating and updating the Bundle.
-func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bundle.Bundle, error) {
+func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
 	configBundle, err := InitializeConfigBundle(opts)
 	if err != nil {
-		return nil, fmt.Errorf("initial config bundle error: %w", err)
+		return nil, machine.TypeUnknown, fmt.Errorf("initial config bundle error: %w", err)
 	}
 
 	loadedPatches, err := configpatcher.LoadPatches(patches)
@@ -106,7 +106,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
-		return nil, err
+		return nil, machine.TypeUnknown, err
 	}
 
 	err = configBundle.ApplyPatches(loadedPatches, true, false)
@@ -114,7 +114,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
-		return nil, fmt.Errorf("apply initial patches error: %w", err)
+		return nil, machine.TypeUnknown, fmt.Errorf("apply initial patches error: %w", err)
 	}
 
 	// Updating parameters after applying patches
@@ -140,16 +140,16 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 	}
 	configBundle, err = InitializeConfigBundle(updatedOpts)
 	if err != nil {
-		return nil, fmt.Errorf("reinit config bundle error: %w", err)
+		return nil, machineType, fmt.Errorf("reinit config bundle error: %w", err)
 	}
 
 	// Applying updated patches
 	err = configBundle.ApplyPatches(loadedPatches, (machineType == machine.TypeControlPlane), (machineType == machine.TypeWorker))
 	if err != nil {
-		return nil, fmt.Errorf("apply updated patches error: %w", err)
+		return nil, machineType, fmt.Errorf("apply updated patches error: %w", err)
 	}
 
-	return configBundle, nil
+	return configBundle, machineType, nil
 }
 
 // Function to initialize configuration settings
