@@ -96,12 +96,11 @@ func apply(args []string) func(ctx context.Context, c *client.Client) error {
 			}
 
 			patches := []string{"@" + configFile}
-			configBundle, err := engine.FullConfigProcess(ctx, opts, patches)
+			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
 			if err != nil {
 				return fmt.Errorf("full config processing error: %s", err)
 			}
 
-			machineType := configBundle.ControlPlaneCfg.Machine().Type()
 			result, err := engine.SerializeConfiguration(configBundle, machineType)
 			if err != nil {
 				return fmt.Errorf("error serializing configuration: %s", err)
