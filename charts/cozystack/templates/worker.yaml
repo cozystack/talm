@@ -1,2 +1,3 @@
 {{- $_ := set . "MachineType" "worker" -}}
+{{- $_ = set . "HasNvidiaGPU" false -}}
 {{- include "talos.config" . }}
