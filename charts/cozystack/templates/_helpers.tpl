@@ -36,7 +36,13 @@ machine:
   - content: |
       [plugins]
         [plugins."io.containerd.cri.v1.runtime"]
+          # This flag is required for KubeVirt
           device_ownership_from_security_context = true
+        {{- if .HasNvidiaGPU }}
+          [plugins."io.containerd.cri.v1.runtime".containerd]
+            default_runtime_name = "nvidia"
+        {{- end }}
+
     path: /etc/cri/conf.d/20-customization.part
     op: create
   install:
