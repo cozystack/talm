@@ -1,3 +1,2 @@
 {{- $_ := set . "MachineType" "controlplane" -}}
-{{- $_ = set . "HasNvidiaGPU" false -}}
 {{- include "talos.config" . }}
