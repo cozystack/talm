@@ -66,7 +66,13 @@ machine:
   - content: |
       [plugins]
         [plugins."io.containerd.cri.v1.runtime"]
+          # This flag is required for KubeVirt
           device_ownership_from_security_context = true
+        {{- if .HasNvidiaGPU }}
+          [plugins."io.containerd.cri.v1.runtime".containerd]
+            default_runtime_name = "nvidia"
+        {{- end }}
+
     path: /etc/cri/conf.d/20-customization.part
     op: create
   install:
@@ -132,11 +138,11 @@ cluster:
 {{- end }}
 `,
 	"cozystack/templates/controlplane.yaml": `{{- $_ := set . "MachineType" "controlplane" -}}
-{{- $_ = set . "HasNvidiaGPU" false -}}
 {{- include "talos.config" . }}
 `,
+	"cozystack/templates/gpu.yaml": `{{- $_ := set . "HasNvidiaGPU" true -}}
+`,
 	"cozystack/templates/worker.yaml": `{{- $_ := set . "MachineType" "worker" -}}
-{{- $_ = set . "HasNvidiaGPU" false -}}
 {{- include "talos.config" . }}
 `,
 	"cozystack/values.yaml": `endpoint: "https://192.168.100.10:6443"
