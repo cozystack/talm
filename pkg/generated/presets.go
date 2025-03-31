@@ -50,13 +50,29 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+  {{/* Nvidia kernel module will spam logs if the GPU is not present, do not enable it if there is no GPU */}}
+  {{- if .HasNvidiaGPU }}
+    - name: nvidia
+    - name: nvidia_uvm
+    - name: nvidia_drm
+    - name: nvidia_modeset
+  {{- end }}
+{{- if .HasNvidiaGPU }}
+  sysctls:
+    # see https://github.com/NVIDIA/libnvidia-container/issues/176#issuecomment-2101166824
+    net.core.bpf_jit_harden: "1"
+{{- end }}
   files:
   - content: |
       [plugins]
-        [plugins."io.containerd.grpc.v1.cri"]
-          device_ownership_from_security_context = true
         [plugins."io.containerd.cri.v1.runtime"]
+          # This flag is required for KubeVirt
           device_ownership_from_security_context = true
+        {{- if .HasNvidiaGPU }}
+          [plugins."io.containerd.cri.v1.runtime".containerd]
+            default_runtime_name = "nvidia"
+        {{- end }}
+
     path: /etc/cri/conf.d/20-customization.part
     op: create
   install:
@@ -128,6 +144,8 @@ cluster:
 `,
 	"cozystack/templates/controlplane.yaml": `{{- $_ := set . "MachineType" "controlplane" -}}
 {{- include "talos.config" . }}
+`,
+	"cozystack/templates/gpu.yaml": `{{- $_ := set . "HasNvidiaGPU" true -}}
 `,
 	"cozystack/templates/worker.yaml": `{{- $_ := set . "MachineType" "worker" -}}
 {{- include "talos.config" . }}
