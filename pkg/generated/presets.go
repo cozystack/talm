@@ -64,11 +64,11 @@ machine:
     image: {{ . }}
     {{- end }}
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
-    disk: {{- $disk := include "talm.discovered.system_disk_name" . }}
+    {{- $disk := include "talm.discovered.system_disk_name" . }}
     {{- if eq $disk "" }}
-    /dev/sda
+    disk: /dev/sda
     {{- else }}
-    {{ $disk | quote }}
+    disk: {{ $disk | quote }}
     {{- end }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
@@ -180,7 +180,12 @@ machine:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
-    disk: {{ include "talm.discovered.system_disk_name" . | quote }}
+    {{- $disk := include "talm.discovered.system_disk_name" . }}
+    {{- if eq $disk "" }}
+    disk: /dev/sda
+    {{- else }}
+    disk: {{ $disk | quote }}
+    {{- end }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
