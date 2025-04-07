@@ -7,12 +7,7 @@ machine:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
-    {{- $disk := include "talm.discovered.system_disk_name" . }}
-    {{- if eq $disk "" }}
-    disk: /dev/sda
-    {{- else }}
-    disk: {{ $disk | quote }}
-    {{- end }}
+    disk: {{ include "talm.discovered.system_disk_name" . | quote }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}

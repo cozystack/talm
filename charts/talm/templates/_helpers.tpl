@@ -1,5 +1,17 @@
 {{- define "talm.discovered.system_disk_name" }}
-{{- with (lookup "systemdisk" "" "system-disk") }}{{ .spec.devPath }}{{- end }}
+{{- $systemDisk := (lookup "systemdisk" "" "system-disk") }}
+{{- if $systemDisk }}
+{{- $systemDisk.spec.devPath }}
+{{- else }}
+{{- $disk := "/dev/sda" }}
+{{- range (lookup "disks" "" "").items }}
+{{- if .spec.wwid }}
+{{- $disk = .spec.dev_path }}
+{{- break }}
+{{- end }}
+{{- end }}
+{{- $disk }}
+{{- end }}
 {{- end }}
 
 {{- define "talm.discovered.machinetype" }}

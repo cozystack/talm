@@ -64,12 +64,7 @@ machine:
     image: {{ . }}
     {{- end }}
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
-    {{- $disk := include "talm.discovered.system_disk_name" . }}
-    {{- if eq $disk "" }}
-    disk: /dev/sda
-    {{- else }}
-    disk: {{ $disk | quote }}
-    {{- end }}
+    disk: {{ include "talm.discovered.system_disk_name" . | quote }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
@@ -180,12 +175,7 @@ machine:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
-    {{- $disk := include "talm.discovered.system_disk_name" . }}
-    {{- if eq $disk "" }}
-    disk: /dev/sda
-    {{- else }}
-    disk: {{ $disk | quote }}
-    {{- end }}
+    disk: {{ include "talm.discovered.system_disk_name" . | quote }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
@@ -239,7 +229,19 @@ version: %s
 description: A library Talm chart for Talos Linux
 `,
 	"talm/templates/_helpers.tpl": `{{- define "talm.discovered.system_disk_name" }}
-{{- with (lookup "systemdisk" "" "system-disk") }}{{ .spec.devPath }}{{- end }}
+{{- $systemDisk := (lookup "systemdisk" "" "system-disk") }}
+{{- if $systemDisk }}
+{{- $systemDisk.spec.devPath }}
+{{- else }}
+{{- $disk := "/dev/sda" }}
+{{- range (lookup "disks" "" "").items }}
+{{- if .spec.wwid }}
+{{- $disk = .spec.dev_path }}
+{{- break }}
+{{- end }}
+{{- end }}
+{{- $disk }}
+{{- end }}
 {{- end }}
 
 {{- define "talm.discovered.machinetype" }}
