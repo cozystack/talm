@@ -37,6 +37,14 @@ import-commands:
     shutdown \
     stats \
     time \
+    copy \
+    meta \
+    edit \
+    rollback \
+    rotate-ca \
+    support \
+    wipe \
+    diskusage \
     version
 
 import-internal:

@@ -243,18 +243,19 @@ func init() {
 		return nil
 	}
 	imageDefaultCmd.Flags().
-		StringSliceVarP(&etcdCmdFlags.configFiles, "file", "f",
+		StringSliceVarP(&imageCmdFlags.configFiles, "file", "f",
 			nil, "specify config files or patches in a YAML file (can specify multiple)",
 		)
-	imageDefaultCmd.PreRunE = etcdCmd.PreRunE
-	imageListCmd.Flags().StringSliceVarP(&etcdCmdFlags.configFiles,
+	imageDefaultCmd.PreRunE = imageCmd.
+		PreRunE
+	imageListCmd.Flags().StringSliceVarP(&imageCmdFlags.configFiles,
 		"file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)",
 	)
 	imageListCmd.
-		PreRunE = etcdCmd.PreRunE
+		PreRunE = imageCmd.PreRunE
 	imagePullCmd.
-		Flags().StringSliceVarP(&etcdCmdFlags.configFiles, "file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)")
-	imagePullCmd.PreRunE = etcdCmd.PreRunE
+		Flags().StringSliceVarP(&imageCmdFlags.configFiles, "file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)")
+	imagePullCmd.PreRunE = imageCmd.PreRunE
 
 	imageCmd.PersistentFlags().StringVar(&imageCmdFlags.namespace, "namespace", "cri", "namespace to use: `system` (etcd and kubelet images) or `cri` for all Kubernetes workloads")
 	addCommand(imageCmd)
