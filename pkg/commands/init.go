@@ -107,6 +107,11 @@ var initCmd = &cobra.Command{
 			return err
 		}
 
+		nodesDir := filepath.Join(Config.RootDir, "nodes")
+		if err := os.MkdirAll(nodesDir, os.ModePerm); err != nil {
+			return fmt.Errorf("failed to create nodes directory: %w", err)
+		}
+
 		for path, content := range generated.PresetFiles {
 			parts := strings.SplitN(path, "/", 2)
 			chartName := parts[0]

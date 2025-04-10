@@ -47,7 +47,6 @@ Create new project
 mkdir newcluster
 cd newcluster
 talm init
-mkdir nodes
 ```
 
 Boot Talos Linux node, let's say it has address `1.2.3.4`
