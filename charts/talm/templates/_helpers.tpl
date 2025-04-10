@@ -70,8 +70,7 @@
 # -- Discovered interfaces:
 {{- range (lookup "links" "" "").items }}
 {{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" .metadata.id) }}
-# enx{{ .spec.hardwareAddr | replace ":" "" }}:
-#   id: {{ .metadata.id }}
+# {{ .metadata.id }}:
 #   hardwareAddr:{{ .spec.hardwareAddr }}
 #   busPath: {{ .spec.busPath }}
 #   driver: {{ .spec.driver }}

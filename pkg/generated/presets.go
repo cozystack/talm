@@ -70,8 +70,7 @@ machine:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
-    - deviceSelector:
-        {{- include "talm.discovered.default_link_selector_by_gateway" . | nindent 8 }}
+    - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
@@ -181,8 +180,7 @@ machine:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
-    - deviceSelector:
-        {{- include "talm.discovered.default_link_selector_by_gateway" . | nindent 8 }}
+    - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
@@ -300,8 +298,7 @@ description: A library Talm chart for Talos Linux
 # -- Discovered interfaces:
 {{- range (lookup "links" "" "").items }}
 {{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" .metadata.id) }}
-# enx{{ .spec.hardwareAddr | replace ":" "" }}:
-#   id: {{ .metadata.id }}
+# {{ .metadata.id }}:
 #   hardwareAddr:{{ .spec.hardwareAddr }}
 #   busPath: {{ .spec.busPath }}
 #   driver: {{ .spec.driver }}

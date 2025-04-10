@@ -13,8 +13,7 @@ machine:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
-    - deviceSelector:
-        {{- include "talm.discovered.default_link_selector_by_gateway" . | nindent 8 }}
+    - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
