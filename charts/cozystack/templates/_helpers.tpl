@@ -20,6 +20,8 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+    - name: vfio_pci
+    - name: vfio_iommu_type1
   registries:
     mirrors:
       docker.io:

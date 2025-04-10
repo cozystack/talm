@@ -50,6 +50,8 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+    - name: vfio_pci
+    - name: vfio_iommu_type1
   registries:
     mirrors:
       docker.io:
@@ -240,7 +242,7 @@ description: A library Talm chart for Talos Linux
 {{- else }}
 {{- $disk := "/dev/sda" }}
 {{- range (lookup "disks" "" "").items }}
-{{- if .spec.wwid }}
+{{- if or .spec.wwid .spec.model }}
 {{- $disk = .spec.dev_path }}
 {{- break }}
 {{- end }}
@@ -265,7 +267,7 @@ description: A library Talm chart for Talos Linux
 {{- define "talm.discovered.disks_info" }}
 # -- Discovered disks:
 {{- range (lookup "disks" "" "").items }}
-{{- if .spec.wwid }}
+{{- if or .spec.wwid .spec.model }}
 # {{ .spec.dev_path }}:
 #    model: {{ .spec.model }}
 #    serial: {{ .spec.serial }}
