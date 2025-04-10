@@ -20,6 +20,11 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+        - https://mirror.gcr.io
   files:
   - content: |
       [plugins]
