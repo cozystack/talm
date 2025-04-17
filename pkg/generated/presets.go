@@ -136,7 +136,7 @@ cluster:
 	"cozystack/values.yaml": `endpoint: "https://192.168.100.10:6443"
 clusterDomain: cozy.local
 floatingIP: 192.168.100.10
-image: "ghcr.io/cozystack/cozystack/talos:v1.9.3"
+image: "ghcr.io/cozystack/cozystack/talos:v1.9.5"
 podSubnets:
 - 10.244.0.0/16
 serviceSubnets:
