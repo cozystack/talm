@@ -141,3 +141,9 @@ busPath: {{ .spec.busPath }}
 {{- toJson .spec.dnsServers }}
 {{- end }}
 {{- end }}
+
+{{- define "talm.discovered.existing_interfaces_configuration" }}
+{{- with (lookup "machineconfig" "" "v1alpha1") }}
+{{ toYaml .spec | fromYaml | dig "machine" "network" "interfaces" (list) | toYaml }}
+{{- end }}
+{{- end }}

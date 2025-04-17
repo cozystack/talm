@@ -77,15 +77,20 @@ machine:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
+    {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
+    {{- if $existingInterfacesConfiguration }}
+    {{- $existingInterfacesConfiguration | nindent 4 }}
+    {{- else }}
     - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- if eq .MachineType "controlplane" }}{{ with .Values.floatingIP }}
+      {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
       vip:
-        ip: {{ . }}
-      {{- end }}{{ end }}
+        ip: {{ .Values.floatingIP }}
+      {{- end }}
+    {{- end }}
 
 cluster:
   network:
@@ -187,15 +192,20 @@ machine:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
+    {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
+    {{- if $existingInterfacesConfiguration }}
+    {{- $existingInterfacesConfiguration | nindent 4 }}
+    {{- else }}
     - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- with .Values.floatingIP }}
+      {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
       vip:
-        ip: {{ . }}
+        ip: {{ .Values.floatingIP }}
       {{- end }}
+    {{- end }}
 
 cluster:
   network:
@@ -374,6 +384,12 @@ busPath: {{ .spec.busPath }}
 {{- define "talm.discovered.default_resolvers" }}
 {{- with (lookup "resolvers" "" "resolvers") }}
 {{- toJson .spec.dnsServers }}
+{{- end }}
+{{- end }}
+
+{{- define "talm.discovered.existing_interfaces_configuration" }}
+{{- with (lookup "machineconfig" "" "v1alpha1") }}
+{{ toYaml .spec | fromYaml | dig "machine" "network" "interfaces" (list) | toYaml }}
 {{- end }}
 {{- end }}
 `,
