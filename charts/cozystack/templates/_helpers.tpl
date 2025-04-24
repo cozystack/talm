@@ -22,6 +22,11 @@ machine:
     - name: spl
     - name: vfio_pci
     - name: vfio_iommu_type1
+  certSANs:
+  - 127.0.0.1
+  {{- with .Values.certSANs }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
   registries:
     mirrors:
       docker.io:
@@ -92,6 +97,9 @@ cluster:
     {{- end }}
     certSANs:
     - 127.0.0.1
+    {{- with .Values.certSANs }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   proxy:
     disabled: true
   discovery:

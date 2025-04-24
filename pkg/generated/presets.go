@@ -52,6 +52,11 @@ machine:
     - name: spl
     - name: vfio_pci
     - name: vfio_iommu_type1
+  certSANs:
+  - 127.0.0.1
+  {{- with .Values.certSANs }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
   registries:
     mirrors:
       docker.io:
@@ -122,6 +127,9 @@ cluster:
     {{- end }}
     certSANs:
     - 127.0.0.1
+    {{- with .Values.certSANs }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   proxy:
     disabled: true
   discovery:
@@ -149,6 +157,7 @@ serviceSubnets:
 advertisedSubnets:
 - 192.168.100.0/24
 oidcIssuerUrl: ""
+certSANs: []
 `,
 	"generic/Chart.yaml": `apiVersion: v2
 name: %s
@@ -184,6 +193,10 @@ machine:
     nodeIP:
       validSubnets:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
+  {{- with .Values.certSANs }}
+  certSANs:
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
     disk: {{ include "talm.discovered.system_disk_name" . | quote }}
@@ -217,6 +230,11 @@ cluster:
   controlPlane:
     endpoint: "{{ .Values.endpoint }}"
   {{- if eq .MachineType "controlplane" }}
+  apiServer:
+    {{- with .Values.certSANs }}
+    certSANs:
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   etcd:
     advertisedSubnets:
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
@@ -236,6 +254,7 @@ serviceSubnets:
 - 10.96.0.0/16
 advertisedSubnets:
 - 192.168.100.0/24
+certSANs: []
 `,
 	"talm/Chart.yaml": `apiVersion: v2
 type: library

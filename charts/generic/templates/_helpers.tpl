@@ -5,6 +5,10 @@ machine:
     nodeIP:
       validSubnets:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
+  {{- with .Values.certSANs }}
+  certSANs:
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
     disk: {{ include "talm.discovered.system_disk_name" . | quote }}
@@ -38,6 +42,11 @@ cluster:
   controlPlane:
     endpoint: "{{ .Values.endpoint }}"
   {{- if eq .MachineType "controlplane" }}
+  apiServer:
+    {{- with .Values.certSANs }}
+    certSANs:
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   etcd:
     advertisedSubnets:
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
