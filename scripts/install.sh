@@ -21,7 +21,7 @@ TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-HTTP_STATUS=$(curl -fsSL -w '%{http_code}' -H 'Accept: application/vnd.github.v3+json' -o "$TMPDIR/response.json" "$API_URL")
+HTTP_STATUS=$(curl -sSL -w '%{http_code}' -H 'Accept: application/vnd.github.v3+json' -o "$TMPDIR/response.json" "$API_URL")
 
 if [ "$HTTP_STATUS" -ne 200 ]; then
   error "GitHub API returned HTTP status $HTTP_STATUS."
