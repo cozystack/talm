@@ -341,6 +341,19 @@ func init() {
 
 	imagePullCmd.Flags().StringSliceVarP(&imageCmdFlags.configFiles, "file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)")
 	imagePullCmd.PreRunE = imageCmd.PreRunE
+	imageIntegrationCmd.
+		Flags().StringSliceVarP(&imageCmdFlags.configFiles,
+		"file", "f",
+		nil, "specify config files or patches in a YAML file (can specify multiple)",
+	)
+	imageIntegrationCmd.PreRunE = imageCmd.
+		PreRunE
+	imageCacheCreateCmd.
+		Flags().StringSliceVarP(&imageCmdFlags.configFiles,
+		"file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)",
+	)
+	imageCacheCreateCmd.PreRunE = imageCmd.
+		PreRunE
 
 	imageCmd.PersistentFlags().StringVar(&imageCmdFlags.namespace, "namespace", "cri", "namespace to use: `system` (etcd and kubelet images) or `cri` for all Kubernetes workloads")
 	addCommand(imageCmd)

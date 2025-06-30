@@ -181,7 +181,7 @@ func processFile(filename, cmdName string) {
 		}
 	}
 	if cmdName == "image" {
-		for _, subCmdName := range []string{"imageDefaultCmd", "imageListCmd", "imagePullCmd"} {
+		for _, subCmdName := range []string{"imageDefaultCmd", "imageListCmd", "imagePullCmd", "imageIntegrationCmd", "imageCacheCreateCmd"} {
 			initCode += fmt.Sprintf(`
 	%s.Flags().StringSliceVarP(&imageCmdFlags.configFiles, "file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)")
 	%s.PreRunE = imageCmd.PreRunE
