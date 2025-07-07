@@ -56,6 +56,10 @@ machine:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
+    {{- if eq .Values.kubespan true }}
+    kubespan:
+      enabled: true
+    {{- end }}
     interfaces:
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
     {{- if $existingInterfacesConfiguration }}
@@ -85,7 +89,7 @@ cluster:
   controlPlane:
     endpoint: "{{ .Values.endpoint }}"
   {{- if eq .MachineType "controlplane" }}
-  allowSchedulingOnControlPlanes: true
+  allowSchedulingOnControlPlanes: {{ if eq .Values.allowSchedulingOnControlPlanes true }}true{{ else }}false{{ end }}
   controllerManager:
     extraArgs:
       bind-address: 0.0.0.0
@@ -108,7 +112,7 @@ cluster:
   proxy:
     disabled: true
   discovery:
-    enabled: false
+    enabled: {{ if eq .Values.kubespan true }}true{{ else }}false{{ end }}
   etcd:
     advertisedSubnets:
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
