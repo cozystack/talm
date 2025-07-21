@@ -52,7 +52,7 @@
 {{- if $diskStablePath }}
 {{- $diskStablePath }}
 {{- else }}
-{{- fail (printf "Unable to determine a stable NVMe disk path for the disk %s" $diskName) }}
+{{- $diskName }} # Unable to determine a stable NVMe disk path, falling back to the disk name
 {{- end }}
 {{- end }}
 
