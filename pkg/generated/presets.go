@@ -85,6 +85,10 @@ machine:
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
+    {{- if .Values.kubespan }}
+    kubespan:
+      enabled: true
+    {{- end }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
@@ -115,7 +119,7 @@ cluster:
   controlPlane:
     endpoint: "{{ .Values.endpoint }}"
   {{- if eq .MachineType "controlplane" }}
-  allowSchedulingOnControlPlanes: true
+  allowSchedulingOnControlPlanes: {{ if eq .Values.allowSchedulingOnControlPlanes false }}false{{ else }}true{{ end }}
   controllerManager:
     extraArgs:
       bind-address: 0.0.0.0
@@ -138,7 +142,7 @@ cluster:
   proxy:
     disabled: true
   discovery:
-    enabled: false
+    enabled: {{ .Values.kubespan }}
   etcd:
     advertisedSubnets:
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
@@ -162,8 +166,7 @@ serviceSubnets:
 advertisedSubnets:
 - 192.168.100.0/24
 oidcIssuerUrl: ""
-certSANs: []
-`,
+certSANs: []`,
 	"generic/Chart.yaml": `apiVersion: v2
 name: %s
 type: application
@@ -208,6 +211,10 @@ machine:
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
+    {{- if .Values.kubespan }}
+    kubespan:
+      enabled: true
+    {{- end }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
@@ -259,8 +266,7 @@ serviceSubnets:
 - 10.96.0.0/16
 advertisedSubnets:
 - 192.168.100.0/24
-certSANs: []
-`,
+certSANs: []`,
 	"talm/Chart.yaml": `apiVersion: v2
 type: library
 name: %s
