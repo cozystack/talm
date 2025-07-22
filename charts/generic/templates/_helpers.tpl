@@ -15,6 +15,10 @@ machine:
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
+    {{- if .Values.kubespan }}
+    kubespan:
+      enabled: true
+    {{- end }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     interfaces:
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
