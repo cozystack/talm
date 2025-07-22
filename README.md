@@ -56,6 +56,12 @@ Gather node information:
 talm -n 1.2.3.4 -e 1.2.3.4 template -t templates/controlplane.yaml -i > nodes/node1.yaml
 ```
 
+If you are testing template rendering you can pass the flag --offline. Also using the --full flag will generate a complete configuration, usefull for testing proper rendering of the templates.
+```bash
+talm template -t templates/controlplane.yaml --full -i > nodes/cp1.yaml --offline
+talm template -t templates/worker.yaml --full -i > nodes/worker1.yaml --offline
+```
+
 Edit `nodes/node1.yaml` file:
 ```yaml
 # talm: nodes=["1.2.3.4"], endpoints=["1.2.3.4"], templates=["templates/controlplane.yaml"]
