@@ -10,3 +10,4 @@ advertisedSubnets:
 - 192.168.100.0/24
 oidcIssuerUrl: ""
 certSANs: []
+nr_hugepages: 0

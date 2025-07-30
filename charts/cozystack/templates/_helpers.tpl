@@ -14,6 +14,9 @@ machine:
       cpuManagerPolicy: static
       maxPods: 512
   sysctls:
+    {{- if gt .Values.nr_hugepages 0 }}
+    vm.nr_hugepages: {{ .Values.nr_hugepages | quote }}
+    {{- end }}
     net.ipv4.neigh.default.gc_thresh1: "4096"
     net.ipv4.neigh.default.gc_thresh2: "8192"
     net.ipv4.neigh.default.gc_thresh3: "16384"
