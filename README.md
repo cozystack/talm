@@ -46,7 +46,7 @@ Create new project
 ```bash
 mkdir newcluster
 cd newcluster
-talm init
+talm init -p cozystack
 ```
 
 Boot Talos Linux node, let's say it has address `1.2.3.4`

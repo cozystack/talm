@@ -205,7 +205,7 @@ func updateTalmLibraryChart() error {
 
 func init() {
 	initCmd.Flags().StringVar(&initCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
-	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "generic", "specify preset to generate files")
+	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "specify preset to generate files")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 
