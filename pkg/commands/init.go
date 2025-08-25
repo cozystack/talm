@@ -210,6 +210,7 @@ func init() {
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 
 	addCommand(initCmd)
+	initCmd.MarkFlagRequired("preset")
 }
 
 func isValidPreset(preset string) bool {
