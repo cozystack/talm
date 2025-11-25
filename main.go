@@ -1,5 +1,3 @@
-//go:generate go run tools/generate_presets.go
-
 package main
 
 import (
