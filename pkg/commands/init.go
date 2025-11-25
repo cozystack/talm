@@ -64,8 +64,12 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("failed to create secrets bundle: %w", err)
 		}
 		var genOptions []generate.Option //nolint:prealloc
-		if !isValidPreset(initCmdFlags.preset) {
-			return fmt.Errorf("invalid preset: %s. Valid presets are: %s", initCmdFlags.preset, generated.AvailablePresets)
+		availablePresets, err := generated.AvailablePresets()
+		if err != nil {
+			return fmt.Errorf("failed to get available presets: %w", err)
+		}
+		if !isValidPreset(initCmdFlags.preset, availablePresets) {
+			return fmt.Errorf("invalid preset: %s. Valid presets are: %v", initCmdFlags.preset, availablePresets)
 		}
 		if initCmdFlags.talosVersion != "" {
 			var versionContract *config.VersionContract
@@ -112,7 +116,12 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("failed to create nodes directory: %w", err)
 		}
 
-		for path, content := range generated.PresetFiles {
+		presetFiles, err := generated.PresetFiles()
+		if err != nil {
+			return fmt.Errorf("failed to get preset files: %w", err)
+		}
+
+		for path, content := range presetFiles {
 			parts := strings.SplitN(path, "/", 2)
 			chartName := parts[0]
 			// Write preset files
@@ -167,13 +176,18 @@ func updateTalmLibraryChart() error {
 		return fmt.Errorf("failed to remove existing talm chart directory: %w", err)
 	}
 
-	content, exists := generated.PresetFiles["talm/Chart.yaml"]
+	presetFiles, err := generated.PresetFiles()
+	if err != nil {
+		return fmt.Errorf("failed to get preset files: %w", err)
+	}
+
+	content, exists := presetFiles["talm/Chart.yaml"]
 	if !exists {
 		return fmt.Errorf("talm chart preset not found")
 	}
 
 	file := filepath.Join(talmChartDir, "Chart.yaml")
-	err := writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
+	err = writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
 	if err != nil {
 		return err
 	}
@@ -183,7 +197,7 @@ func updateTalmLibraryChart() error {
 		return fmt.Errorf("failed to remove existing talm chart directory: %w", err)
 	}
 
-	for path, content := range generated.PresetFiles {
+	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		chartName := parts[0]
 		// Write library chart
@@ -213,8 +227,8 @@ func init() {
 	initCmd.MarkFlagRequired("preset")
 }
 
-func isValidPreset(preset string) bool {
-	for _, validPreset := range generated.AvailablePresets {
+func isValidPreset(preset string, availablePresets []string) bool {
+	for _, validPreset := range availablePresets {
 		if preset == validPreset {
 			return true
 		}
