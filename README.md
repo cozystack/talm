@@ -167,13 +167,48 @@ Querying disks map example:
 
 ## Encryption
 
-Currently, Talm does not have built-in encryption support, but you can transparently encrypt your secrets using the [git-crypt](https://github.com/AGWA/git-crypt) extension.
+Talm provides built-in encryption support using [age](https://age-encryption.org/) encryption. Sensitive files are encrypted with their values stored in SOPS format (`ENC[AGE,data:...]`), while YAML keys remain unencrypted for better readability.
 
-Example `.gitattributes` file:
+### Encrypting Files
 
+To encrypt all sensitive files (secrets.yaml, talosconfig, kubeconfig):
+
+```bash
+talm init --encrypt
+# or
+talm init -e
 ```
-kubeconfig filter=git-crypt diff=git-crypt
-secrets.yaml filter=git-crypt diff=git-crypt
-talosconfig filter=git-crypt diff=git-crypt
-.gitattributes !filter !diff
+
+This command will:
+- Generate `talm.key` if it doesn't exist
+- Encrypt `secrets.yaml` → `secrets.encrypted.yaml`
+- Encrypt `talosconfig` → `talosconfig.encrypted`
+- Encrypt `kubeconfig` → `kubeconfig.encrypted` (if exists)
+- Update `.gitignore` with sensitive files
+
+### Decrypting Files
+
+To decrypt all encrypted files:
+
+```bash
+talm init --decrypt
+# or
+talm init -d
 ```
+
+This command will:
+- Decrypt `secrets.encrypted.yaml` → `secrets.yaml`
+- Decrypt `talosconfig.encrypted` → `talosconfig`
+- Decrypt `kubeconfig.encrypted` → `kubeconfig` (if exists)
+- Update `.gitignore` with sensitive files
+
+### Key Management
+
+The `talm.key` file is generated in age keygen format and contains:
+- Creation timestamp
+- Public key (for sharing)
+- Private key (keep secure!)
+
+**Important**: Always backup your `talm.key` file! Without it, you won't be able to decrypt your encrypted secrets. The key file is automatically added to `.gitignore` to prevent accidental commits.
+
+Encrypted files (`*.encrypted.yaml`, `*.encrypted`) can be safely committed to Git, while plain files (`secrets.yaml`, `talosconfig`, `kubeconfig`, `talm.key`) are ignored.

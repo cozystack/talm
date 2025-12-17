@@ -5,6 +5,11 @@
 package commands
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
 	taloscommands "github.com/siderolabs/talos/cmd/talosctl/cmd/talos"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -97,6 +102,73 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		return nil
 	}
 
+	// Special handling for kubeconfig command: add to .gitignore if path is in project root
+	// Extract base command name for comparison
+	baseCmdName := cmdName
+	if idx := strings.Index(cmdName, " "); idx > 0 {
+		baseCmdName = cmdName[:idx]
+	}
+	
+	originalRunE := wrappedCmd.RunE
+	if baseCmdName == "kubeconfig" {
+		wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
+			// Always use kubeconfig path from Chart.yaml globalOptions
+			kubeconfigPath := Config.GlobalOptions.Kubeconfig
+			if kubeconfigPath == "" {
+				// Default to "kubeconfig" if not specified in Chart.yaml
+				kubeconfigPath = "kubeconfig"
+			}
+
+			// Replace args with path from Chart.yaml
+			newArgs := []string{kubeconfigPath}
+			// Execute original command with path from Chart.yaml
+			if originalRunE != nil {
+				if err := originalRunE(cmd, newArgs); err != nil {
+					return err
+				}
+			} else if wrappedCmd.Run != nil {
+				wrappedCmd.Run(cmd, newArgs)
+			}
+
+			// After command execution, set secure permissions and check if kubeconfig path is in project root
+			// Check if path is relative and in project root scope
+			var absPath string
+			var err error
+			if !filepath.IsAbs(kubeconfigPath) {
+				absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
+			} else {
+				absPath = kubeconfigPath
+			}
+			
+			if err == nil {
+				// Set secure permissions (600) on kubeconfig file
+				if err := os.Chmod(absPath, 0o600); err != nil {
+					// Don't fail the command if chmod fails, but log warning
+					fmt.Fprintf(os.Stderr, "Warning: failed to set permissions on kubeconfig: %v\n", err)
+				}
+				
+				rootAbs, err := filepath.Abs(Config.RootDir)
+				if err == nil {
+					relPath, err := filepath.Rel(rootAbs, absPath)
+					if err == nil && !strings.HasPrefix(relPath, "..") {
+						// Path is within project root, add to .gitignore
+						fileName := filepath.Base(kubeconfigPath)
+						if fileName == "kubeconfig" {
+							if err := addToGitignore("kubeconfig"); err != nil {
+								// Don't fail the command if gitignore update fails
+								fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
+							}
+						}
+					}
+				}
+			}
+
+			return nil
+		}
+		// Remove Args validation to allow command to work without arguments
+		wrappedCmd.Args = cobra.NoArgs
+	}
+
 	// Copy all subcommands
 	for _, subCmd := range cmd.Commands() {
 		wrappedCmd.AddCommand(wrapTalosCommand(subCmd, subCmd.Name()))
@@ -138,8 +210,41 @@ func init() {
 		// Wrap the command and add it to our commands list
 		// Note: wrapTalosCommand recursively processes all subcommands, so they already have
 		// the -f flag handling, --file flag (if needed), and PreRunE set automatically
-		wrappedCmd := wrapTalosCommand(cmd, cmd.Use)
+		wrappedCmd := wrapTalosCommand(cmd, baseName)
 		// Keep the original command name from talosctl
 		addCommand(wrappedCmd)
 	}
+}
+
+// addToGitignore adds an entry to .gitignore if it doesn't already exist
+func addToGitignore(entry string) error {
+	gitignoreFile := filepath.Join(Config.RootDir, ".gitignore")
+
+	// Read existing .gitignore if it exists
+	var content string
+	if _, err := os.Stat(gitignoreFile); err == nil {
+		existingContent, err := os.ReadFile(gitignoreFile)
+		if err != nil {
+			return fmt.Errorf("failed to read .gitignore: %w", err)
+		}
+		content = string(existingContent)
+
+		// Check if entry already exists
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == entry || strings.HasPrefix(line, entry+"/") {
+				return nil // Already exists
+			}
+		}
+	}
+
+	// Append entry
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += entry + "\n"
+
+	// Write back
+	return os.WriteFile(gitignoreFile, []byte(content), 0o644)
 }

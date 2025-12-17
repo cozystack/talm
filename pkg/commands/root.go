@@ -27,6 +27,7 @@ var Config struct {
 	RootDir       string
 	GlobalOptions struct {
 		Talosconfig string `yaml:"talosconfig"`
+		Kubeconfig  string `yaml:"kubeconfig"`
 	} `yaml:"globalOptions"`
 	TemplateOptions struct {
 		Offline           bool     `yaml:"offline"`
