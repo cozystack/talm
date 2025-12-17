@@ -132,6 +132,7 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 }
 
 // EncryptSecretsFile encrypts secrets.yaml values and saves to secrets.encrypted.yaml
+// Uses incremental encryption: only encrypts values that have changed
 func EncryptSecretsFile(rootDir string) error {
 	secretsFile := filepath.Join(rootDir, plainSecretsFile)
 	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
@@ -165,10 +166,41 @@ func EncryptSecretsFile(rootDir string) error {
 		return fmt.Errorf("failed to parse secrets YAML: %w", err)
 	}
 
-	// Encrypt values (keep keys unencrypted)
-	encryptedSecrets, err := encryptYAMLValues(secrets, identity.Recipient())
-	if err != nil {
-		return fmt.Errorf("failed to encrypt secrets: %w", err)
+	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
+	var encryptedSecrets map[string]interface{}
+	if _, err := os.Stat(encryptedFile); err == nil {
+		encryptedData, err := os.ReadFile(encryptedFile)
+		if err == nil {
+			if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err == nil {
+				// Merge: encrypt only changed values, preserve unchanged encrypted values
+				merged, err := mergeAndEncryptYAMLValues(secrets, encryptedSecrets, identity)
+				if err != nil {
+					return fmt.Errorf("failed to merge and encrypt: %w", err)
+				}
+				encryptedSecrets = merged.(map[string]interface{})
+			} else {
+				// If parsing fails, encrypt everything
+				encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
+				if err != nil {
+					return fmt.Errorf("failed to encrypt secrets: %w", err)
+				}
+				encryptedSecrets = encrypted.(map[string]interface{})
+			}
+		} else {
+			// If reading fails, encrypt everything
+			encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
+			if err != nil {
+				return fmt.Errorf("failed to encrypt secrets: %w", err)
+			}
+			encryptedSecrets = encrypted.(map[string]interface{})
+		}
+	} else {
+		// No encrypted file exists, encrypt everything
+		encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
+		if err != nil {
+			return fmt.Errorf("failed to encrypt secrets: %w", err)
+		}
+		encryptedSecrets = encrypted.(map[string]interface{})
 	}
 
 	// Marshal encrypted YAML
@@ -304,6 +336,106 @@ func decryptYAMLValues(data interface{}, identity *age.X25519Identity) (interfac
 	}
 }
 
+// decryptYAMLValuesString decrypts a single encrypted string value (helper for mergeAndEncryptYAMLValues)
+func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (string, error) {
+	if strings.HasPrefix(encrypted, ageEncryptionPrefix) && strings.HasSuffix(encrypted, ageEncryptionSuffix) {
+		encryptedData := strings.TrimPrefix(encrypted, ageEncryptionPrefix)
+		encryptedData = strings.TrimSuffix(encryptedData, ageEncryptionSuffix)
+		return decryptString(encryptedData, identity)
+	}
+	return encrypted, nil
+}
+
+// mergeAndEncryptYAMLValues merges plain and encrypted YAML, encrypting only changed values
+// This ensures idempotency: unchanged values keep their encrypted form
+func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X25519Identity) (interface{}, error) {
+	switch plainVal := plain.(type) {
+	case map[string]interface{}:
+		encryptedMap, ok := encrypted.(map[string]interface{})
+		if !ok {
+			// Type mismatch, encrypt everything
+			return encryptYAMLValues(plain, identity.Recipient())
+		}
+		
+		result := make(map[string]interface{})
+		// Copy all keys from plain (to handle new keys)
+		for key, plainValue := range plainVal {
+			if encryptedValue, exists := encryptedMap[key]; exists {
+				// Key exists in both, recursively merge
+				merged, err := mergeAndEncryptYAMLValues(plainValue, encryptedValue, identity)
+				if err != nil {
+					return nil, err
+				}
+				result[key] = merged
+			} else {
+				// New key, encrypt it
+				encryptedValue, err := encryptYAMLValues(plainValue, identity.Recipient())
+				if err != nil {
+					return nil, err
+				}
+				result[key] = encryptedValue
+			}
+		}
+		return result, nil
+		
+	case []interface{}:
+		encryptedSlice, ok := encrypted.([]interface{})
+		if !ok || len(plainVal) != len(encryptedSlice) {
+			// Type or length mismatch, encrypt everything
+			return encryptYAMLValues(plain, identity.Recipient())
+		}
+		
+		result := make([]interface{}, len(plainVal))
+		for i, plainItem := range plainVal {
+			merged, err := mergeAndEncryptYAMLValues(plainItem, encryptedSlice[i], identity)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = merged
+		}
+		return result, nil
+		
+	case string:
+		encryptedStr, ok := encrypted.(string)
+		if !ok {
+			// Type mismatch, encrypt
+			return encryptYAMLValues(plain, identity.Recipient())
+		}
+		
+		// Check if encrypted value is already encrypted
+		if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
+			// Decrypt existing value to compare
+			decrypted, err := decryptYAMLValuesString(encryptedStr, identity)
+			if err == nil && decrypted == plainVal {
+				// Values are the same, keep existing encrypted value (idempotent)
+				return encryptedStr, nil
+			}
+			// If decryption fails or values differ, encrypt new value
+		} else if encryptedStr == plainVal {
+			// Both are plain strings and equal, but we need encrypted version
+			// Encrypt the plain value
+		} else {
+			// Values differ, encrypt new value
+		}
+		
+		// Encrypt the new value
+		return encryptYAMLValues(plain, identity.Recipient())
+		
+	default:
+		// For other types, compare directly
+		if plain == encrypted {
+			// Values are the same, if encrypted is already encrypted, keep it
+			if encryptedStr, ok := encrypted.(string); ok {
+				if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
+					return encrypted, nil
+				}
+			}
+		}
+		// Encrypt the value
+		return encryptYAMLValues(plain, identity.Recipient())
+	}
+}
+
 // encryptString encrypts a string using age
 func encryptString(plaintext string, recipient *age.X25519Recipient) (string, error) {
 	var buf bytes.Buffer
@@ -396,6 +528,7 @@ func RotateKeys(rootDir string) error {
 }
 
 // EncryptYAMLFile encrypts a YAML file's values (keeping keys unencrypted) and saves to encrypted file
+// Uses incremental encryption: only encrypts values that have changed
 func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	plainFilePath := filepath.Join(rootDir, plainFile)
 	encryptedFilePath := filepath.Join(rootDir, encryptedFile)
@@ -429,10 +562,41 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	// Encrypt values (keep keys unencrypted)
-	encryptedYAML, err := encryptYAMLValues(yamlData, identity.Recipient())
-	if err != nil {
-		return fmt.Errorf("failed to encrypt YAML values: %w", err)
+	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
+	var encryptedYAML map[string]interface{}
+	if _, err := os.Stat(encryptedFilePath); err == nil {
+		encryptedData, err := os.ReadFile(encryptedFilePath)
+		if err == nil {
+			if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err == nil {
+				// Merge: encrypt only changed values, preserve unchanged encrypted values
+				merged, err := mergeAndEncryptYAMLValues(yamlData, encryptedYAML, identity)
+				if err != nil {
+					return fmt.Errorf("failed to merge and encrypt: %w", err)
+				}
+				encryptedYAML = merged.(map[string]interface{})
+			} else {
+				// If parsing fails, encrypt everything
+				encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
+				if err != nil {
+					return fmt.Errorf("failed to encrypt YAML values: %w", err)
+				}
+				encryptedYAML = encrypted.(map[string]interface{})
+			}
+		} else {
+			// If reading fails, encrypt everything
+			encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
+			if err != nil {
+				return fmt.Errorf("failed to encrypt YAML values: %w", err)
+			}
+			encryptedYAML = encrypted.(map[string]interface{})
+		}
+	} else {
+		// No encrypted file exists, encrypt everything
+		encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
+		if err != nil {
+			return fmt.Errorf("failed to encrypt YAML values: %w", err)
+		}
+		encryptedYAML = encrypted.(map[string]interface{})
 	}
 
 	// Marshal encrypted YAML
