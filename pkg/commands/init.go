@@ -83,9 +83,12 @@ var initCmd = &cobra.Command{
 		}
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 
-		err = writeSecretsBundleToFile(secretsBundle)
-		if err != nil {
-			return err
+		// Write secrets.yaml only if it doesn't exist
+		secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
+		if _, err := os.Stat(secretsFile); os.IsNotExist(err) {
+			if err = writeSecretsBundleToFile(secretsBundle); err != nil {
+				return err
+			}
 		}
 
 		// Clalculate cluster name from directory
@@ -95,19 +98,27 @@ var initCmd = &cobra.Command{
 		}
 		clusterName := filepath.Base(absolutePath)
 
-		configBundle, err := gen.GenerateConfigBundle(genOptions, clusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
-		configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
-		if err != nil {
-			return err
-		}
-
-		data, err := yaml.Marshal(configBundle.TalosConfig())
-		if err != nil {
-			return fmt.Errorf("failed to marshal config: %+v", err)
-		}
-
+		// Generate talosconfig only if it doesn't exist
 		talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
-		if err = writeToDestination(data, talosconfigFile, 0o644); err != nil {
+		if _, err := os.Stat(talosconfigFile); os.IsNotExist(err) {
+			configBundle, err := gen.GenerateConfigBundle(genOptions, clusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
+			if err != nil {
+				return err
+			}
+			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
+
+			data, err := yaml.Marshal(configBundle.TalosConfig())
+			if err != nil {
+				return fmt.Errorf("failed to marshal config: %+v", err)
+			}
+
+			if err = writeToDestination(data, talosconfigFile, 0o644); err != nil {
+				return err
+			}
+		}
+
+		// Create or update .gitignore file
+		if err = writeGitignoreFile(); err != nil {
 			return err
 		}
 
@@ -244,6 +255,64 @@ func validateFileExists(file string) error {
 	}
 
 	return nil
+}
+
+func writeGitignoreFile() error {
+	gitignoreContent := `# Sensitive files
+secrets.yaml
+talosconfig
+`
+	gitignoreFile := filepath.Join(Config.RootDir, ".gitignore")
+	
+	// If .gitignore exists, read it and append if needed
+	if _, err := os.Stat(gitignoreFile); err == nil {
+		existingContent, err := os.ReadFile(gitignoreFile)
+		if err != nil {
+			return fmt.Errorf("failed to read existing .gitignore: %w", err)
+		}
+		
+		// Check if secrets.yaml or talosconfig are already in .gitignore
+		existingStr := string(existingContent)
+		hasSecrets := strings.Contains(existingStr, "secrets.yaml")
+		hasTalosconfig := strings.Contains(existingStr, "talosconfig")
+		
+		// Only update if missing entries
+		if hasSecrets && hasTalosconfig {
+			return nil // Already has both entries
+		}
+		
+		// Append missing entries
+		if !hasSecrets {
+			if !strings.HasSuffix(existingStr, "\n") {
+				existingStr += "\n"
+			}
+			existingStr += "secrets.yaml\n"
+		}
+		if !hasTalosconfig {
+			if !strings.HasSuffix(existingStr, "\n") {
+				existingStr += "\n"
+			}
+			existingStr += "talosconfig\n"
+		}
+		
+		// Write without validation (allow overwrite for .gitignore)
+		parentDir := filepath.Dir(gitignoreFile)
+		if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+			return fmt.Errorf("failed to create output dir: %w", err)
+		}
+		err = os.WriteFile(gitignoreFile, []byte(existingStr), 0o644)
+		fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
+		return err
+	}
+	
+	// Create new .gitignore without validation
+	parentDir := filepath.Dir(gitignoreFile)
+	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+	err := os.WriteFile(gitignoreFile, []byte(gitignoreContent), 0o644)
+	fmt.Fprintf(os.Stderr, "Created %s\n", gitignoreFile)
+	return err
 }
 
 func writeToDestination(data []byte, destination string, permissions os.FileMode) error {
