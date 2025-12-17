@@ -103,6 +103,12 @@ cluster:
   controllerManager:
     extraArgs:
       bind-address: 0.0.0.0
+      {{- if .Values.allocateNodeCIDRs }}
+      allocate-node-cidrs: true
+      cluster-cidr: "{{ join "," .Values.podSubnets }}"
+      {{- else }}
+      allocate-node-cidrs: false
+      {{- end }}
   scheduler:
     extraArgs:
       bind-address: 0.0.0.0
