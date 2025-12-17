@@ -112,40 +112,51 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	originalRunE := wrappedCmd.RunE
 	if baseCmdName == "kubeconfig" {
 		wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
-			// Execute original command first
+			// Always use kubeconfig path from Chart.yaml globalOptions
+			kubeconfigPath := Config.GlobalOptions.Kubeconfig
+			if kubeconfigPath == "" {
+				// Default to "kubeconfig" if not specified in Chart.yaml
+				kubeconfigPath = "kubeconfig"
+			}
+
+			// Replace args with path from Chart.yaml
+			newArgs := []string{kubeconfigPath}
+			// Execute original command with path from Chart.yaml
 			if originalRunE != nil {
-				if err := originalRunE(cmd, args); err != nil {
+				if err := originalRunE(cmd, newArgs); err != nil {
 					return err
 				}
 			} else if wrappedCmd.Run != nil {
-				wrappedCmd.Run(cmd, args)
+				wrappedCmd.Run(cmd, newArgs)
 			}
 
-			// After command execution, check if kubeconfig path is in project root
-			if len(args) > 0 {
-				kubeconfigPath := args[0]
-				// Check if the filename is "kubeconfig" (exact match or just filename)
-				fileName := filepath.Base(kubeconfigPath)
-				if fileName == "kubeconfig" {
-					// Check if path is relative and in project root scope
-					var absPath string
-					var err error
-					if !filepath.IsAbs(kubeconfigPath) {
-						absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
-					} else {
-						absPath = kubeconfigPath
-					}
-					
-					if err == nil {
-						rootAbs, err := filepath.Abs(Config.RootDir)
-						if err == nil {
-							relPath, err := filepath.Rel(rootAbs, absPath)
-							if err == nil && !strings.HasPrefix(relPath, "..") {
-								// Path is within project root, add to .gitignore
-								if err := addToGitignore("kubeconfig"); err != nil {
-									// Don't fail the command if gitignore update fails
-									fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
-								}
+			// After command execution, set secure permissions and check if kubeconfig path is in project root
+			// Check if path is relative and in project root scope
+			var absPath string
+			var err error
+			if !filepath.IsAbs(kubeconfigPath) {
+				absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
+			} else {
+				absPath = kubeconfigPath
+			}
+			
+			if err == nil {
+				// Set secure permissions (600) on kubeconfig file
+				if err := os.Chmod(absPath, 0o600); err != nil {
+					// Don't fail the command if chmod fails, but log warning
+					fmt.Fprintf(os.Stderr, "Warning: failed to set permissions on kubeconfig: %v\n", err)
+				}
+				
+				rootAbs, err := filepath.Abs(Config.RootDir)
+				if err == nil {
+					relPath, err := filepath.Rel(rootAbs, absPath)
+					if err == nil && !strings.HasPrefix(relPath, "..") {
+						// Path is within project root, add to .gitignore
+						fileName := filepath.Base(kubeconfigPath)
+						if fileName == "kubeconfig" {
+							if err := addToGitignore("kubeconfig"); err != nil {
+								// Don't fail the command if gitignore update fails
+								fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
 							}
 						}
 					}
@@ -154,6 +165,8 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 			return nil
 		}
+		// Remove Args validation to allow command to work without arguments
+		wrappedCmd.Args = cobra.NoArgs
 	}
 
 	// Copy all subcommands
