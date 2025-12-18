@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: oracle-vm-2cpu-8gb-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
