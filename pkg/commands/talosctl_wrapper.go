@@ -82,12 +82,6 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 			baseCmdName = cmdName[:idx]
 		}
 		if baseCmdName == "kubeconfig" {
-			// Set default values for --merge and --force if not explicitly set
-			if !cmd.Flags().Changed("merge") {
-				if err := cmd.Flags().Set("merge", "false"); err != nil {
-					// Flag might not exist, ignore error
-				}
-			}
 			if !cmd.Flags().Changed("force") {
 				if err := cmd.Flags().Set("force", "true"); err != nil {
 					// Flag might not exist, ignore error

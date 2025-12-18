@@ -16,17 +16,41 @@ import (
 
 // wrapKubeconfigCommand adds special handling for kubeconfig command
 func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Command, []string) error) {
+	// Add --login flag to update system kubeconfig file instead of local one
+	wrappedCmd.Flags().BoolP("login", "l", false, "update system kubeconfig file, not local one")
+
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
-		// Always use kubeconfig path from Chart.yaml globalOptions
-		kubeconfigPath := Config.GlobalOptions.Kubeconfig
-		if kubeconfigPath == "" {
-			// Default to "kubeconfig" if not specified in Chart.yaml
-			kubeconfigPath = "kubeconfig"
+		// Check if --login flag is set
+		loginFlagValue, _ := cmd.Flags().GetBool("login")
+		
+		var newArgs []string
+		var kubeconfigPath string
+
+		// If --login flag is set, use original args without auto-substitution
+		if loginFlagValue {
+			newArgs = args
+			// Still need kubeconfigPath for post-processing (permissions, encryption, etc.)
+			// Use first arg if provided, otherwise fall back to default
+			if len(args) > 0 {
+				kubeconfigPath = args[0]
+			} else {
+				kubeconfigPath = Config.GlobalOptions.Kubeconfig
+				if kubeconfigPath == "" {
+					kubeconfigPath = "kubeconfig"
+				}
+			}
+		} else {
+			// Always use kubeconfig path from Chart.yaml globalOptions
+			kubeconfigPath = Config.GlobalOptions.Kubeconfig
+			if kubeconfigPath == "" {
+				// Default to "kubeconfig" if not specified in Chart.yaml
+				kubeconfigPath = "kubeconfig"
+			}
+			// Replace args with path from Chart.yaml
+			newArgs = []string{kubeconfigPath}
 		}
 
-		// Replace args with path from Chart.yaml
-		newArgs := []string{kubeconfigPath}
-		// Execute original command with path from Chart.yaml
+		// Execute original command with args
 		if originalRunE != nil {
 			if err := originalRunE(cmd, newArgs); err != nil {
 				return err
@@ -77,27 +101,36 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 			}
 
 			// Automatically update kubeconfig.encrypted if it exists and talm.key exists
-			encryptedKubeconfigPath := kubeconfigPath + ".encrypted"
-			encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
-			keyFile := filepath.Join(Config.RootDir, "talm.key")
+			// Skip this if --login flag is set
+			if !loginFlagValue {
+				encryptedKubeconfigPath := kubeconfigPath + ".encrypted"
+				encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
+				keyFile := filepath.Join(Config.RootDir, "talm.key")
 
-			encryptedExists := fileExists(encryptedKubeconfigFile)
-			keyExists := fileExists(keyFile)
+				encryptedExists := fileExists(encryptedKubeconfigFile)
+				keyExists := fileExists(keyFile)
 
-			if encryptedExists && keyExists {
-				// Both files exist, encrypt kubeconfig
-				if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, encryptedKubeconfigPath); err != nil {
-					// Don't fail the command if encryption fails, but log warning
-					fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
-				} else {
-					fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
+				if encryptedExists && keyExists {
+					// Both files exist, encrypt kubeconfig
+					if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, encryptedKubeconfigPath); err != nil {
+						// Don't fail the command if encryption fails, but log warning
+						fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
+					} else {
+						fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
+					}
 				}
 			}
 		}
 
 		return nil
 	}
-	// Remove Args validation to allow command to work without arguments
-	wrappedCmd.Args = cobra.NoArgs
+	// Set custom Args validation: allow no args by default, but allow args when --login is set
+	wrappedCmd.Args = func(cmd *cobra.Command, args []string) error {
+		loginFlagValue, _ := cmd.Flags().GetBool("login")
+		if !loginFlagValue && len(args) > 0 {
+			return fmt.Errorf("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
+		}
+		return nil
+	}
 }
 
