@@ -30,6 +30,14 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 	wrappedCmd.Flags().BoolP("login", "l", false, "update system kubeconfig file, not local one")
 
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		// Ensure project root is detected
+		if !Config.RootDirExplicit {
+			detectedRoot, err := detectRootFromCWD()
+			if err == nil && detectedRoot != "" {
+				Config.RootDir = detectedRoot
+			}
+		}
+
 		// Check if --login flag is set
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
 		
@@ -56,7 +64,11 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 				// Default to "kubeconfig" if not specified in Chart.yaml
 				kubeconfigPath = "kubeconfig"
 			}
-			// Replace args with path from Chart.yaml
+			// Resolve to absolute path relative to project root
+			if !filepath.IsAbs(kubeconfigPath) {
+				kubeconfigPath = filepath.Join(Config.RootDir, kubeconfigPath)
+			}
+			// Replace args with absolute path from Chart.yaml
 			newArgs = []string{kubeconfigPath}
 		}
 
@@ -70,13 +82,16 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 		}
 
 		// After command execution, set secure permissions and check if kubeconfig path is in project root
-		// Check if path is relative and in project root scope
+		// Resolve to absolute path
 		var absPath string
 		var err error
 		if !filepath.IsAbs(kubeconfigPath) {
 			absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
 		} else {
-			absPath = kubeconfigPath
+			absPath, err = filepath.Abs(kubeconfigPath)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to resolve kubeconfig path: %w", err)
 		}
 
 		if err == nil {
@@ -113,20 +128,28 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 			// Automatically update kubeconfig.encrypted if it exists and talm.key exists
 			// Skip this if --login flag is set
 			if !loginFlagValue {
-				encryptedKubeconfigPath := kubeconfigPath + ".encrypted"
-				encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
-				keyFile := filepath.Join(Config.RootDir, "talm.key")
+				// Get relative path from project root for encryption
+				rootAbs, err := filepath.Abs(Config.RootDir)
+				if err == nil {
+					relKubeconfigPath, err := filepath.Rel(rootAbs, absPath)
+					if err == nil && !strings.HasPrefix(relKubeconfigPath, "..") {
+						// Path is within project root
+						encryptedKubeconfigPath := relKubeconfigPath + ".encrypted"
+						encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
+						keyFile := filepath.Join(Config.RootDir, "talm.key")
 
-				encryptedExists := fileExists(encryptedKubeconfigFile)
-				keyExists := fileExists(keyFile)
+						encryptedExists := fileExists(encryptedKubeconfigFile)
+						keyExists := fileExists(keyFile)
 
-				if encryptedExists && keyExists {
-					// Both files exist, encrypt kubeconfig
-					if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, encryptedKubeconfigPath); err != nil {
-						// Don't fail the command if encryption fails, but log warning
-						fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
-					} else {
-						fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
+						if encryptedExists && keyExists {
+							// Both files exist, encrypt kubeconfig
+							if err := age.EncryptYAMLFile(Config.RootDir, relKubeconfigPath, encryptedKubeconfigPath); err != nil {
+								// Don't fail the command if encryption fails, but log warning
+								fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
+							} else {
+								fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
+							}
+						}
 					}
 				}
 			}

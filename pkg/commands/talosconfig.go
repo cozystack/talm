@@ -27,6 +27,16 @@ var talosconfigCmd = &cobra.Command{
 	Short: "Manage talosconfig file (decrypt/encrypt)",
 	Long:  `Manage talosconfig file: decrypt if encrypted file exists, encrypt if plain file exists.`,
 	Args:  cobra.NoArgs,
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// Ensure project root is detected
+		if !Config.RootDirExplicit {
+			detectedRoot, err := detectRootFromCWD()
+			if err == nil && detectedRoot != "" {
+				Config.RootDir = detectedRoot
+			}
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Handle talosconfig encryption/decryption logic
 		if _, err := handleTalosconfigEncryption(true); err != nil {
