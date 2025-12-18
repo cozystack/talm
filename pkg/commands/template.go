@@ -128,35 +128,8 @@ func template(args []string) func(ctx context.Context, c *client.Client) error {
 func templateWithFiles(args []string) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
 		// Detect root from files if specified, otherwise fallback to cwd
-		if len(templateCmdFlags.configFiles) > 0 {
-			detectedRoot, err := ValidateAndDetectRootsForFiles(templateCmdFlags.configFiles)
-			if err != nil {
-				return err
-			}
-			if detectedRoot != "" {
-				absConfigRoot, _ := filepath.Abs(Config.RootDir)
-				absDetectedRoot, _ := filepath.Abs(detectedRoot)
-				// Root from files has priority
-				if absConfigRoot != absDetectedRoot {
-					// If --root was explicitly set and differs from files root, error
-					if Config.RootDirExplicit {
-						return fmt.Errorf("conflicting project roots: global --root=%s, but files belong to root=%s", absConfigRoot, absDetectedRoot)
-					}
-				}
-				// Use root from files (has priority)
-				Config.RootDir = detectedRoot
-			}
-		} else {
-			// Fallback: detect root from current working directory if not explicitly set
-			if !Config.RootDirExplicit {
-				currentDir, err := os.Getwd()
-				if err == nil {
-					detectedRoot, err := DetectProjectRoot(currentDir)
-					if err == nil && detectedRoot != "" {
-						Config.RootDir = detectedRoot
-					}
-				}
-			}
+		if err := DetectAndSetRootFromFiles(templateCmdFlags.configFiles); err != nil {
+			return err
 		}
 
 		firstFileProcessed := false
@@ -236,14 +209,8 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 }
 
 func generateOutput(ctx context.Context, c *client.Client, args []string) (string, error) {
-	// Resolve secrets.yaml path relative to project root if not absolute
-	withSecretsPath := templateCmdFlags.withSecrets
-	if withSecretsPath == "" {
-		withSecretsPath = "secrets.yaml"
-	}
-	if !filepath.IsAbs(withSecretsPath) {
-		withSecretsPath = filepath.Join(Config.RootDir, withSecretsPath)
-	}
+			// Resolve secrets.yaml path relative to project root if not absolute
+			withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
 
 	// Resolve template file paths relative to project root
 	resolvedTemplateFiles := make([]string, len(templateCmdFlags.templateFiles))

@@ -183,3 +183,78 @@ func DetectAndSetRoot(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// DetectAndSetRootFromFiles detects and sets project root from file paths.
+// This is a common pattern used in commands like apply, upgrade, and talosctl wrapper.
+// It detects root from files if provided, otherwise falls back to current working directory.
+func DetectAndSetRootFromFiles(filePaths []string) error {
+	if len(filePaths) > 0 {
+		detectedRoot, err := ValidateAndDetectRootsForFiles(filePaths)
+		if err != nil {
+			return err
+		}
+		if detectedRoot != "" {
+			absConfigRoot, _ := filepath.Abs(Config.RootDir)
+			absDetectedRoot, _ := filepath.Abs(detectedRoot)
+			// Root from files has priority
+			if absConfigRoot != absDetectedRoot {
+				// If --root was explicitly set and differs from files root, error
+				if Config.RootDirExplicit {
+					return fmt.Errorf("conflicting project roots: global --root=%s, but files belong to root=%s", absConfigRoot, absDetectedRoot)
+				}
+			}
+			// Use root from files (has priority)
+			Config.RootDir = detectedRoot
+			return nil
+		}
+	}
+
+	// Fallback: detect root from current working directory if not explicitly set
+	if !Config.RootDirExplicit {
+		currentDir, err := os.Getwd()
+		if err == nil {
+			detectedRoot, err := DetectProjectRoot(currentDir)
+			if err == nil && detectedRoot != "" {
+				Config.RootDir = detectedRoot
+			}
+		}
+	}
+
+	return nil
+}
+
+// ResolveSecretsPath resolves secrets.yaml path relative to project root if not absolute.
+func ResolveSecretsPath(withSecrets string) string {
+	if withSecrets == "" {
+		withSecrets = "secrets.yaml"
+	}
+	if !filepath.IsAbs(withSecrets) {
+		withSecrets = filepath.Join(Config.RootDir, withSecrets)
+	}
+	return withSecrets
+}
+
+// EnsureTalosconfigPath ensures talosconfig path is set to project root if not explicitly set via flag.
+func EnsureTalosconfigPath(cmd *cobra.Command) {
+	if cmd.PersistentFlags().Changed("talosconfig") {
+		return
+	}
+
+	var talosconfigPath string
+	if GlobalArgs.Talosconfig != "" {
+		// Use existing path from Chart.yaml or default
+		talosconfigPath = GlobalArgs.Talosconfig
+	} else {
+		// Use talosconfig from project root
+		talosconfigPath = Config.GlobalOptions.Talosconfig
+		if talosconfigPath == "" {
+			talosconfigPath = "talosconfig"
+		}
+	}
+	// Make it absolute path relative to project root if it's relative
+	if !filepath.IsAbs(talosconfigPath) {
+		GlobalArgs.Talosconfig = filepath.Join(Config.RootDir, talosconfigPath)
+	} else {
+		GlobalArgs.Talosconfig = talosconfigPath
+	}
+}
+

@@ -35,6 +35,11 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 		}
 
+		// Detect root from files if specified, otherwise fallback to cwd
+		if err := DetectAndSetRootFromFiles(filesToProcess); err != nil {
+			return err
+		}
+
 		// If config files are provided and --image flag is not set, extract image from config
 		if len(filesToProcess) > 0 && !cmd.Flags().Changed("image") {
 			// Process first config file to extract image
@@ -61,6 +66,9 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 					withSecrets = val
 				}
 			}
+
+			// Resolve secrets.yaml path relative to project root if not absolute
+			withSecrets = ResolveSecretsPath(withSecrets)
 
 			kubernetesVersion := Config.TemplateOptions.KubernetesVersion
 			if cmd.Flags().Changed("kubernetes-version") {
