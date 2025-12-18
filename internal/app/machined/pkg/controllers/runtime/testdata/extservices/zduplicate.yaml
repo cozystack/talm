@@ -1,9 +1,0 @@
-name: hello-world
-container:
-  entrypoint: ./duplicate
-  args:
-    - should not get registered
-depends:
-  - network:
-    - addresses
-restart: always
