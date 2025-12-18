@@ -15,6 +15,7 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,6 +52,25 @@ var initCmd = &cobra.Command{
 		if !cmd.Flags().Changed("talos-version") {
 			initCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
+
+		// For -e, -d, and -u flags, always check that we're in a project root
+		if initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update {
+			// Verify that Config.RootDir is actually a project root
+			detectedRoot, err := DetectProjectRoot(Config.RootDir)
+			if err != nil {
+				return fmt.Errorf("failed to verify project root: %w", err)
+			}
+			if detectedRoot == "" {
+				return fmt.Errorf("not in a project root: Chart.yaml and secrets.yaml must exist in %s or parent directories", Config.RootDir)
+			}
+			// Ensure Config.RootDir is set to the detected root
+			absDetectedRoot, _ := filepath.Abs(detectedRoot)
+			absConfigRoot, _ := filepath.Abs(Config.RootDir)
+			if absDetectedRoot != absConfigRoot {
+				Config.RootDir = detectedRoot
+			}
+		}
+
 		// Preset is not required when using --encrypt or --decrypt flags
 		if initCmdFlags.encrypt || initCmdFlags.decrypt {
 			return nil
@@ -155,8 +175,6 @@ var initCmd = &cobra.Command{
 					return fmt.Errorf("failed to encrypt secrets: %w", err)
 				}
 				encryptedCount++
-			} else {
-				fmt.Fprintf(os.Stderr, "Skipping secrets.yaml (file not found)\n")
 			}
 
 			// Encrypt talosconfig
@@ -445,11 +463,152 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	return writeToDestination(bundleBytes, secretsFile, 0o600)
 }
 
-func updateTalmLibraryChart() error {
-	talmChartDir := filepath.Join(Config.RootDir, "charts/talm")
+// readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
+func readChartYamlPreset() (string, error) {
+	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+	data, err := os.ReadFile(chartYamlPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read Chart.yaml: %w", err)
+	}
 
-	if err := os.RemoveAll(talmChartDir); err != nil {
-		return fmt.Errorf("failed to remove existing talm chart directory: %w", err)
+	var chartData struct {
+		Dependencies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"dependencies"`
+	}
+
+	if err := yaml.Unmarshal(data, &chartData); err != nil {
+		return "", fmt.Errorf("failed to parse Chart.yaml: %w", err)
+	}
+
+	// Find preset in dependencies (exclude "talm" which is the library chart)
+	for _, dep := range chartData.Dependencies {
+		if dep.Name != "talm" {
+			return dep.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("preset not found in Chart.yaml dependencies")
+}
+
+// askUserOverwrite asks user if they want to overwrite a file
+func askUserOverwrite(filePath string) (bool, error) {
+	// Show relative path from project root
+	relPath, err := filepath.Rel(Config.RootDir, filePath)
+	if err != nil {
+		// If we can't get relative path, use absolute
+		relPath = filePath
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Fprintf(os.Stderr, "File %s differs from template. Overwrite? [y/N]: ", relPath)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false, err
+	}
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "y" || response == "yes", nil
+}
+
+// filesDiffer checks if two files have different content
+func filesDiffer(filePath string, newContent []byte) (bool, error) {
+	existingContent, err := os.ReadFile(filePath)
+	if err != nil {
+		// File doesn't exist, so it differs
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return string(existingContent) != string(newContent), nil
+}
+
+// updateFileWithConfirmation updates a file if it differs, asking user for confirmation
+func updateFileWithConfirmation(filePath string, newContent []byte, permissions os.FileMode) error {
+	// Check if file exists
+	exists := fileExists(filePath)
+
+	if !exists {
+		// File doesn't exist, create it without asking
+		parentDir := filepath.Dir(filePath)
+		if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+			return fmt.Errorf("failed to create output dir: %w", err)
+		}
+		if err := os.WriteFile(filePath, newContent, permissions); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+		// Show relative path from project root
+		relPath, err := filepath.Rel(Config.RootDir, filePath)
+		if err != nil {
+			relPath = filePath
+		}
+		fmt.Fprintf(os.Stderr, "Created %s\n", relPath)
+		return nil
+	}
+
+	// File exists, check if content differs
+	differs, err := filesDiffer(filePath, newContent)
+	if err != nil {
+		return err
+	}
+
+	if !differs {
+		// File is the same, skip silently
+		return nil
+	}
+
+	// File differs, ask user
+	overwrite, err := askUserOverwrite(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read user input: %w", err)
+	}
+
+	if !overwrite {
+		fmt.Fprintf(os.Stderr, "Skipping %s\n", filePath)
+		return nil
+	}
+
+	// Write file
+	parentDir := filepath.Dir(filePath)
+	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, newContent, permissions); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Show relative path from project root
+	relPath, err := filepath.Rel(Config.RootDir, filePath)
+	if err != nil {
+		relPath = filePath
+	}
+	fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+	return nil
+}
+
+func updateTalmLibraryChart() error {
+	// Determine preset: use -p flag if provided, otherwise read from Chart.yaml
+	var presetName string
+	var err error
+
+	if initCmdFlags.preset != "" {
+		// Use preset from flag
+		presetName = initCmdFlags.preset
+		// Validate preset
+		availablePresets, err := generated.AvailablePresets()
+		if err != nil {
+			return fmt.Errorf("failed to get available presets: %w", err)
+		}
+		if !isValidPreset(presetName, availablePresets) {
+			return fmt.Errorf("invalid preset: %s. Valid presets are: %v", presetName, availablePresets)
+		}
+	} else {
+		// Try to read from Chart.yaml
+		presetName, err = readChartYamlPreset()
+		if err != nil {
+			return fmt.Errorf("failed to determine preset: %w (use -p flag to specify preset)", err)
+		}
 	}
 
 	presetFiles, err := generated.PresetFiles()
@@ -457,34 +616,58 @@ func updateTalmLibraryChart() error {
 		return fmt.Errorf("failed to get preset files: %w", err)
 	}
 
-	content, exists := presetFiles["talm/Chart.yaml"]
-	if !exists {
-		return fmt.Errorf("talm chart preset not found")
-	}
-
-	file := filepath.Join(talmChartDir, "Chart.yaml")
-	err = writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
-	if err != nil {
-		return err
-	}
-
-	// Remove the existing talm chart directory
-	if err := os.RemoveAll(talmChartDir); err != nil {
-		return fmt.Errorf("failed to remove existing talm chart directory: %w", err)
-	}
-
+	// Step 1: Update talm library chart files (without interactive confirmation)
+	fmt.Fprintf(os.Stderr, "Updating talm library chart...\n")
 	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		chartName := parts[0]
-		// Write library chart
 		if chartName == "talm" {
 			file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
+			var fileContent []byte
 			if parts[len(parts)-1] == "Chart.yaml" {
-				writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
+				fileContent = []byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version))
 			} else {
-				err = writeToDestination([]byte(content), file, 0o644)
+				fileContent = []byte(content)
 			}
-			if err != nil {
+			// For talm library, always update without asking
+			parentDir := filepath.Dir(file)
+			if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+				return fmt.Errorf("failed to create output dir: %w", err)
+			}
+			if err := os.WriteFile(file, fileContent, 0o644); err != nil {
+				return fmt.Errorf("failed to write file: %w", err)
+			}
+			relPath, _ := filepath.Rel(Config.RootDir, file)
+			fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+		}
+	}
+
+	// Step 2: Update preset template files (with interactive confirmation)
+	fmt.Fprintf(os.Stderr, "Updating preset templates...\n")
+	for path, content := range presetFiles {
+		parts := strings.SplitN(path, "/", 2)
+		chartName := parts[0]
+		if chartName == presetName {
+			file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
+			var fileContent []byte
+			if parts[len(parts)-1] == "Chart.yaml" {
+				// Read cluster name from existing Chart.yaml
+				existingChartPath := filepath.Join(Config.RootDir, "Chart.yaml")
+				existingData, err := os.ReadFile(existingChartPath)
+				if err != nil {
+					return fmt.Errorf("failed to read existing Chart.yaml: %w", err)
+				}
+				var existingChart struct {
+					Name string `yaml:"name"`
+				}
+				if err := yaml.Unmarshal(existingData, &existingChart); err != nil {
+					return fmt.Errorf("failed to parse existing Chart.yaml: %w", err)
+				}
+				fileContent = []byte(fmt.Sprintf(content, existingChart.Name, Config.InitOptions.Version))
+			} else {
+				fileContent = []byte(content)
+			}
+			if err := updateFileWithConfirmation(file, fileContent, 0o644); err != nil {
 				return err
 			}
 		}
@@ -529,6 +712,16 @@ func validateFileExists(file string) error {
 
 func writeGitignoreFile() error {
 	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key"}
+
+	// Add kubeconfig to required entries (use path from config or default)
+	kubeconfigPath := Config.GlobalOptions.Kubeconfig
+	if kubeconfigPath == "" {
+		kubeconfigPath = "kubeconfig"
+	}
+	// Only add base name (not full path) to gitignore
+	kubeconfigBase := filepath.Base(kubeconfigPath)
+	requiredEntries = append(requiredEntries, kubeconfigBase)
+
 	gitignoreFile := filepath.Join(Config.RootDir, ".gitignore")
 
 	var existingStr string
