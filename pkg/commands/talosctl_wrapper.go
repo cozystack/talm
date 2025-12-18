@@ -114,11 +114,65 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 			}
 		}
 
+		// Detect root from files if specified, otherwise fallback to cwd
+		if len(filesToProcess) > 0 {
+			detectedRoot, err := ValidateAndDetectRootsForFiles(filesToProcess)
+			if err != nil {
+				return err
+			}
+			if detectedRoot != "" {
+				absConfigRoot, _ := filepath.Abs(Config.RootDir)
+				absDetectedRoot, _ := filepath.Abs(detectedRoot)
+				// Root from files has priority
+				if absConfigRoot != absDetectedRoot {
+					// If --root was explicitly set and differs from files root, error
+					if Config.RootDirExplicit {
+						return fmt.Errorf("conflicting project roots: global --root=%s, but files belong to root=%s", absConfigRoot, absDetectedRoot)
+					}
+				}
+				// Use root from files (has priority)
+				Config.RootDir = detectedRoot
+			}
+		} else {
+			// Fallback: detect root from current working directory if not explicitly set
+			if !Config.RootDirExplicit {
+				currentDir, err := os.Getwd()
+				if err == nil {
+					detectedRoot, err := DetectProjectRoot(currentDir)
+					if err == nil && detectedRoot != "" {
+						Config.RootDir = detectedRoot
+					}
+				}
+			}
+		}
+
 		for _, configFile := range filesToProcess {
 			if err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, false); err != nil {
 				return err
 			}
 		}
+		
+		// Ensure talosconfig path is set to project root if not explicitly set via flag
+		if !cmd.PersistentFlags().Changed("talosconfig") {
+			var talosconfigPath string
+			if GlobalArgs.Talosconfig != "" {
+				// Use existing path from Chart.yaml or default
+				talosconfigPath = GlobalArgs.Talosconfig
+			} else {
+				// Use talosconfig from project root
+				talosconfigPath = Config.GlobalOptions.Talosconfig
+				if talosconfigPath == "" {
+					talosconfigPath = "talosconfig"
+				}
+			}
+			// Make it absolute path relative to project root if it's relative
+			if !filepath.IsAbs(talosconfigPath) {
+				GlobalArgs.Talosconfig = filepath.Join(Config.RootDir, talosconfigPath)
+			} else {
+				GlobalArgs.Talosconfig = talosconfigPath
+			}
+		}
+		
 		// Sync GlobalArgs to talosctl commands
 		taloscommands.GlobalArgs = GlobalArgs
 		if originalPreRunE != nil {
@@ -161,6 +215,7 @@ func init() {
 		"config":       true, // talm manages config differently
 		"patch":        true, // not needed in talm
 		"upgrade-k8s":  true, // not needed in talm
+		"talosconfig": true, // talm has its own talosconfig command
 	}
 
 	// Import and wrap each command from talosctl

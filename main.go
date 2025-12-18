@@ -77,6 +77,51 @@ func init() {
 	for _, cmd := range commands.Commands {
 		rootCmd.AddCommand(cmd)
 	}
+	
+	// Add PersistentPreRunE to handle root detection and config loading
+	originalPersistentPreRunE := rootCmd.PersistentPreRunE
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// Detect and set project root using fallback strategy
+		if err := commands.DetectAndSetRoot(cmd, args); err != nil {
+			return err
+		}
+		
+		// Load config after root detection (skip for init and completion commands)
+		cmdName := cmd.Use
+		if !strings.HasPrefix(cmdName, "init") && !strings.HasPrefix(cmdName, "completion") {
+			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
+			if err := loadConfig(configFile); err != nil {
+				return fmt.Errorf("error loading configuration: %w", err)
+			}
+		}
+		
+		// Ensure talosconfig path is set to project root if not explicitly set via flag
+		// This is needed for all commands that use talosctl client (template, apply, etc.)
+		if !cmd.PersistentFlags().Changed("talosconfig") {
+			var talosconfigPath string
+			if commands.GlobalArgs.Talosconfig != "" {
+				// Use existing path from Chart.yaml or default
+				talosconfigPath = commands.GlobalArgs.Talosconfig
+			} else {
+				// Use talosconfig from project root
+				talosconfigPath = commands.Config.GlobalOptions.Talosconfig
+				if talosconfigPath == "" {
+					talosconfigPath = "talosconfig"
+				}
+			}
+			// Make it absolute path relative to project root if it's relative
+			if !filepath.IsAbs(talosconfigPath) {
+				commands.GlobalArgs.Talosconfig = filepath.Join(commands.Config.RootDir, talosconfigPath)
+			} else {
+				commands.GlobalArgs.Talosconfig = talosconfigPath
+			}
+		}
+		
+		if originalPersistentPreRunE != nil {
+			return originalPersistentPreRunE(cmd, args)
+		}
+		return nil
+	}
 }
 
 func initConfig() {
@@ -88,19 +133,12 @@ func initConfig() {
 	if cmd.HasParent() && cmd.Parent() != rootCmd {
 		cmd = cmd.Parent()
 	}
+	
 	if strings.HasPrefix(cmd.Use, "init") {
 		if strings.HasPrefix(Version, "v") {
 			commands.Config.InitOptions.Version = strings.TrimPrefix(Version, `v`)
 		} else {
 			commands.Config.InitOptions.Version = "0.1.0"
-		}
-	} else {
-		if !strings.HasPrefix(cmd.Use, "completion") {
-			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
-			if err := loadConfig(configFile); err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
-				os.Exit(1)
-			}
 		}
 	}
 }

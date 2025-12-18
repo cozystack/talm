@@ -304,12 +304,13 @@ var initCmd = &cobra.Command{
 		talosconfigFileExists := fileExists(talosconfigFile)
 		encryptedTalosconfigFileExists := fileExists(encryptedTalosconfigFile)
 
-		// If encrypted file exists, decrypt it
+		// If encrypted file exists, decrypt it (don't require key - will generate if needed)
 		if encryptedTalosconfigFileExists && !talosconfigFileExists {
-			if err := age.DecryptYAMLFile(Config.RootDir, "talosconfig.encrypted", "talosconfig"); err != nil {
-				return fmt.Errorf("failed to decrypt talosconfig: %w", err)
+			_, err := handleTalosconfigEncryption(false)
+			if err != nil {
+				// If decryption fails (e.g., no key), continue to generate
 			}
-			talosconfigFileExists = true
+			talosconfigFileExists = fileExists(talosconfigFile)
 		}
 
 		// Generate talosconfig only if it doesn't exist
@@ -331,22 +332,13 @@ var initCmd = &cobra.Command{
 			talosconfigFileExists = true
 		}
 
-		// If talosconfig exists but encrypted file doesn't, encrypt it
-		if talosconfigFileExists && !encryptedTalosconfigFileExists {
-			// Ensure key exists
-			if !keyFileExists {
-				_, keyCreated, err := age.GenerateKey(Config.RootDir)
-				if err != nil {
-					return fmt.Errorf("failed to generate key: %w", err)
-				}
-				keyFileExists = true // Update flag after creation
-				keyWasCreated = keyCreated
-			}
-
-			// Encrypt talosconfig
-			if err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted"); err != nil {
-				return fmt.Errorf("failed to encrypt talosconfig: %w", err)
-			}
+		// Encrypt talosconfig if needed
+		talosKeyCreated, err := handleTalosconfigEncryption(false)
+		if err != nil {
+			return err
+		}
+		if talosKeyCreated {
+			keyWasCreated = true
 		}
 
 		// Handle kubeconfig encryption logic (check if kubeconfig exists from Chart.yaml)
@@ -625,6 +617,60 @@ func printSecretsWarning() {
 	fmt.Fprintf(os.Stderr, "│                                                                              │\n")
 	fmt.Fprintf(os.Stderr, "└──────────────────────────────────────────────────────────────────────────────┘\n")
 	fmt.Fprintf(os.Stderr, "\n")
+}
+
+// handleTalosconfigEncryption handles encryption/decryption logic for talosconfig file.
+// It decrypts if encrypted file exists, encrypts if plain file exists.
+// requireKeyForDecrypt: if true, returns error if key is missing when trying to decrypt.
+// Returns true if key was created during this call, false otherwise.
+func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
+	talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
+	encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
+	talosconfigFileExists := fileExists(talosconfigFile)
+	encryptedTalosconfigFileExists := fileExists(encryptedTalosconfigFile)
+	keyFile := filepath.Join(Config.RootDir, "talm.key")
+	keyFileExists := fileExists(keyFile)
+	keyWasCreated := false
+
+	// If encrypted file exists, decrypt it
+	if encryptedTalosconfigFileExists && !talosconfigFileExists {
+		if !keyFileExists {
+			if requireKeyForDecrypt {
+				return false, fmt.Errorf("talosconfig.encrypted exists but talm.key is missing. Cannot decrypt without key")
+			}
+			// If key is not required, just return (don't decrypt)
+			return false, nil
+		}
+		fmt.Fprintf(os.Stderr, "Decrypting talosconfig.encrypted -> talosconfig\n")
+		if err := age.DecryptYAMLFile(Config.RootDir, "talosconfig.encrypted", "talosconfig"); err != nil {
+			return false, fmt.Errorf("failed to decrypt talosconfig: %w", err)
+		}
+		talosconfigFileExists = true
+	}
+
+	// If talosconfig exists but encrypted file doesn't, encrypt it
+	if talosconfigFileExists && !encryptedTalosconfigFileExists {
+		// Ensure key exists
+		if !keyFileExists {
+			_, keyCreated, err := age.GenerateKey(Config.RootDir)
+			if err != nil {
+				return false, fmt.Errorf("failed to generate key: %w", err)
+			}
+			keyWasCreated = keyCreated
+			if keyCreated {
+				fmt.Fprintf(os.Stderr, "Generated new encryption key: talm.key\n")
+			}
+			keyFileExists = true
+		}
+
+		// Encrypt talosconfig
+		fmt.Fprintf(os.Stderr, "Encrypting talosconfig -> talosconfig.encrypted\n")
+		if err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted"); err != nil {
+			return false, fmt.Errorf("failed to encrypt talosconfig: %w", err)
+		}
+	}
+
+	return keyWasCreated, nil
 }
 
 func writeToDestination(data []byte, destination string, permissions os.FileMode) error {

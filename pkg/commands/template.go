@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/cozystack/talm/pkg/modeline"
@@ -125,6 +127,38 @@ func template(args []string) func(ctx context.Context, c *client.Client) error {
 
 func templateWithFiles(args []string) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
+		// Detect root from files if specified, otherwise fallback to cwd
+		if len(templateCmdFlags.configFiles) > 0 {
+			detectedRoot, err := ValidateAndDetectRootsForFiles(templateCmdFlags.configFiles)
+			if err != nil {
+				return err
+			}
+			if detectedRoot != "" {
+				absConfigRoot, _ := filepath.Abs(Config.RootDir)
+				absDetectedRoot, _ := filepath.Abs(detectedRoot)
+				// Root from files has priority
+				if absConfigRoot != absDetectedRoot {
+					// If --root was explicitly set and differs from files root, error
+					if Config.RootDirExplicit {
+						return fmt.Errorf("conflicting project roots: global --root=%s, but files belong to root=%s", absConfigRoot, absDetectedRoot)
+					}
+				}
+				// Use root from files (has priority)
+				Config.RootDir = detectedRoot
+			}
+		} else {
+			// Fallback: detect root from current working directory if not explicitly set
+			if !Config.RootDirExplicit {
+				currentDir, err := os.Getwd()
+				if err == nil {
+					detectedRoot, err := DetectProjectRoot(currentDir)
+					if err == nil && detectedRoot != "" {
+						Config.RootDir = detectedRoot
+					}
+				}
+			}
+		}
+
 		firstFileProcessed := false
 		for _, configFile := range templateCmdFlags.configFiles {
 			modelineConfig, err := modeline.ReadAndParseModeline(configFile)
@@ -202,6 +236,64 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 }
 
 func generateOutput(ctx context.Context, c *client.Client, args []string) (string, error) {
+	// Resolve secrets.yaml path relative to project root if not absolute
+	withSecretsPath := templateCmdFlags.withSecrets
+	if withSecretsPath == "" {
+		withSecretsPath = "secrets.yaml"
+	}
+	if !filepath.IsAbs(withSecretsPath) {
+		withSecretsPath = filepath.Join(Config.RootDir, withSecretsPath)
+	}
+
+	// Resolve template file paths relative to project root
+	resolvedTemplateFiles := make([]string, len(templateCmdFlags.templateFiles))
+	absRootDir, rootErr := filepath.Abs(Config.RootDir)
+	if rootErr != nil {
+		// If we can't get absolute root, use original paths
+		resolvedTemplateFiles = templateCmdFlags.templateFiles
+	} else {
+		for i, templatePath := range templateCmdFlags.templateFiles {
+			var absTemplatePath string
+			if filepath.IsAbs(templatePath) {
+				// Already absolute, use as is
+				absTemplatePath = templatePath
+			} else {
+				// Resolve relative path from current working directory
+				var absErr error
+				absTemplatePath, absErr = filepath.Abs(templatePath)
+				if absErr != nil {
+					// If we can't get absolute path, use original
+					resolvedTemplateFiles[i] = templatePath
+					continue
+				}
+			}
+			// Convert to relative path from root
+			relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
+			if relErr != nil {
+				// If we can't get relative path, use original
+				resolvedTemplateFiles[i] = templatePath
+				continue
+			}
+			// Normalize the path (remove .. and .)
+			relPath = filepath.Clean(relPath)
+			// Check if path goes outside root
+			if strings.HasPrefix(relPath, "..") {
+				// Path goes outside root, try to find file in templates/ relative to root
+				templateName := filepath.Base(templatePath)
+				possiblePath := filepath.Join("templates", templateName)
+				fullPath := filepath.Join(absRootDir, possiblePath)
+				if _, statErr := os.Stat(fullPath); statErr == nil {
+					relPath = possiblePath
+				} else {
+					// Can't resolve, use original
+					resolvedTemplateFiles[i] = templatePath
+					continue
+				}
+			}
+			resolvedTemplateFiles[i] = relPath
+		}
+	}
+
 	opts := engine.Options{
 		Insecure:          templateCmdFlags.insecure,
 		ValueFiles:        templateCmdFlags.valueFiles,
@@ -211,13 +303,13 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 		JsonValues:        templateCmdFlags.jsonValues,
 		LiteralValues:     templateCmdFlags.literalValues,
 		TalosVersion:      templateCmdFlags.talosVersion,
-		WithSecrets:       templateCmdFlags.withSecrets,
+		WithSecrets:       withSecretsPath,
 		Full:              templateCmdFlags.full,
 		Debug:             templateCmdFlags.debug,
 		Root:              Config.RootDir,
 		Offline:           templateCmdFlags.offline,
 		KubernetesVersion: templateCmdFlags.kubernetesVersion,
-		TemplateFiles:     templateCmdFlags.templateFiles,
+		TemplateFiles:     resolvedTemplateFiles,
 	}
 
 	result, err := engine.Render(ctx, c, opts)
@@ -225,7 +317,93 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 		return "", fmt.Errorf("failed to render templates: %w", err)
 	}
 
-	modeline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
+	// Convert template paths to relative paths from project root for modeline
+	templatePathsForModeline := make([]string, len(templateCmdFlags.templateFiles))
+	absRootDirModeline, err := filepath.Abs(Config.RootDir)
+	if err != nil {
+		// If we can't get absolute root, use original paths
+		templatePathsForModeline = templateCmdFlags.templateFiles
+	} else {
+		for i, templatePath := range templateCmdFlags.templateFiles {
+			var absTemplatePath string
+			if filepath.IsAbs(templatePath) {
+				// Already absolute, use as is
+				absTemplatePath = templatePath
+			} else {
+				// Resolve relative path from current working directory
+				absTemplatePath, err = filepath.Abs(templatePath)
+				if err != nil {
+					// If we can't get absolute path, use original
+					templatePathsForModeline[i] = templatePath
+					continue
+				}
+			}
+			// Check if the resolved path is inside root project
+			relPath, err := filepath.Rel(absRootDir, absTemplatePath)
+			if err != nil {
+				// If we can't get relative path, use original
+				templatePathsForModeline[i] = templatePath
+				continue
+			}
+			// Normalize the path (remove .. and .)
+			relPath = filepath.Clean(relPath)
+			// Check if path goes outside root
+			if strings.HasPrefix(relPath, "..") {
+				// Path goes outside root, try to find file in templates/ relative to root
+				// This handles cases like "../templates/controlplane.yaml" when file is actually in root/templates/
+				templateName := filepath.Base(templatePath)
+				// Try common template locations
+				possiblePaths := []string{
+					filepath.Join("templates", templateName),
+					templateName,
+				}
+				found := false
+				for _, possiblePath := range possiblePaths {
+					fullPath := filepath.Join(absRootDirModeline, possiblePath)
+					if _, err := os.Stat(fullPath); err == nil {
+						relPath = possiblePath
+						found = true
+						break
+					}
+				}
+				if !found {
+					// Can't resolve, use original
+					templatePathsForModeline[i] = templatePath
+					continue
+				}
+			} else {
+				// Path is inside root, but check if file actually exists
+				// If not, try to find it in templates/ relative to root
+				if _, errModeline := os.Stat(absTemplatePath); errModeline != nil {
+					templateName := filepath.Base(templatePath)
+					possiblePath := filepath.Join("templates", templateName)
+					fullPath := filepath.Join(absRootDirModeline, possiblePath)
+					if _, errModeline := os.Stat(fullPath); errModeline == nil {
+						relPath = possiblePath
+					}
+				} else {
+					// File exists, but check if there's a shorter/canonical path
+					// For example, if we have "nodes/templates/controlplane.yaml" but file is actually in "templates/controlplane.yaml"
+					templateName := filepath.Base(templatePath)
+					canonicalPath := filepath.Join("templates", templateName)
+					canonicalFullPath := filepath.Join(absRootDirModeline, canonicalPath)
+					// Check if canonical path exists and points to the same file
+					if canonicalInfo, errModeline := os.Stat(canonicalFullPath); errModeline == nil {
+						if originalInfo, errModeline := os.Stat(absTemplatePath); errModeline == nil {
+							// Check if they point to the same file (same inode on Unix)
+							if os.SameFile(originalInfo, canonicalInfo) {
+								// Use canonical path (shorter, cleaner)
+								relPath = canonicalPath
+							}
+						}
+					}
+				}
+			}
+			templatePathsForModeline[i] = relPath
+		}
+	}
+
+	modeline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templatePathsForModeline)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate modeline: %w", err)
 	}

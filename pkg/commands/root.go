@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cozystack/talm/pkg/modeline"
@@ -35,6 +37,7 @@ var GlobalArgs global.Args
 
 var Config struct {
 	RootDir       string
+	RootDirExplicit bool // true if --root was explicitly set
 	GlobalOptions struct {
 		Talosconfig string `yaml:"talosconfig"`
 		Kubeconfig  string `yaml:"kubeconfig"`
@@ -110,6 +113,94 @@ var Commands []*cobra.Command
 
 func addCommand(cmd *cobra.Command) {
 	Commands = append(Commands, cmd)
+}
+
+// DetectProjectRoot automatically detects the project root directory by looking
+// for Chart.yaml and secrets.yaml files in the current directory and parent directories.
+// Returns the absolute path to the project root, or empty string if not found.
+func DetectProjectRoot(startDir string) (string, error) {
+	absStartDir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	currentDir := absStartDir
+	for {
+		chartYaml := filepath.Join(currentDir, "Chart.yaml")
+		secretsYaml := filepath.Join(currentDir, "secrets.yaml")
+
+		chartExists := false
+		secretsExists := false
+
+		if _, err := os.Stat(chartYaml); err == nil {
+			chartExists = true
+		}
+		if _, err := os.Stat(secretsYaml); err == nil {
+			secretsExists = true
+		}
+
+		if chartExists && secretsExists {
+			return currentDir, nil
+		}
+
+		parentDir := filepath.Dir(currentDir)
+		if parentDir == currentDir {
+			// Reached filesystem root
+			break
+		}
+		currentDir = parentDir
+	}
+
+	return "", nil
+}
+
+// DetectProjectRootForFile detects the project root for a given file path.
+// It finds the directory containing the file, then searches up for Chart.yaml and secrets.yaml.
+func DetectProjectRootForFile(filePath string) (string, error) {
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Get directory containing the file
+	fileDir := filepath.Dir(absFilePath)
+	return DetectProjectRoot(fileDir)
+}
+
+// ValidateAndDetectRootsForFiles validates that all files belong to the same project root.
+// Returns the common root directory and an error if files belong to different roots.
+func ValidateAndDetectRootsForFiles(filePaths []string) (string, error) {
+	if len(filePaths) == 0 {
+		return "", nil
+	}
+
+	var commonRoot string
+	roots := make(map[string]bool)
+
+	for _, filePath := range filePaths {
+		fileRoot, err := DetectProjectRootForFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to detect root for file %s: %w", filePath, err)
+		}
+		if fileRoot == "" {
+			return "", fmt.Errorf("failed to detect project root for file %s (Chart.yaml and secrets.yaml not found)", filePath)
+		}
+
+		roots[fileRoot] = true
+		if commonRoot == "" {
+			commonRoot = fileRoot
+		} else if commonRoot != fileRoot {
+			return "", fmt.Errorf("files belong to different project roots: %s and %s", commonRoot, fileRoot)
+		}
+	}
+
+	return commonRoot, nil
+}
+
+// DetectRootForTemplate detects the project root for a template file path.
+// Similar to ValidateAndDetectRootsForFiles but for a single template file.
+func DetectRootForTemplate(templatePath string) (string, error) {
+	return DetectProjectRootForFile(templatePath)
 }
 
 func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, owerwrite bool) error {
