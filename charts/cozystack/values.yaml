@@ -1,4 +1,5 @@
 endpoint: "https://192.168.100.10:6443"
+preferLocalEndpoint: false
 clusterDomain: cozy.local
 floatingIP: 192.168.100.10
 image: "ghcr.io/cozystack/cozystack/talos:v1.11.3"

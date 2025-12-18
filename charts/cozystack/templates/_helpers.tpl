@@ -97,7 +97,11 @@ cluster:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
   clusterName: "{{ .Chart.Name }}"
   controlPlane:
+    {{- if and (eq .MachineType "controlplane") .Values.preferLocalEndpoint }}
+    endpoint: "https://127.0.0.1:6443"
+    {{- else }}
     endpoint: "{{ .Values.endpoint }}"
+    {{- end }}
   {{- if eq .MachineType "controlplane" }}
   allowSchedulingOnControlPlanes: true
   controllerManager:
