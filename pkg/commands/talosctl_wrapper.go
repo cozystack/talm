@@ -114,12 +114,18 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 			}
 		}
 
-		// Detect root from files if specified, otherwise fallback to cwd
-		if err := DetectAndSetRootFromFiles(filesToProcess); err != nil {
+		// Expand directories to YAML files
+		expandedFiles, err := ExpandFilePaths(filesToProcess)
+		if err != nil {
 			return err
 		}
 
-		for _, configFile := range filesToProcess {
+		// Detect root from files if specified, otherwise fallback to cwd
+		if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
+			return err
+		}
+
+		for _, configFile := range expandedFiles {
 			if err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, false); err != nil {
 				return err
 			}

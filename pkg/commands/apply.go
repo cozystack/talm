@@ -93,12 +93,18 @@ var applyCmd = &cobra.Command{
 
 func apply(args []string) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
-		// Detect root from files if specified, otherwise fallback to cwd
-		if err := DetectAndSetRootFromFiles(applyCmdFlags.configFiles); err != nil {
+		// Expand directories to YAML files
+		expandedFiles, err := ExpandFilePaths(applyCmdFlags.configFiles)
+		if err != nil {
 			return err
 		}
 
-		for _, configFile := range applyCmdFlags.configFiles {
+		// Detect root from files if specified, otherwise fallback to cwd
+		if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
+			return err
+		}
+
+		for _, configFile := range expandedFiles {
 			if err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true); err != nil {
 				return err
 			}

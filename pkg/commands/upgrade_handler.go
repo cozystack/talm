@@ -35,6 +35,13 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 		}
 
+		// Expand directories to YAML files
+		expandedFiles, err := ExpandFilePaths(filesToProcess)
+		if err != nil {
+			return err
+		}
+		filesToProcess = expandedFiles
+
 		// Detect root from files if specified, otherwise fallback to cwd
 		if err := DetectAndSetRootFromFiles(filesToProcess); err != nil {
 			return err

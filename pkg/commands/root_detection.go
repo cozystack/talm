@@ -258,3 +258,60 @@ func EnsureTalosconfigPath(cmd *cobra.Command) {
 	}
 }
 
+// ExpandFilePaths expands file paths: if a path is a directory, finds all YAML files in it.
+// Returns a list of file paths, with directories expanded to their YAML files.
+func ExpandFilePaths(paths []string) ([]string, error) {
+	var expanded []string
+	for _, path := range paths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get absolute path for %s: %w", path, err)
+		}
+
+		info, err := os.Stat(absPath)
+		if err != nil {
+			// If path doesn't exist, treat it as a file (let the caller handle the error)
+			expanded = append(expanded, absPath)
+			continue
+		}
+
+		if info.IsDir() {
+			// Find all YAML files in the directory
+			yamlFiles, err := findYAMLFiles(absPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find YAML files in %s: %w", path, err)
+			}
+			if len(yamlFiles) == 0 {
+				return nil, fmt.Errorf("no YAML files found in directory %s", path)
+			}
+			expanded = append(expanded, yamlFiles...)
+		} else {
+			// It's a file, add it as is
+			expanded = append(expanded, absPath)
+		}
+	}
+	return expanded, nil
+}
+
+// findYAMLFiles recursively finds all YAML files in a directory.
+func findYAMLFiles(dir string) ([]string, error) {
+	var yamlFiles []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			ext := filepath.Ext(path)
+			if ext == ".yaml" || ext == ".yml" {
+				absPath, err := filepath.Abs(path)
+				if err != nil {
+					return err
+				}
+				yamlFiles = append(yamlFiles, absPath)
+			}
+		}
+		return nil
+	})
+	return yamlFiles, err
+}
+

@@ -127,13 +127,19 @@ func template(args []string) func(ctx context.Context, c *client.Client) error {
 
 func templateWithFiles(args []string) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
+		// Expand directories to YAML files
+		expandedFiles, err := ExpandFilePaths(templateCmdFlags.configFiles)
+		if err != nil {
+			return err
+		}
+
 		// Detect root from files if specified, otherwise fallback to cwd
-		if err := DetectAndSetRootFromFiles(templateCmdFlags.configFiles); err != nil {
+		if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
 			return err
 		}
 
 		firstFileProcessed := false
-		for _, configFile := range templateCmdFlags.configFiles {
+		for _, configFile := range expandedFiles {
 			modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 			if err != nil {
 				return fmt.Errorf("modeline parsing failed: %v\n", err)
