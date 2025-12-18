@@ -6,13 +6,16 @@ package commands
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/cozystack/talm/pkg/age"
 	taloscommands "github.com/siderolabs/talos/cmd/talosctl/cmd/talos"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // wrapTalosCommand wraps a talosctl command to add --file flag support
@@ -74,6 +77,25 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	// Wrap PreRunE to process modeline files and sync GlobalArgs
 	originalPreRunE := cmd.PreRunE
 	wrappedCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		// Special handling for kubeconfig command: set default values for --merge and --force
+		baseCmdName := cmdName
+		if idx := strings.Index(cmdName, " "); idx > 0 {
+			baseCmdName = cmdName[:idx]
+		}
+		if baseCmdName == "kubeconfig" {
+			// Set default values for --merge and --force if not explicitly set
+			if !cmd.Flags().Changed("merge") {
+				if err := cmd.Flags().Set("merge", "false"); err != nil {
+					// Flag might not exist, ignore error
+				}
+			}
+			if !cmd.Flags().Changed("force") {
+				if err := cmd.Flags().Set("force", "true"); err != nil {
+					// Flag might not exist, ignore error
+				}
+			}
+		}
+
 		nodesFromArgs := len(GlobalArgs.Nodes) > 0
 		endpointsFromArgs := len(GlobalArgs.Endpoints) > 0
 
@@ -161,6 +183,33 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 						}
 					}
 				}
+
+				// Update kubeconfig server endpoint if endpoint is available
+				if len(GlobalArgs.Endpoints) > 0 {
+					endpoint := GlobalArgs.Endpoints[0]
+					if err := updateKubeconfigServer(absPath, endpoint); err != nil {
+						// Don't fail the command if update fails, but log warning
+						fmt.Fprintf(os.Stderr, "Warning: failed to update kubeconfig server endpoint: %v\n", err)
+					}
+				}
+
+				// Automatically update kubeconfig.encrypted if it exists and talm.key exists
+				encryptedKubeconfigPath := kubeconfigPath + ".encrypted"
+				encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
+				keyFile := filepath.Join(Config.RootDir, "talm.key")
+
+				encryptedExists := fileExists(encryptedKubeconfigFile)
+				keyExists := fileExists(keyFile)
+
+				if encryptedExists && keyExists {
+					// Both files exist, encrypt kubeconfig
+					if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, encryptedKubeconfigPath); err != nil {
+						// Don't fail the command if encryption fails, but log warning
+						fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
+					} else {
+						fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
+					}
+				}
 			}
 
 			return nil
@@ -214,6 +263,59 @@ func init() {
 		// Keep the original command name from talosctl
 		addCommand(wrappedCmd)
 	}
+}
+
+// normalizeEndpoint normalizes an endpoint by removing any existing port and protocol, then adding https:// and :6443
+// Examples:
+//   - "1.2.3.4" -> "https://1.2.3.4:6443"
+//   - "1.2.3.4:50000" -> "https://1.2.3.4:6443"
+//   - "https://1.2.3.4:50000" -> "https://1.2.3.4:6443"
+//   - "http://1.2.3.4" -> "https://1.2.3.4:6443"
+func normalizeEndpoint(endpoint string) string {
+	// Remove protocol if present
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+
+	// Split host and port
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		// No port in endpoint, use as-is
+		host = endpoint
+	}
+
+	// Return normalized endpoint with https:// and :6443 port
+	return fmt.Sprintf("https://%s:6443", host)
+}
+
+// updateKubeconfigServer updates the server field in all clusters of the kubeconfig file
+func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
+	// Load kubeconfig
+	config, err := clientcmd.LoadFromFile(kubeconfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	// Normalize endpoint
+	normalizedEndpoint := normalizeEndpoint(endpoint)
+
+	// Update server for all clusters
+	updated := false
+	for clusterName, cluster := range config.Clusters {
+		if cluster.Server != normalizedEndpoint {
+			cluster.Server = normalizedEndpoint
+			updated = true
+			fmt.Fprintf(os.Stderr, "Updated cluster %s server to %s\n", clusterName, normalizedEndpoint)
+		}
+	}
+
+	// Save kubeconfig if updated
+	if updated {
+		if err := clientcmd.WriteToFile(*config, kubeconfigPath); err != nil {
+			return fmt.Errorf("failed to write kubeconfig: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // addToGitignore adds an entry to .gitignore if it doesn't already exist
