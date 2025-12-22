@@ -36,6 +36,7 @@ import (
 var initCmdFlags struct {
 	force        bool
 	preset       string
+	name         string
 	talosVersion string
 	update       bool
 	encrypt      bool
@@ -77,6 +78,9 @@ var initCmd = &cobra.Command{
 		}
 		if initCmdFlags.preset == "" {
 			return fmt.Errorf("preset is required (use --preset or -p flag)")
+		}
+		if initCmdFlags.name == "" {
+			return fmt.Errorf("cluster name is required (use --name flag)")
 		}
 		return nil
 	},
@@ -309,12 +313,7 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// Clalculate cluster name from directory
-		absolutePath, err := filepath.Abs(Config.RootDir)
-		if err != nil {
-			return err
-		}
-		clusterName := filepath.Base(absolutePath)
+		clusterName := initCmdFlags.name
 
 		// Handle talosconfig encryption logic
 		talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
@@ -679,6 +678,7 @@ func updateTalmLibraryChart() error {
 func init() {
 	initCmd.Flags().StringVar(&initCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "specify preset to generate files (not required with --encrypt or --decrypt)")
+	initCmd.Flags().StringVar(&initCmdFlags.name, "name", "", "cluster name (required for initialization)")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
