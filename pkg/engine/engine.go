@@ -334,7 +334,42 @@ func mergeMaps(a, b map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+// isTalosConfigPatch checks if a YAML document is a Talos machine config patch
+// (contains machine: or cluster: keys) as opposed to other document types
+// like UserVolumeConfig, SideroLinkConfig, etc.
+func isTalosConfigPatch(doc string) bool {
+	return strings.Contains(doc, "machine:") || strings.Contains(doc, "cluster:")
+}
+
+// extractExtraDocuments separates Talos config patches from other YAML documents.
+// Returns the Talos patches to be processed and extra documents to be appended to output.
+func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string) {
+	for _, patch := range patches {
+		// Split by document separator
+		docs := strings.Split(patch, "\n---")
+		for i, doc := range docs {
+			// For the first document, don't add separator prefix
+			if i > 0 {
+				doc = strings.TrimPrefix(doc, "\n")
+			}
+			doc = strings.TrimSpace(doc)
+			if doc == "" {
+				continue
+			}
+			if isTalosConfigPatch(doc) {
+				talosPatches = append(talosPatches, doc)
+			} else {
+				extraDocs = append(extraDocs, doc)
+			}
+		}
+	}
+	return talosPatches, extraDocs
+}
+
 func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatches []string, chrt *chart.Chart) ([]byte, error) {
+	// Separate Talos config patches from extra documents (like UserVolumeConfig)
+	talosPatches, extraDocs := extractExtraDocuments(configPatches)
+
 	// Generate options for the configuration based on the provided flags
 	genOptions := []generate.Option{}
 
@@ -370,7 +405,7 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 		return nil, err
 	}
 
-	patches, err := configpatcher.LoadPatches(configPatches)
+	patches, err := configpatcher.LoadPatches(talosPatches)
 	if err != nil {
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
@@ -469,7 +504,7 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 	}
 
 	// Copy comments from source configuration to the final output
-	for _, configPatch := range configPatches {
+	for _, configPatch := range talosPatches {
 		var sourceNode yaml.Node
 		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
 			return nil, err
@@ -487,7 +522,13 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 	}
 	encoder.Close()
 
-	return buf.Bytes(), nil
+	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
+	result := buf.Bytes()
+	for _, extraDoc := range extraDocs {
+		result = append(result, []byte("---\n"+extraDoc+"\n")...)
+	}
+
+	return result, nil
 }
 
 func readUnexportedField(field reflect.Value) any {
