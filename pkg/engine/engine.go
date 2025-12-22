@@ -338,13 +338,21 @@ func mergeMaps(a, b map[string]interface{}) map[string]interface{} {
 // (contains machine: or cluster: keys) as opposed to other document types
 // like UserVolumeConfig, SideroLinkConfig, etc.
 func isTalosConfigPatch(doc string) bool {
-	return strings.Contains(doc, "machine:") || strings.Contains(doc, "cluster:")
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
+		return false
+	}
+	_, hasMachine := parsed["machine"]
+	_, hasCluster := parsed["cluster"]
+	return hasMachine || hasCluster
 }
 
 // extractExtraDocuments separates Talos config patches from other YAML documents.
 // Returns the Talos patches to be processed and extra documents to be appended to output.
 func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string) {
 	for _, patch := range patches {
+		// Normalize CRLF to LF for consistent splitting
+		patch = strings.ReplaceAll(patch, "\r\n", "\n")
 		// Split by document separator
 		docs := strings.Split(patch, "\n---")
 		for i, doc := range docs {
