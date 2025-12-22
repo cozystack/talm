@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -347,19 +348,19 @@ func isTalosConfigPatch(doc string) bool {
 	return hasMachine || hasCluster
 }
 
+// yamlDocSeparator matches YAML document separator at the start of a line.
+// Handles variations like "---", "--- ", "---\n" regardless of preceding content.
+var yamlDocSeparator = regexp.MustCompile(`(?m)^---[ \t]*$`)
+
 // extractExtraDocuments separates Talos config patches from other YAML documents.
 // Returns the Talos patches to be processed and extra documents to be appended to output.
 func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string) {
 	for _, patch := range patches {
 		// Normalize CRLF to LF for consistent splitting
 		patch = strings.ReplaceAll(patch, "\r\n", "\n")
-		// Split by document separator
-		docs := strings.Split(patch, "\n---")
-		for i, doc := range docs {
-			// For the first document, don't add separator prefix
-			if i > 0 {
-				doc = strings.TrimPrefix(doc, "\n")
-			}
+		// Split by YAML document separator (--- at start of line)
+		docs := yamlDocSeparator.Split(patch, -1)
+		for _, doc := range docs {
 			doc = strings.TrimSpace(doc)
 			if doc == "" {
 				continue
@@ -531,12 +532,13 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 	encoder.Close()
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
-	result := buf.Bytes()
 	for _, extraDoc := range extraDocs {
-		result = append(result, []byte("---\n"+extraDoc+"\n")...)
+		buf.WriteString("---\n")
+		buf.WriteString(extraDoc)
+		buf.WriteString("\n")
 	}
 
-	return result, nil
+	return buf.Bytes(), nil
 }
 
 func readUnexportedField(field reflect.Value) any {
