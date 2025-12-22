@@ -58,9 +58,10 @@ type Options struct {
 	Endpoint          string
 }
 
-// normalizeTemplatePath converts OS-specific path separators to forward slash
-// for consistency with helm engine and embed.FS which always use forward slash.
-func normalizeTemplatePath(p string) string {
+// NormalizeTemplatePath converts OS-specific path separators to forward slash.
+// Helm engine's Render() returns map keys with forward slashes regardless of OS,
+// so input paths must be normalized to match.
+func NormalizeTemplatePath(p string) string {
 	return filepath.ToSlash(p)
 }
 
@@ -241,7 +242,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	configPatches := []string{}
 	for _, templateFile := range opts.TemplateFiles {
-		requestedTemplate := path.Join(chrt.Name(), normalizeTemplatePath(templateFile))
+		// Use path.Join (not filepath.Join) because helm engine keys always use forward slashes
+		requestedTemplate := path.Join(chrt.Name(), NormalizeTemplatePath(templateFile))
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
 			return nil, fmt.Errorf("template %s not found", templateFile)

@@ -27,12 +27,13 @@ func TestNormalizeTemplatePathWindows(t *testing.T) {
 		{"backslash", "templates\\file.yaml", "templates/file.yaml"},
 		{"nested backslash", "templates\\nested\\file.yaml", "templates/nested/file.yaml"},
 		{"mixed slashes", "templates\\nested/file.yaml", "templates/nested/file.yaml"},
+		{"trailing backslash", "templates\\", "templates/"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizeTemplatePath(tt.input); got != tt.want {
-				t.Errorf("normalizeTemplatePath(%q) = %q, want %q", tt.input, got, tt.want)
+			if got := NormalizeTemplatePath(tt.input); got != tt.want {
+				t.Errorf("NormalizeTemplatePath(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

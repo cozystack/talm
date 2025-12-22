@@ -16,7 +16,6 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -142,7 +141,7 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 		for _, configFile := range expandedFiles {
 			modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 			if err != nil {
-				return fmt.Errorf("modeline parsing failed: %v\n", err)
+				return fmt.Errorf("modeline parsing failed: %w", err)
 			}
 			if !templateCmdFlags.templatesFromArgs {
 				if len(modelineConfig.Templates) == 0 {
@@ -174,7 +173,9 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 					}
 
 					if templateCmdFlags.inplace {
-						err = os.WriteFile(configFile, []byte(output), 0o644)
+						if err = os.WriteFile(configFile, []byte(output), 0o644); err != nil {
+							return fmt.Errorf("failed to write file %s: %w", configFile, err)
+						}
 						fmt.Fprintf(os.Stderr, "Updated.\n")
 					} else {
 						if firstFileProcessed {
@@ -244,7 +245,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 			relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 			if relErr != nil {
 				// If we can't get relative path, use original (normalized for helm engine)
-				resolvedTemplateFiles[i] = filepath.ToSlash(templatePath)
+				resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
 				continue
 			}
 			// Normalize the path (remove .. and .)
@@ -259,12 +260,12 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 					relPath = possiblePath
 				} else {
 					// Can't resolve, use original (normalized for helm engine)
-					resolvedTemplateFiles[i] = filepath.ToSlash(templatePath)
+					resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
 					continue
 				}
 			}
 			// Normalize path separators for helm engine (always uses forward slash)
-			resolvedTemplateFiles[i] = filepath.ToSlash(relPath)
+			resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(relPath)
 		}
 	}
 
@@ -308,7 +309,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				absTemplatePath, err = filepath.Abs(templatePath)
 				if err != nil {
 					// If we can't get absolute path, use original (normalized)
-					templatePathsForModeline[i] = filepath.ToSlash(templatePath)
+					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
 					continue
 				}
 			}
@@ -316,7 +317,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 			relPath, err := filepath.Rel(absRootDir, absTemplatePath)
 			if err != nil {
 				// If we can't get relative path, use original (normalized)
-				templatePathsForModeline[i] = filepath.ToSlash(templatePath)
+				templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
 				continue
 			}
 			// Normalize the path (remove .. and .)
@@ -342,7 +343,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				}
 				if !found {
 					// Can't resolve, use original (normalized)
-					templatePathsForModeline[i] = filepath.ToSlash(templatePath)
+					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
 					continue
 				}
 			} else {
@@ -374,7 +375,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				}
 			}
 			// Normalize path separators for cross-platform compatibility
-			templatePathsForModeline[i] = filepath.ToSlash(relPath)
+			templatePathsForModeline[i] = engine.NormalizeTemplatePath(relPath)
 		}
 	}
 
@@ -407,29 +408,4 @@ func init() {
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
 	addCommand(templateCmd)
-}
-
-// generateModeline creates a modeline string using JSON formatting for values
-func generateModeline(templates []string) (string, error) {
-	// Convert Nodes to JSON
-	nodesJSON, err := json.Marshal(GlobalArgs.Nodes)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal nodes: %v", err)
-	}
-
-	// Convert Endpoints to JSON
-	endpointsJSON, err := json.Marshal(GlobalArgs.Endpoints)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal endpoints: %v", err)
-	}
-
-	// Convert Templates to JSON
-	templatesJSON, err := json.Marshal(templates)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal templates: %v", err)
-	}
-
-	// Form the final modeline string
-	modeline := fmt.Sprintf(`# talm: nodes=%s, endpoints=%s, templates=%s`, string(nodesJSON), string(endpointsJSON), string(templatesJSON))
-	return modeline, nil
 }
