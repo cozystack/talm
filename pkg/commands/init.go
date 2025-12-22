@@ -72,8 +72,8 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// Preset is not required when using --encrypt or --decrypt flags
-		if initCmdFlags.encrypt || initCmdFlags.decrypt {
+		// Preset and name are not required when using --encrypt, --decrypt, or --update flags
+		if initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update {
 			return nil
 		}
 		if initCmdFlags.preset == "" {
