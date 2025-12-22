@@ -33,6 +33,16 @@ with the official tools like talosctl and Omni.
 
 ## Installation
 
+### Homebrew
+For macOS and Linux users, the recommended way to install talm is with Homebrew.
+
+
+```bash
+brew install talm
+```
+
+### Binary
+
 Download binary from Github [releases page](https://github.com/cozystack/talm/releases/latest)
 
 Or use simple script to install it:
