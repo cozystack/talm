@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -55,6 +56,12 @@ type Options struct {
 	TemplateFiles     []string
 	ClusterName       string
 	Endpoint          string
+}
+
+// normalizeTemplatePath converts OS-specific path separators to forward slash
+// for consistency with helm engine and embed.FS which always use forward slash.
+func normalizeTemplatePath(p string) string {
+	return filepath.ToSlash(p)
 }
 
 // debugPhase is a unified debug function that prints debug information based on the given stage and context,
@@ -234,7 +241,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	configPatches := []string{}
 	for _, templateFile := range opts.TemplateFiles {
-		requestedTemplate := filepath.Join(chrt.Name(), templateFile)
+		requestedTemplate := path.Join(chrt.Name(), normalizeTemplatePath(templateFile))
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
 			return nil, fmt.Errorf("template %s not found", templateFile)

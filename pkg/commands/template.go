@@ -243,8 +243,8 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 			// Convert to relative path from root
 			relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 			if relErr != nil {
-				// If we can't get relative path, use original
-				resolvedTemplateFiles[i] = templatePath
+				// If we can't get relative path, use original (normalized for helm engine)
+				resolvedTemplateFiles[i] = filepath.ToSlash(templatePath)
 				continue
 			}
 			// Normalize the path (remove .. and .)
@@ -258,12 +258,13 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				if _, statErr := os.Stat(fullPath); statErr == nil {
 					relPath = possiblePath
 				} else {
-					// Can't resolve, use original
-					resolvedTemplateFiles[i] = templatePath
+					// Can't resolve, use original (normalized for helm engine)
+					resolvedTemplateFiles[i] = filepath.ToSlash(templatePath)
 					continue
 				}
 			}
-			resolvedTemplateFiles[i] = relPath
+			// Normalize path separators for helm engine (always uses forward slash)
+			resolvedTemplateFiles[i] = filepath.ToSlash(relPath)
 		}
 	}
 
@@ -306,16 +307,16 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				// Resolve relative path from current working directory
 				absTemplatePath, err = filepath.Abs(templatePath)
 				if err != nil {
-					// If we can't get absolute path, use original
-					templatePathsForModeline[i] = templatePath
+					// If we can't get absolute path, use original (normalized)
+					templatePathsForModeline[i] = filepath.ToSlash(templatePath)
 					continue
 				}
 			}
 			// Check if the resolved path is inside root project
 			relPath, err := filepath.Rel(absRootDir, absTemplatePath)
 			if err != nil {
-				// If we can't get relative path, use original
-				templatePathsForModeline[i] = templatePath
+				// If we can't get relative path, use original (normalized)
+				templatePathsForModeline[i] = filepath.ToSlash(templatePath)
 				continue
 			}
 			// Normalize the path (remove .. and .)
@@ -340,8 +341,8 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 					}
 				}
 				if !found {
-					// Can't resolve, use original
-					templatePathsForModeline[i] = templatePath
+					// Can't resolve, use original (normalized)
+					templatePathsForModeline[i] = filepath.ToSlash(templatePath)
 					continue
 				}
 			} else {
@@ -372,7 +373,8 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 					}
 				}
 			}
-			templatePathsForModeline[i] = relPath
+			// Normalize path separators for cross-platform compatibility
+			templatePathsForModeline[i] = filepath.ToSlash(relPath)
 		}
 	}
 
