@@ -223,8 +223,10 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 	resolvedTemplateFiles := make([]string, len(templateCmdFlags.templateFiles))
 	absRootDir, rootErr := filepath.Abs(Config.RootDir)
 	if rootErr != nil {
-		// If we can't get absolute root, use original paths
-		resolvedTemplateFiles = templateCmdFlags.templateFiles
+		// If we can't get absolute root, normalize original paths for helm engine
+		for i, p := range templateCmdFlags.templateFiles {
+			resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(p)
+		}
 	} else {
 		for i, templatePath := range templateCmdFlags.templateFiles {
 			var absTemplatePath string
@@ -236,8 +238,8 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				var absErr error
 				absTemplatePath, absErr = filepath.Abs(templatePath)
 				if absErr != nil {
-					// If we can't get absolute path, use original
-					resolvedTemplateFiles[i] = templatePath
+					// If we can't get absolute path, normalize original for helm engine
+					resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
 					continue
 				}
 			}
