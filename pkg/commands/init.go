@@ -80,7 +80,7 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("preset is required (use --preset or -p flag)")
 		}
 		if initCmdFlags.name == "" {
-			return fmt.Errorf("cluster name is required (use --name flag)")
+			return fmt.Errorf("cluster name is required (use --name or -N flag)")
 		}
 		return nil
 	},
@@ -273,11 +273,6 @@ var initCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "No files to decrypt.\n")
 			}
 			return nil
-		}
-
-		// Preset is required for normal init (not --encrypt or --decrypt)
-		if initCmdFlags.preset == "" {
-			return fmt.Errorf("preset is required (use --preset or -p flag)")
 		}
 
 		// If encrypted file exists, decrypt it
@@ -677,8 +672,8 @@ func updateTalmLibraryChart() error {
 
 func init() {
 	initCmd.Flags().StringVar(&initCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
-	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "specify preset to generate files (not required with --encrypt, --decrypt, or --update)")
-	initCmd.Flags().StringVar(&initCmdFlags.name, "name", "", "cluster name (required unless using --encrypt, --decrypt, or --update)")
+	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "preset for file generation (not required with --encrypt, --decrypt, or --update)")
+	initCmd.Flags().StringVarP(&initCmdFlags.name, "name", "N", "", "cluster name (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
