@@ -677,8 +677,8 @@ func updateTalmLibraryChart() error {
 
 func init() {
 	initCmd.Flags().StringVar(&initCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
-	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "specify preset to generate files (not required with --encrypt or --decrypt)")
-	initCmd.Flags().StringVar(&initCmdFlags.name, "name", "", "cluster name (required for initialization)")
+	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "specify preset to generate files (not required with --encrypt, --decrypt, or --update)")
+	initCmd.Flags().StringVar(&initCmdFlags.name, "name", "", "cluster name (required unless using --encrypt, --decrypt, or --update)")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
