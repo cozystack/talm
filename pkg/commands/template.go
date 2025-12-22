@@ -298,8 +298,10 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 	templatePathsForModeline := make([]string, len(templateCmdFlags.templateFiles))
 	absRootDirModeline, err := filepath.Abs(Config.RootDir)
 	if err != nil {
-		// If we can't get absolute root, use original paths
-		templatePathsForModeline = templateCmdFlags.templateFiles
+		// If we can't get absolute root, normalize original paths for modeline
+		for i, p := range templateCmdFlags.templateFiles {
+			templatePathsForModeline[i] = engine.NormalizeTemplatePath(p)
+		}
 	} else {
 		for i, templatePath := range templateCmdFlags.templateFiles {
 			var absTemplatePath string
@@ -316,7 +318,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				}
 			}
 			// Check if the resolved path is inside root project
-			relPath, err := filepath.Rel(absRootDir, absTemplatePath)
+			relPath, err := filepath.Rel(absRootDirModeline, absTemplatePath)
 			if err != nil {
 				// If we can't get relative path, use original (normalized)
 				templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
