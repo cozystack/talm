@@ -216,8 +216,8 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 }
 
 func generateOutput(ctx context.Context, c *client.Client, args []string) (string, error) {
-			// Resolve secrets.yaml path relative to project root if not absolute
-			withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
+	// Resolve secrets.yaml path relative to project root if not absolute
+	withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
 
 	// Resolve template file paths relative to project root
 	resolvedTemplateFiles := make([]string, len(templateCmdFlags.templateFiles))
