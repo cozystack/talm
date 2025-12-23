@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -55,6 +56,13 @@ type Options struct {
 	TemplateFiles     []string
 	ClusterName       string
 	Endpoint          string
+}
+
+// NormalizeTemplatePath converts OS-specific path separators to forward slash.
+// Helm engine's Render() returns map keys with forward slashes regardless of OS,
+// so input paths must be normalized to match.
+func NormalizeTemplatePath(p string) string {
+	return filepath.ToSlash(p)
 }
 
 // debugPhase is a unified debug function that prints debug information based on the given stage and context,
@@ -234,7 +242,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	configPatches := []string{}
 	for _, templateFile := range opts.TemplateFiles {
-		requestedTemplate := filepath.Join(chrt.Name(), templateFile)
+		// Use path.Join (not filepath.Join) because helm engine keys always use forward slashes
+		requestedTemplate := path.Join(chrt.Name(), NormalizeTemplatePath(templateFile))
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
 			return nil, fmt.Errorf("template %s not found", templateFile)
