@@ -27,8 +27,9 @@ type WizardImpl struct {
 func NewWizard() *WizardImpl {
 	// Инициализируем данные
 	data := &InitData{
-		Preset:      "generic",
-		ClusterName: "mycluster",
+		Preset:        "generic",
+		ClusterName:   "mycluster",
+		NetworkToScan: "192.168.1.0/24", // Значение по умолчанию для сканирования сети
 	}
 
 	// Создаем приложение
@@ -79,9 +80,26 @@ func (w *WizardImpl) Run() error {
 	// Создаем первую страницу в зависимости от состояния
 	if filesExist {
 		// Если файлы уже существуют, показываем мастер для добавления новой ноды
+		log.Printf("Диагностика: вызываем ShowAddNodeWizard, filesExist=%v", filesExist)
 		w.presenter.ShowAddNodeWizard(w.data)
 	} else {
 		// Иначе показываем полный мастер
+		log.Printf("Диагностика: вызываем ShowStep1Form, filesExist=%v", filesExist)
+		log.Printf("Диагностика: w.presenter=%v, w.data=%v", w.presenter, w.data)
+		
+		// Проверяем состояние presenter'а
+		if w.presenter == nil {
+			log.Printf("КРИТИЧЕСКАЯ ОШИБКА: w.presenter равен nil!")
+			return fmt.Errorf("presenter не инициализирован")
+		}
+		
+		// Проверяем состояние данных
+		if w.data == nil {
+			log.Printf("КРИТИЧЕСКАЯ ОШИБКА: w.data равен nil!")
+			return fmt.Errorf("данные инициализации не инициализированы")
+		}
+		
+		log.Printf("Диагностика: presenter и data в порядке, вызываем ShowStep1Form")
 		// ShowStep1Form уже создает и добавляет страницу самостоятельно
 		w.presenter.ShowStep1Form(w.data)
 	}
@@ -90,9 +108,12 @@ func (w *WizardImpl) Run() error {
 	w.setupInputCapture()
 
 	// Запускаем приложение
+	log.Printf("ДИАГНОСТИКА WIZARD: Перед запуском app.SetRoot...")
 	if err := w.app.SetRoot(w.pages, true).SetFocus(w.pages).Run(); err != nil {
+		log.Printf("ДИАГНОСТИКА WIZARD: Ошибка запуска приложения: %v", err)
 		return fmt.Errorf("не удалось запустить приложение: %v", err)
 	}
+	log.Printf("ДИАГНОСТИКА WIZARD: Приложение завершено")
 
 	return nil
 }

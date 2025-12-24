@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 )
 
 // WizardConfig конфигурация мастера инициализации
@@ -517,4 +519,111 @@ func (dce *DefaultCommandExecutor) ExecuteNodeCommand(ctx context.Context, nodeI
 	default:
 		return "", fmt.Errorf("команда %s не поддерживается", command)
 	}
+}
+
+// DefaultGenerator базовая реализация Generator
+type DefaultGenerator struct{}
+
+// NewGenerator создает новый генератор
+func NewGenerator() Generator {
+	return &DefaultGenerator{}
+}
+
+// GenerateChartYAML генерирует Chart.yaml
+func (g *DefaultGenerator) GenerateChartYAML(clusterName, preset string) (ChartYAML, error) {
+	return ChartYAML{
+		APIVersion:  "v2",
+		Name:        clusterName,
+		Version:     "0.1.0",
+		Description: fmt.Sprintf("%s cluster chart", preset),
+		Type:        "application",
+		AppVersion:  "1.0",
+	}, nil
+}
+
+// GenerateValuesYAML генерирует values.yaml
+func (g *DefaultGenerator) GenerateValuesYAML(data *InitData) (ValuesYAML, error) {
+	return ValuesYAML{
+		ClusterName:        data.ClusterName,
+		FloatingIP:         data.FloatingIP,
+		KubernetesEndpoint: data.APIServerURL,
+		EtcdBootstrapped:   false,
+		Preset:             data.Preset,
+		TalosVersion:       data.TalosVersion,
+		APIServerURL:       data.APIServerURL,
+		PodSubnets:         data.PodSubnets,
+		ServiceSubnets:     data.ServiceSubnets,
+		AdvertisedSubnets:  data.AdvertisedSubnets,
+		ClusterDomain:      data.ClusterDomain,
+		Image:              data.Image,
+		OIDCIssuerURL:      data.OIDCIssuerURL,
+		NrHugepages:        data.NrHugepages,
+		Nodes:              make(map[string]NodeConfig),
+	}, nil
+}
+
+// GenerateMachineConfig генерирует конфигурацию машины
+func (g *DefaultGenerator) GenerateMachineConfig(data *InitData) (string, error) {
+	// Простая заглушка
+	return fmt.Sprintf("# Machine config for %s", data.Hostname), nil
+}
+
+// GenerateNodeConfig генерирует конфигурацию ноды
+func (g *DefaultGenerator) GenerateNodeConfig(filename string, data *InitData, values *ValuesYAML) error {
+	// Заглушка
+	return nil
+}
+
+// SaveChartYAML сохраняет Chart.yaml
+func (g *DefaultGenerator) SaveChartYAML(chart ChartYAML) error {
+	// Заглушка
+	return nil
+}
+
+// SaveValuesYAML сохраняет values.yaml
+func (g *DefaultGenerator) SaveValuesYAML(values ValuesYAML) error {
+	// Заглушка
+	return nil
+}
+
+// LoadValuesYAML загружает values.yaml
+func (g *DefaultGenerator) LoadValuesYAML() (*ValuesYAML, error) {
+	// Заглушка
+	return &ValuesYAML{}, nil
+}
+
+// GenerateBootstrapConfig генерирует конфигурацию bootstrap
+func (g *DefaultGenerator) GenerateBootstrapConfig(data *InitData) error {
+	// Заглушка
+	return nil
+}
+
+// UpdateValuesYAMLWithNode обновляет values.yaml с информацией о ноде
+func (g *DefaultGenerator) UpdateValuesYAMLWithNode(data *InitData) error {
+	// Заглушка
+	return nil
+}
+
+// GenerateSecretsBundle генерирует bundle секретов
+func (g *DefaultGenerator) GenerateSecretsBundle(data *InitData) error {
+	// Заглушка
+	return nil
+}
+
+// LoadSecretsBundle загружает bundle секретов
+func (g *DefaultGenerator) LoadSecretsBundle() (interface{}, error) {
+	// Заглушка
+	return nil, nil
+}
+
+// ValidateSecretsBundle валидирует bundle секретов
+func (g *DefaultGenerator) ValidateSecretsBundle() error {
+	// Заглушка
+	return nil
+}
+
+// SaveSecretsBundle сохраняет bundle секретов
+func (g *DefaultGenerator) SaveSecretsBundle(bundle *secrets.Bundle) error {
+	// Заглушка
+	return nil
 }
