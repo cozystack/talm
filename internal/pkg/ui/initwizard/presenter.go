@@ -2,6 +2,7 @@ package initwizard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -9,10 +10,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cozystack/talm/pkg/generated"
+	"github.com/cozystack/talm/pkg/engine"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
+
+var stateToPage = map[WizardState]string{
+    StatePreset:     "step1-simple",
+    StateEndpoint:   "step2-generic",
+    StateScanning:   "scanning",
+    StateNodeSelect: "node-selection",
+    StateNodeConfig: "node-config",
+    StateConfirm:    "confirm",
+    StateGenerate:   "generate",
+    StateDone:       "success",
+	StateAddNodeScan: "add-node-scan",
+    StateCozystackScan: "cozystack-scan",
+    StateVIPConfig: "vip-config",
+    StateNetworkConfig: "network-config",
+    StateNodeDetails: "node-details",
+}
 
 // PresenterImpl реализует интерфейс Presenter
 type PresenterImpl struct {
@@ -20,8 +38,27 @@ type PresenterImpl struct {
 	pages         *tview.Pages
 	data          *InitData
 	wizard        Wizard
+	controller    *WizardController
 	cancelScan    context.CancelFunc
-	scanningModal tview.Primitive // Ссылка на модальное окно сканирования
+	scanningModal tview.Primitive
+}
+
+func (p *PresenterImpl) Go(to WizardState) {
+	log.Printf("[DEBUG-TRANSITION] Попытка перехода из состояния %s в %s", p.controller.state, to)
+	if err := p.controller.Transition(to); err != nil {
+		log.Printf("[DEBUG-TRANSITION] ОШИБКА ПЕРЕХОДА: %v", err)
+		p.ShowErrorModal(err.Error())
+		return
+	}
+	log.Printf("[DEBUG-TRANSITION] Переход успешен, текущее состояние: %s", p.controller.state)
+
+	page, ok := stateToPage[to]
+	if !ok {
+		p.ShowErrorModal(fmt.Sprintf("no page for state %v", to))
+		return
+	}
+
+	p.pages.SwitchToPage(page)
 }
 
 // PresetDescriptions содержит описания доступных preset'ов
@@ -31,31 +68,64 @@ var PresetDescriptions = map[string]string{
 }
 
 // NewPresenter создает новый экземпляр презентера
-func NewPresenter(app *tview.Application, pages *tview.Pages, data *InitData, wizard Wizard) Presenter {
-	return &PresenterImpl{
-		app:    app,
-		pages:  pages,
-		data:   data,
-		wizard: wizard,
-	}
+func NewPresenter(app *tview.Application, pages *tview.Pages, data *InitData, wizard Wizard) *PresenterImpl {
+    controller := NewWizardController(data)
+
+    return &PresenterImpl{
+        app:        app,
+        pages:      pages,
+        data:       data,
+        wizard:     wizard,
+        controller: controller,
+    }
 }
 
 // ShowStep1Form отображает первую форму мастера
 func (p *PresenterImpl) ShowStep1Form(data *InitData) *tview.Form {
-	// Создаем поле для отображения описания preset'а
-	presetDescription := tview.NewTextView()
-	presetDescription.SetText("Выберите preset для вашего кластера...").SetTextColor(tcell.ColorGray)
-	presetDescription.SetBorder(true).SetTitle("Описание Preset'а")
+	log.Printf("ДИАГНОСТИКА PRESENTER: Вызван ShowStep1Form")
+	log.Printf("ДИАГНОСТИКА PRESENTER: data=%v", data)
+	log.Printf("ДИАГНОСТИКА PRESENTER: p.app=%v", p.app)
+	log.Printf("ДИАГНОСТИКА PRESENTER: p.pages=%v", p.pages)
+	
+	// Проверяем входные параметры
+	if data == nil {
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА PRESENTER: data равен nil!")
+		return nil
+	}
+	
+	if p.app == nil {
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА PRESENTER: p.app равен nil!")
+		return nil
+	}
+	
+	if p.pages == nil {
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА PRESENTER: p.pages равен nil!")
+		return nil
+	}
+	
+	log.Printf("ДИАГНОСТИКА PRESENTER: Все параметры в порядке, продолжаем создание формы")
+	
+	// Проверяем доступность generated.AvailablePresets
+	log.Printf("ДИАГНОСТИКА PRESENTER: Проверяем generated.AvailablePresets...")
+	
+	log.Printf("ДИАГНОСТИКА PRESENTER: Создаем простую форму...")
 
+	// Определяем начальный индекс для dropdown на основе текущего preset
+	var initialIndex int
+	if data.Preset == "cozystack" {
+		initialIndex = 1
+	} else {
+		initialIndex = 0
+		if data.Preset == "" {
+			data.Preset = "generic"
+		}
+	}
+
+	// Создаем простую форму без сложных контейнеров
 	form := tview.NewForm().
-		AddDropDown("Preset", generated.AvailablePresets, 0, func(option string, index int) {
+		AddDropDown("Preset", []string{"generic", "cozystack"}, initialIndex, func(option string, index int) {
+			log.Printf("ДИАГНОСТИКА PRESENTER: Изменен preset: %s", option)
 			data.Preset = option
-			// Обновляем описание при выборе preset'а
-			if desc, ok := PresetDescriptions[option]; ok {
-				presetDescription.SetText(desc).SetTextColor(tcell.ColorWhite)
-			} else {
-				presetDescription.SetText("Описание недоступно").SetTextColor(tcell.ColorGray)
-			}
 		}).
 		AddInputField("Имя Кластера", data.ClusterName, 20, nil, func(text string) {
 			data.ClusterName = text
@@ -63,44 +133,50 @@ func (p *PresenterImpl) ShowStep1Form(data *InitData) *tview.Form {
 
 	form.
 		AddButton("Далее", func() {
-			if data.Preset == "cozystack" {
-				p.ShowCozystackScan(data)
-			} else {
+			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ДАЛЕЕ' НАЖАТА =========")
+			log.Printf("ДИАГНОСТИКА PRESENTER: Нажата кнопка 'Далее', preset = %s", data.Preset)
+			log.Printf("ДИАГНОСТИКА PRESENTER: Начинаем обработку нажатия кнопки...")
+			
+			if data.Preset == "generic" || data.Preset == "cozystack" {
+				log.Printf("ДИАГНОСТИКА PRESENTER: Переход к ShowGenericStep2")
+				log.Printf("ДИАГНОСТИКА PRESENTER: Вызываем ShowGenericStep2 для preset = %s", data.Preset)
 				p.ShowGenericStep2(data)
+				log.Printf("ДИАГНОСТИКА PRESENTER: ShowGenericStep2 завершен")
+			} else {
+				log.Printf("ДИАГНОСТИКА PRESENTER: Некорректный preset: %s", data.Preset)
+				p.ShowErrorModal(fmt.Sprintf("Некорректный preset: %s. Введите 'generic' или 'cozystack'", data.Preset))
 			}
+			log.Printf("ДИАГНОСТИКА PRESENTER: Обработка нажатия кнопки завершена")
+			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ДАЛЕЕ' ОБРАБОТАНА =========")
 		}).
 		AddButton("Отмена", func() {
+			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ОТМЕНА' НАЖАТА =========")
 			p.app.Stop()
 		})
 
+	log.Printf("ДИАГНОСТИКА PRESENTER: Устанавливаем границы формы...")
 	form.SetBorder(true).SetTitle("Talos Init Wizard - Шаг 1: Базовая Конфигурация").SetTitleAlign(tview.AlignLeft)
 
-	// Создаем общий контейнер с формой и описанием
-	container := tview.NewFlex().SetDirection(tview.FlexRow)
-	container.AddItem(form, 0, 1, true)
-	container.AddItem(presetDescription, 4, 0, false)
-	container.SetBorder(true).SetTitle("Talos Init Wizard - Шаг 1: Базовая Конфигурация").SetTitleAlign(tview.AlignLeft)
+	log.Printf("ДИАГНОСТИКА PRESENTER: Добавляем страницу...")
+		p.pages.AddPage("step1-simple", form, true, true)
 
-	// Добавляем контейнер на страницу
-	pageName := "step1-enhanced"
-	p.pages.AddPage(pageName, container, true, true)
-	p.SwitchPage(p.pages, pageName)
-
-	// Устанавливаем описание для первого preset'а по умолчанию
-	p.app.QueueUpdateDraw(func() {
-		if len(generated.AvailablePresets) > 0 {
-			defaultPreset := generated.AvailablePresets[0]
-			if desc, ok := PresetDescriptions[defaultPreset]; ok {
-				presetDescription.SetText(desc).SetTextColor(tcell.ColorWhite)
-			}
-		}
-	})
-
+		log.Printf("ДИАГНОСТИКА PRESENTER: Переключаемся на страницу...")
+		p.Go(StatePreset)
+	
+	log.Printf("ДИАГНОСТИКА PRESENTER: Устанавливаем фокус...")
+	p.app.SetFocus(form)
+	
+	log.Printf("ДИАГНОСТИКА PRESENTER: Метод ShowStep1Form завершен успешно, возвращаем form")
+	
+	log.Printf("ДИАГНОСТИКА PRESENTER: ShowStep1Form полностью завершен")
 	return form
 }
 
-// ShowGenericStep2 отображает вторую форму для Generic пресета
+// ShowGenericStep2 отображает вторую форму для Generic и Cozystack preset'ов
 func (p *PresenterImpl) ShowGenericStep2(data *InitData) {
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Начало выполнения ShowGenericStep2 для preset = %s", data.Preset)
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: data = %v", data)
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Создаем форму...")
 	form := tview.NewForm().
 		AddInputField("Kubernetes Endpoint", "", 30, nil, func(text string) {
 			data.APIServerURL = text
@@ -114,46 +190,27 @@ func (p *PresenterImpl) ShowGenericStep2(data *InitData) {
 			p.initializeCluster(data)
 		}).
 		AddButton("Назад", func() {
-			p.SwitchPage(p.pages, "step1-enhanced")
-			p.app.SetFocus(p.pages)
+			p.Go(StatePreset)
 		}).
 		AddButton("Отмена", func() {
 			p.app.Stop()
 		})
 
-	form.SetBorder(true).SetTitle("Generic Preset - Дополнительная Конфигурация").SetTitleAlign(tview.AlignLeft)
+	form.SetBorder(true).SetTitle(fmt.Sprintf("%s Preset - Дополнительная Конфигурация", strings.Title(data.Preset))).SetTitleAlign(tview.AlignLeft)
 
-	p.pages.AddPage("step2-generic", form, true, true)
-	p.SwitchPage(p.pages, "step2-generic")
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Добавляем страницу...")
+		p.pages.AddPage("step2-generic", form, true, true)
+		log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Переключаемся на страницу...")
+		p.Go(StateEndpoint)
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Устанавливаем фокус...")
 	p.app.SetFocus(form)
+	log.Printf("ДИАГНОСТИКА GENERIC-STEP2: Функция ShowGenericStep2 завершена успешно")
 }
-
-// ShowCozystackScan отображает форму сканирования для Cozystack пресета
+// ShowCozystackScan отображает сканирование для Cozystack
 func (p *PresenterImpl) ShowCozystackScan(data *InitData) {
-	form := tview.NewForm().
-		AddInputField("Сеть для сканирования", "192.168.1.0/24", 20, nil, func(text string) {
-			data.NetworkToScan = text
-		})
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Вызван ShowCozystackScan")
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: data = %v", data)
 
-	form.
-		AddButton("Сканировать", func() {
-			p.showCozystackScanningModal(data)
-		}).
-		AddButton("Назад", func() {
-			p.SwitchPage(p.pages, "step1-enhanced")
-		}).
-		AddButton("Отмена", func() {
-			p.app.Stop()
-		})
-
-	form.SetBorder(true).SetTitle("Cozystack Preset - Сканирование Сети").SetTitleAlign(tview.AlignLeft)
-	p.pages.AddPage("cozystack-scan", form, true, true)
-	p.SwitchPage(p.pages, "cozystack-scan")
-	p.app.SetFocus(form)
-}
-
-// ShowAddNodeWizard отображает мастер добавления новой ноды
-func (p *PresenterImpl) ShowAddNodeWizard(data *InitData) {
 	form := tview.NewForm().
 		AddInputField("Network to scan", "192.168.1.0/24", 20, nil, func(text string) {
 			data.NetworkToScan = text
@@ -161,6 +218,51 @@ func (p *PresenterImpl) ShowAddNodeWizard(data *InitData) {
 
 	form.
 		AddButton("Scan", func() {
+			log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Нажата кнопка 'Scan'")
+			if data.NetworkToScan == "" {
+				p.ShowErrorModal("Please enter network to scan")
+				return
+			}
+
+			p.showCozystackScanningModal(data)
+		}).
+		AddButton("Cancel", func() {
+			log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Нажата кнопка 'Cancel'")
+			p.app.Stop()
+		})
+
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Устанавливаем границы формы...")
+	form.SetBorder(true).SetTitle("Cozystack Network Scan").SetTitleAlign(tview.AlignLeft)
+
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Добавляем страницу...")
+	p.pages.AddPage("cozystack-scan", form, true, true)
+
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Переключаемся на страницу...")
+	p.Go(StateCozystackScan)
+
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: Устанавливаем фокус...")
+	p.app.SetFocus(form)
+
+	log.Printf("ДИАГНОСТИКА COZYSTACK-SCAN: ShowCozystackScan завершен")
+}
+
+// ShowAddNodeWizard отображает мастер добавления новой ноды
+func (p *PresenterImpl) ShowAddNodeWizard(data *InitData) {
+	log.Printf("ДИАГНОСТИКА ADD-NODE: Вызван ShowAddNodeWizard")
+	log.Printf("ДИАГНОСТИКА ADD-NODE: data = %v", data)
+	log.Printf("[DEBUG-ADD-NODE] Текущее состояние контроллера перед установкой: %s", p.controller.state)
+
+	p.Go(StateAddNodeScan)
+
+	form := tview.NewForm().
+		AddInputField("Network to scan", "192.168.1.0/24", 20, nil, func(text string) {
+			data.NetworkToScan = text
+		})
+
+	form.
+		AddButton("Scan", func() {
+			log.Printf("ДИАГНОСТИКА ADD-NODE: Нажата кнопка 'Scan'")
+			log.Printf("[DEBUG-ADD-NODE] Состояние при нажатии Scan: %s", p.controller.state)
 			if data.NetworkToScan == "" {
 				p.ShowErrorModal("Please enter network to scan")
 				return
@@ -171,12 +273,20 @@ func (p *PresenterImpl) ShowAddNodeWizard(data *InitData) {
 			}, context.Background())
 		}).
 		AddButton("Cancel", func() {
+			log.Printf("ДИАГНОСТИКА ADD-NODE: Нажата кнопка 'Cancel'")
 			p.app.Stop()
 		})
 
+	log.Printf("ДИАГНОСТИКА ADD-NODE: Устанавливаем границы формы...")
 	form.SetBorder(true).SetTitle("Add New Node - Network Scan").SetTitleAlign(tview.AlignLeft)
+
+	log.Printf("ДИАГНОСТИКА ADD-NODE: Добавляем страницу...")
 	p.pages.AddPage("add-node-scan", form, true, true)
+
+	log.Printf("ДИАГНОСТИКА ADD-NODE: Переключаемся на страницу...")
 	p.SwitchPage(p.pages, "add-node-scan")
+
+	log.Printf("[DEBUG-ADD-NODE] ShowAddNodeWizard завершен, состояние контроллера: %s", p.controller.state)
 }
 
 // ShowNodeSelection отображает выбор ноды
@@ -269,8 +379,8 @@ func (p *PresenterImpl) ShowNodeSelection(data *InitData, title string) {
 	})
 
 	p.pages.AddPage("node-selection", flex, true, true)
-	p.SwitchPage(p.pages, "node-selection")
-	p.app.SetFocus(list)
+		p.Go(StateNodeSelect)
+		p.app.SetFocus(list)
 }
 
 // ShowNodeConfig отображает конфигурацию ноды
@@ -423,6 +533,15 @@ func (p *PresenterImpl) ShowNodeConfig(data *InitData) {
 		log.Printf("[INTERFACE-FORMAT] Создан вариант %d: %s", i, interfaceDisplay)
 	}
 
+	data.Hostname = defaultHostname
+	data.NodeType = "controlplane"  // or appropriate default
+	if len(disks) > 0 {
+		data.Disk = disks[0].Name  // or appropriate default
+	}
+	if len(interfaces) > 0 {
+		data.Interface = interfaces[0].Name  // or appropriate default
+	}
+
 	form := tview.NewForm().
 		AddDropDown("Role", []string{"controlplane", "worker"}, 0, func(option string, index int) {
 			data.NodeType = option
@@ -454,16 +573,16 @@ func (p *PresenterImpl) ShowNodeConfig(data *InitData) {
 			p.ShowConfigConfirmation(data)
 		}).
 		AddButton("Back", func() {
-			p.SwitchPage(p.pages, "node-selection")
-		}).
+				p.Go(StateNodeSelect)
+			}).
 		AddButton("Cancel", func() {
 			p.app.Stop()
 		})
 
 	form.SetBorder(true).SetTitle("Node Configuration").SetTitleAlign(tview.AlignLeft)
-	p.pages.AddPage("node-config", form, true, true)
-	p.SwitchPage(p.pages, "node-config")
-	p.app.SetFocus(form)
+		p.pages.AddPage("node-config", form, true, true)
+		p.Go(StateNodeConfig)
+		p.app.SetFocus(form)
 }
 
 // ShowVIPConfig отображает конфигурацию виртуального IP
@@ -535,6 +654,7 @@ func (p *PresenterImpl) ShowProgressModal(message string, task func()) {
 // ShowScanningModal отображает модальное окно сканирования с прогрессом
 func (p *PresenterImpl) ShowScanningModal(scanFunc func(context.Context, func(int)), ctx context.Context) {
 	log.Printf("[FIXED-UI] Открываем модальное окно сканирования")
+	log.Printf("[DEBUG-SCANNING] Состояние перед Go(StateScanning): %s", p.controller.state)
 
 	// Флаг отмены
 	cancelled := false
@@ -635,8 +755,8 @@ func (p *PresenterImpl) ShowScanningModal(scanFunc func(context.Context, func(in
 	})
 
 	p.pages.AddPage("scanning", flex, true, true)
-	p.SwitchPage(p.pages, "scanning")
-	p.app.SetFocus(flex)
+		p.Go(StateScanning)
+		p.app.SetFocus(flex)
 
 	go func() {
 		// Передаем флаг отмены в scanFunc
@@ -708,15 +828,15 @@ func (p *PresenterImpl) ShowConfigConfirmation(data *InitData) {
 			case "OK":
 				p.generateMachineConfig(data)
 			case "Back":
-				p.SwitchPage(p.pages, "node-config")
-			case "Cancel":
+					p.Go(StateNodeConfig)
+				case "Cancel":
 				p.app.Stop()
 			}
 		})
 
-	p.pages.AddPage("config-confirmation", modal, true, true)
-	p.SwitchPage(p.pages, "config-confirmation")
-	p.app.SetFocus(modal)
+	p.pages.AddPage("confirm", modal, true, true)
+		p.Go(StateConfirm)
+		p.app.SetFocus(modal)
 }
 
 // ShowBootstrapPrompt отображает запрос на bootstrap
@@ -854,8 +974,8 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 	// Создаем кнопки
 	buttons := tview.NewForm().
 		AddButton("Назад", func() {
-			p.SwitchPage(p.pages, "node-selection")
-		})
+				p.Go(StateNodeSelect)
+			})
 
 	buttons.SetButtonsAlign(tview.AlignCenter)
 
@@ -873,10 +993,11 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 
 // SwitchPage переключает страницу
 func (p *PresenterImpl) SwitchPage(pages *tview.Pages, pageName string) {
-	p.debug("Переключаемся на страницу: %s", pageName)
-	p.debug("Доступные страницы: %v", pages.GetPageNames(false))
+	log.Printf("ДИАГНОСТИКА SWITCHPAGE: Переключаемся на страницу: %s", pageName)
+	log.Printf("ДИАГНОСТИКА SWITCHPAGE: Доступные страницы: %v", pages.GetPageNames(false))
+	log.Printf("ДИАГНОСТИКА SWITCHPAGE: Выполняем SwitchToPage...")
 	pages.SwitchToPage(pageName)
-	p.debug("Переключение на %s выполнено", pageName)
+	log.Printf("ДИАГНОСТИКА SWITCHPAGE: Переключение на %s выполнено", pageName)
 }
 
 // debug простой отладочный метод
@@ -989,8 +1110,8 @@ func (p *PresenterImpl) showCozystackScanningModal(data *InitData) {
 	})
 
 	p.pages.AddPage("scanning", flex, true, true)
-	p.SwitchPage(p.pages, "scanning")
-	p.app.SetFocus(flex)
+		p.Go(StateScanning)
+		p.app.SetFocus(flex)
 
 	go func() {
 		log.Printf("[FIXED-UI] Запускаем сканирование в Cozystack")
@@ -1065,6 +1186,7 @@ func (p *PresenterImpl) showCozystackScanningModal(data *InitData) {
 func (p *PresenterImpl) performNetworkScan(data *InitData, updateProgress func(int)) {
 	log.Printf("[FIXED-UI] Начинаем performNetworkScan для сети: %s", data.NetworkToScan)
 	log.Printf("[FIXED-UI] Получен updateProgress callback: %v", updateProgress != nil)
+	log.Printf("[DEBUG-PERFORM-SCAN] Состояние перед сканированием: %s", p.controller.state)
 
 	// Получаем сканер от wizard
 	wizard := p.wizard
@@ -1119,6 +1241,7 @@ func (p *PresenterImpl) performNetworkScan(data *InitData, updateProgress func(i
 	}
 
 	log.Printf("[FIXED-UI] Сканирование завершено, найдено %d нод", len(nodes))
+	log.Printf("[DEBUG-PERFORM-SCAN] Состояние после сканирования перед ShowNodeSelection: %s", p.controller.state)
 
 	// Сохраняем результаты
 	data.DiscoveredNodes = nodes
@@ -1128,6 +1251,7 @@ func (p *PresenterImpl) performNetworkScan(data *InitData, updateProgress func(i
 		p.scanningModal = nil
 		p.pages.RemovePage("scanning")
 		if len(nodes) > 0 {
+			log.Printf("[DEBUG-PERFORM-SCAN] Вызываем ShowNodeSelection")
 			p.ShowNodeSelection(data, "Select Node to Add")
 		} else {
 			p.ShowErrorModal("В сети не найдено нод Talos")
@@ -1299,10 +1423,10 @@ func (p *PresenterImpl) initializeGenericCluster(data *InitData) {
 // generateMachineConfig генерирует конфигурацию машины
 func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 	log.Printf("[MACHINE-CONFIG] Начинаем генерацию машинной конфигурации для ноды: %s", data.SelectedNode)
-	
+
 	p.ShowProgressModal("Generating machine config...", func() {
 		log.Printf("[MACHINE-CONFIG] Запуск генерации машинной конфигурации...")
-		
+
 		// Валидация обязательных данных
 		if data.SelectedNode == "" {
 			log.Printf("[MACHINE-CONFIG] Ошибка: не выбрана нода")
@@ -1311,7 +1435,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 			})
 			return
 		}
-		
+
 		if data.Hostname == "" {
 			log.Printf("[MACHINE-CONFIG] Ошибка: не указано имя хоста")
 			p.app.QueueUpdateDraw(func() {
@@ -1319,7 +1443,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 			})
 			return
 		}
-		
+
 		if data.Disk == "" {
 			log.Printf("[MACHINE-CONFIG] Ошибка: не выбран диск")
 			p.app.QueueUpdateDraw(func() {
@@ -1327,7 +1451,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 			})
 			return
 		}
-		
+
 		if data.Interface == "" {
 			log.Printf("[MACHINE-CONFIG] Ошибка: не выбран сетевой интерфейс")
 			p.app.QueueUpdateDraw(func() {
@@ -1335,7 +1459,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 			})
 			return
 		}
-		
+
 		log.Printf("[MACHINE-CONFIG] Все необходимые данные валидны")
 		log.Printf("[MACHINE-CONFIG] Параметры:")
 		log.Printf("[MACHINE-CONFIG] - Node: %s", data.SelectedNode)
@@ -1347,63 +1471,146 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 		log.Printf("[MACHINE-CONFIG] - Gateway: %s", data.Gateway)
 		log.Printf("[MACHINE-CONFIG] - DNS: %s", data.DNSServers)
 		log.Printf("[MACHINE-CONFIG] - VIP: %s", data.VIP)
-		
-		// Создаем временные данные для генерации конфигурации кластера
-		// (GenerateFromTUI ожидает данные кластера, а не отдельной ноды)
-		clusterData := &InitData{
-			Preset:            data.Preset,
-			ClusterName:       data.ClusterName,
-			APIServerURL:      data.APIServerURL,
-			PodSubnets:        data.PodSubnets,
-			ServiceSubnets:    data.ServiceSubnets,
-			AdvertisedSubnets: data.AdvertisedSubnets,
-			ClusterDomain:     data.ClusterDomain,
-			FloatingIP:        data.FloatingIP,
-			Image:             data.Image,
-			OIDCIssuerURL:     data.OIDCIssuerURL,
-			NrHugepages:       data.NrHugepages,
+
+		// Подготавливаем values для шаблона
+		nodeValues := map[string]interface{}{
+			"nodeHostname": data.Hostname,
+			"nodeDisk":     data.Disk,
+			"nodeImage":    p.getDefaultImageForPreset(data.Preset),
 		}
-		
-		log.Printf("[MACHINE-CONFIG] Генерируем базовую конфигурацию кластера...")
-		
-		// Генерируем базовую конфигурацию кластера
-		if err := GenerateFromTUI(clusterData); err != nil {
-			log.Printf("[MACHINE-CONFIG] Ошибка генерации конфигурации кластера: %v", err)
+
+		// Добавляем сетевую конфигурацию
+		if data.Addresses != "" {
+			// Создаем интерфейс конфигурацию
+			nodeInterface := map[string]interface{}{
+				"interface": data.Interface,
+				"addresses": []string{data.Addresses},
+			}
+
+			if data.Gateway != "" {
+				nodeInterface["routes"] = []map[string]interface{}{
+					{
+						"network": "0.0.0.0/0",
+						"gateway": data.Gateway,
+					},
+				}
+			}
+
+			if data.VIP != "" && data.NodeType == "controlplane" {
+				nodeInterface["vip"] = map[string]interface{}{
+					"ip": data.VIP,
+				}
+			}
+
+			nodeValues["nodeInterfaces"] = nodeInterface
+		}
+
+		// Добавляем DNS серверы
+		if data.DNSServers != "" {
+			dns := strings.Split(data.DNSServers, ",")
+			for i, server := range dns {
+				dns[i] = strings.TrimSpace(server)
+			}
+			nodeValues["nodeNameservers"] = map[string]interface{}{"servers": dns}
+		}
+
+		// Выбираем шаблон на основе NodeType
+		var templateFile string
+		if data.NodeType == "controlplane" {
+			templateFile = "templates/controlplane.yaml"
+		} else if data.NodeType == "worker" {
+			templateFile = "templates/worker.yaml"
+		} else {
+			templateFile = "templates/node.yaml" // fallback
+		}
+
+		// Создаем опции для engine.Render
+		opts := engine.Options{
+			ValueFiles:        []string{"values.yaml"}, // Используем существующие values.yaml
+			WithSecrets:       "secrets.yaml",
+			TemplateFiles:     []string{templateFile},
+			Offline:           true, // Не используем lookup функции
+			KubernetesVersion: constants.DefaultKubernetesVersion,
+		}
+
+		// Сериализуем nodeInterfaces и nodeNameservers в JSON для opts.JsonValues
+		if nodeValues["nodeInterfaces"] != nil {
+			jsonData, err := json.Marshal(nodeValues["nodeInterfaces"])
+			if err == nil {
+				opts.JsonValues = append(opts.JsonValues, string(jsonData))
+			} else {
+				log.Printf("[MACHINE-CONFIG] Ошибка сериализации nodeInterfaces: %v", err)
+			}
+		}
+
+		if nodeValues["nodeNameservers"] != nil {
+			jsonData, err := json.Marshal(nodeValues["nodeNameservers"])
+			if err == nil {
+				opts.JsonValues = append(opts.JsonValues, string(jsonData))
+			} else {
+				log.Printf("[MACHINE-CONFIG] Ошибка сериализации nodeNameservers: %v", err)
+			}
+		}
+
+		// Определяем тип машины для шаблона
+		var machineType string
+		if data.NodeType == "controlplane" {
+			machineType = "controlplane"
+		} else {
+			machineType = "worker"
+		}
+
+		// Добавляем machineType в values через set
+		opts.Values = append(opts.Values, fmt.Sprintf("machineType=%s", machineType))
+
+		// Добавляем node-specific values через set
+		if nodeValues["nodeHostname"] != nil {
+			opts.Values = append(opts.Values, fmt.Sprintf("nodeHostname=%s", nodeValues["nodeHostname"]))
+		}
+		if nodeValues["nodeDisk"] != nil {
+			opts.Values = append(opts.Values, fmt.Sprintf("nodeDisk=%s", nodeValues["nodeDisk"]))
+		}
+		if nodeValues["nodeImage"] != nil {
+			opts.Values = append(opts.Values, fmt.Sprintf("nodeImage=%s", nodeValues["nodeImage"]))
+		}
+
+		// Выполняем рендеринг через engine.Render
+		ctx := context.Background()
+		configBytes, err := engine.Render(ctx, nil, opts)
+		if err != nil {
+			log.Printf("[MACHINE-CONFIG] Ошибка рендеринга шаблона: %v", err)
 			p.app.QueueUpdateDraw(func() {
 				p.ShowErrorModal(fmt.Sprintf("Ошибка генерации конфигурации: %v", err))
 			})
 			return
 		}
-		
-		log.Printf("[MACHINE-CONFIG] Базовая конфигурация кластера создана успешно")
-		
-		// Генерируем конфигурацию конкретной ноды
-		machineConfig, err := p.generateNodeMachineConfig(data)
+
+		// Генерируем имя файла с автоинкрементом
+		configFilename, err := generateNodeFileName("")
 		if err != nil {
-			log.Printf("[MACHINE-CONFIG] Ошибка генерации машинной конфигурации: %v", err)
+			log.Printf("[MACHINE-CONFIG] Ошибка генерации имени файла: %v", err)
 			p.app.QueueUpdateDraw(func() {
-				p.ShowErrorModal(fmt.Sprintf("Ошибка генерации машинной конфигурации: %v", err))
+				p.ShowErrorModal(fmt.Sprintf("Ошибка генерации имени файла: %v", err))
 			})
 			return
 		}
-		
+
 		// Сохраняем конфигурацию в файл
-		configFilename := fmt.Sprintf("machine-config-%s.yaml", data.Hostname)
-		if err := os.WriteFile(configFilename, []byte(machineConfig), 0o644); err != nil {
+		if err := os.WriteFile(configFilename, configBytes, 0o644); err != nil {
 			log.Printf("[MACHINE-CONFIG] Ошибка сохранения файла конфигурации: %v", err)
 			p.app.QueueUpdateDraw(func() {
 				p.ShowErrorModal(fmt.Sprintf("Ошибка сохранения конфигурации: %v", err))
 			})
 			return
 		}
-		
+
 		log.Printf("[MACHINE-CONFIG] Машинная конфигурация сохранена в файл: %s", configFilename)
-		
+
 		// Обновляем данные
-		data.MachineConfig = machineConfig
-		
+		data.MachineConfig = string(configBytes)
+
 		log.Printf("[MACHINE-CONFIG] Генерация машинной конфигурации завершена успешно")
-		
+
 		// Показываем результат
 		p.app.QueueUpdateDraw(func() {
 			p.ShowSuccessModal(fmt.Sprintf("Машинная конфигурация успешно создана!\n\nФайл: %s\nНода: %s (%s)\nТип: %s\n\nСледующие шаги:\n1. Установите Talos на ноду используя этот файл\n2. Примените конфигурацию: talosctl apply-config -n %s -f %s",

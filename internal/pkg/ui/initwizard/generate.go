@@ -2,6 +2,7 @@ package initwizard
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 
 // GenerateFromTUI генерирует конфигурации из TUI
 func GenerateFromTUI(data *InitData) error {
+	log.Printf("DEBUG GenerateFromTUI: Starting with preset=%s, clusterName=%s", data.Preset, data.ClusterName)
 	var (
 		secretsBundle   *secrets.Bundle
 		versionContract *config.VersionContract
@@ -25,9 +27,11 @@ func GenerateFromTUI(data *InitData) error {
 	)
 
 	// 1. Validate preset
+	log.Printf("DEBUG GenerateFromTUI: Validating preset: %s", data.Preset)
 	if !isValidPreset(data.Preset) {
 		return fmt.Errorf("invalid preset: %s. Valid presets: %s", data.Preset, generated.AvailablePresets)
 	}
+	log.Printf("DEBUG GenerateFromTUI: Preset valid")
 
 	// 2. Parse Talos version
 	if data.TalosVersion != "" {
@@ -83,15 +87,20 @@ func GenerateFromTUI(data *InitData) error {
 	}
 
 	// 9. Write preset files с подстановкой реальных значений
+	log.Printf("DEBUG GenerateFromTUI: Writing preset files")
 	if err := writePresetCharts(data); err != nil {
+		log.Printf("DEBUG GenerateFromTUI: Error writing preset files: %v", err)
 		return err
 	}
 
 	// 10. Write library chart (talm/)
+	log.Printf("DEBUG GenerateFromTUI: Writing talm library chart")
 	if err := writeTalmLibraryChart(); err != nil {
+		log.Printf("DEBUG GenerateFromTUI: Error writing talm library chart: %v", err)
 		return err
 	}
 
+	log.Printf("DEBUG GenerateFromTUI: Completed successfully")
 	return nil
 }
 
@@ -118,6 +127,7 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 }
 
 func writePresetCharts(data *InitData) error {
+	log.Printf("DEBUG writePresetCharts: Starting for preset %s", data.Preset)
 	for path, content := range generated.PresetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) < 2 {
@@ -127,19 +137,12 @@ func writePresetCharts(data *InitData) error {
 		chartName := parts[0]
 		filePath := parts[1]
 
-		if chartName == data.Preset {
-			var dst string
-			var err error
+		log.Printf("DEBUG writePresetCharts: Processing %s, chartName=%s, filePath=%s", path, chartName, filePath)
 
-			// Специальная обработка для controlplane.yaml и worker.yaml
-			if strings.HasSuffix(filePath, "controlplane.yaml") || strings.HasSuffix(filePath, "worker.yaml") {
-				dst, err = generateNodeFileName(filePath)
-				if err != nil {
-					return fmt.Errorf("failed to generate node file name: %w", err)
-				}
-			} else {
-				dst = filepath.Join(filePath)
-			}
+		if chartName == data.Preset {
+			log.Printf("DEBUG writePresetCharts: Matched preset, processing %s", path)
+			dst := filepath.Join(filePath)
+			log.Printf("DEBUG writePresetCharts: dst=%s", dst)
 
 			if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
 				return err
@@ -148,18 +151,14 @@ func writePresetCharts(data *InitData) error {
 			// Форматируем содержимое файлов
 			formattedContent := formatFileContent(content, path, data)
 
-			// Для node файлов используем writeToDestinationNoCheck (без проверки существования)
-			if strings.HasSuffix(filePath, "controlplane.yaml") || strings.HasSuffix(filePath, "worker.yaml") {
-				if err := writeToDestinationNoCheck([]byte(formattedContent), dst, 0o644); err != nil {
-					return err
-				}
-			} else {
-				if err := writeToDestination([]byte(formattedContent), dst, 0o644); err != nil {
-					return err
-				}
+			log.Printf("DEBUG writePresetCharts: Writing file to %s", dst)
+			if err := writeToDestination([]byte(formattedContent), dst, 0o644); err != nil {
+				log.Printf("DEBUG writePresetCharts: Error writing file: %v", err)
+				return err
 			}
 		}
 	}
+	log.Printf("DEBUG writePresetCharts: Completed")
 	return nil
 }
 
