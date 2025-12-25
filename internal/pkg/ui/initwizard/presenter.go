@@ -32,7 +32,7 @@ var stateToPage = map[WizardState]string{
     StateNodeDetails: "node-details",
 }
 
-// PresenterImpl реализует интерфейс Presenter
+// PresenterImpl implements the Presenter interface
 type PresenterImpl struct {
 	app           *tview.Application
 	pages         *tview.Pages
@@ -67,7 +67,7 @@ var PresetDescriptions = map[string]string{
 	"cozystack": "Платформа Cozystack с расширенными возможностями сети и хранения. Включает дополнительные модули ядра и оптимизации.",
 }
 
-// NewPresenter создает новый экземпляр презентера
+// NewPresenter creates a new presenter instance
 func NewPresenter(app *tview.Application, pages *tview.Pages, data *InitData, wizard Wizard) *PresenterImpl {
     controller := NewWizardController(data)
 
@@ -132,9 +132,9 @@ func (p *PresenterImpl) ShowStep1Form(data *InitData) *tview.Form {
 		})
 
 	form.
-		AddButton("Далее", func() {
+		AddButton("Next", func() {
 			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ДАЛЕЕ' НАЖАТА =========")
-			log.Printf("ДИАГНОСТИКА PRESENTER: Нажата кнопка 'Далее', preset = %s", data.Preset)
+			log.Printf("ДИАГНОСТИКА PRESENTER: Нажата кнопка 'Next', preset = %s", data.Preset)
 			log.Printf("ДИАГНОСТИКА PRESENTER: Начинаем обработку нажатия кнопки...")
 			
 			if data.Preset == "generic" || data.Preset == "cozystack" {
@@ -149,7 +149,7 @@ func (p *PresenterImpl) ShowStep1Form(data *InitData) *tview.Form {
 			log.Printf("ДИАГНОСТИКА PRESENTER: Обработка нажатия кнопки завершена")
 			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ДАЛЕЕ' ОБРАБОТАНА =========")
 		}).
-		AddButton("Отмена", func() {
+		AddButton("Cancel", func() {
 			log.Printf("ДИАГНОСТИКА PRESENTER: ========= КНОПКА 'ОТМЕНА' НАЖАТА =========")
 			p.app.Stop()
 		})
@@ -186,13 +186,13 @@ func (p *PresenterImpl) ShowGenericStep2(data *InitData) {
 		})
 
 	form.
-		AddButton("Далее", func() {
+		AddButton("Next", func() {
 			p.initializeCluster(data)
 		}).
-		AddButton("Назад", func() {
+		AddButton("Back", func() {
 			p.Go(StatePreset)
 		}).
-		AddButton("Отмена", func() {
+		AddButton("Cancel", func() {
 			p.app.Stop()
 		})
 
@@ -347,14 +347,14 @@ func (p *PresenterImpl) ShowNodeSelection(data *InitData, title string) {
 		AddButton("Детали", func() {
 			p.ShowNodeDetails(data)
 		}).
-		AddButton("Назад", func() {
+		AddButton("Back", func() {
 			if title == "Select First Control Plane Node" {
 				p.SwitchPage(p.pages, "cozystack-scan")
 			} else {
 				p.SwitchPage(p.pages, "add-node-scan")
 			}
 		}).
-		AddButton("Отмена", func() {
+		AddButton("Cancel", func() {
 			p.app.Stop()
 		})
 
@@ -430,7 +430,7 @@ func (p *PresenterImpl) ShowNodeConfig(data *InitData) {
 		for _, prefix := range validPrefixes {
 			if strings.HasPrefix(iface.Name, prefix) {
 				includeInterface = true
-				log.Printf("[INTERFACE-FILTER] Интерфейс %s соответствует префиксу %s", iface.Name, prefix)
+				log.Printf("[INTERFACE-FILTER] Interface %s соответствует префиксу %s", iface.Name, prefix)
 				break
 			}
 		}
@@ -457,9 +457,9 @@ func (p *PresenterImpl) ShowNodeConfig(data *InitData) {
 
 	log.Printf("[INTERFACE-FILTER] Отфильтровано интерфейсов: %d из %d", len(interfaces), len(allInterfaces))
 
-	// Сортируем интерфейсы: приоритет интерфейсам с IP адресами
+	// Сортируем интерфейсы: приоритет интерфейсам с IP Addressами
 	sort.Slice(interfaces, func(i, j int) bool {
-		// Интерфейсы с IPv4 адресами идут первыми
+		// Interfaceы с IPv4 адресами идут первыми
 		hasIPi := false
 		hasIPj := false
 
@@ -491,7 +491,7 @@ func (p *PresenterImpl) ShowNodeConfig(data *InitData) {
 		// Создаем улучшенное отображение: interface_name MAC_address (IP/24) [↑/↓]
 		interfaceDisplay := fmt.Sprintf("%s %s", iface.Name, iface.MAC)
 
-		// Добавляем IP адрес с маской подсети если есть
+		// Добавляем IP Address с маской подсети если есть
 		if len(iface.IPs) > 0 {
 			// Находим первый IPv4 адрес (не IPv6)
 			var mainIP string
@@ -662,7 +662,7 @@ func (p *PresenterImpl) ShowScanningModal(scanFunc func(context.Context, func(in
 	// Создаем функцию отмены
 	dismissModal := func() {
 		if cancelled {
-			log.Printf("[FIXED-UI] Отмена уже выполняется, пропускаем")
+			log.Printf("[FIXED-UI] Cancel уже выполняется, пропускаем")
 			return
 		}
 		cancelled = true
@@ -871,14 +871,14 @@ func (p *PresenterImpl) ShowFirstNodeConfig(data *InitData) {
 		})
 
 	form.
-		AddButton("Далее", func() {
+		AddButton("Next", func() {
 			data.NodeType = "control-plane"
 			p.initializeCluster(data)
 		}).
-		AddButton("Назад", func() {
+		AddButton("Back", func() {
 			p.SwitchPage(p.pages, "node-type")
 		}).
-		AddButton("Отмена", func() {
+		AddButton("Cancel", func() {
 			p.app.Stop()
 		})
 
@@ -908,7 +908,7 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 	var info strings.Builder
 	info.WriteString(fmt.Sprintf("=== Детальная Информация об Узле ===\n\n"))
 	info.WriteString(fmt.Sprintf("Имя: %s\n", nodeInfo.Name))
-	info.WriteString(fmt.Sprintf("IP адрес: %s\n", nodeInfo.IP))
+	info.WriteString(fmt.Sprintf("IP Address: %s\n", nodeInfo.IP))
 	info.WriteString(fmt.Sprintf("Hostname: %s\n", nodeInfo.Hostname))
 	info.WriteString(fmt.Sprintf("MAC адрес: %s\n", nodeInfo.MAC))
 	info.WriteString(fmt.Sprintf("Тип: %s\n", nodeInfo.Type))
@@ -932,13 +932,13 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 	info.WriteString(fmt.Sprintf("Общий объем: %d MiB (%d GiB)\n", nodeInfo.Hardware.Memory.Size, nodeInfo.Hardware.Memory.Size/1024))
 
 	// Информация о дисках
-	info.WriteString("\n=== Диски ===\n")
+	info.WriteString("\n=== Diskи ===\n")
 	if len(nodeInfo.Disks) > 0 {
 		totalSize := 0
 		for i, disk := range nodeInfo.Disks {
 			sizeGB := disk.Size / 1024 / 1024 / 1024
 			totalSize += disk.Size
-			info.WriteString(fmt.Sprintf("Диск %d:\n", i+1))
+			info.WriteString(fmt.Sprintf("Disk %d:\n", i+1))
 			info.WriteString(fmt.Sprintf("  Имя: %s\n", disk.Name))
 			info.WriteString(fmt.Sprintf("  Размер: %d GB\n", sizeGB))
 			info.WriteString(fmt.Sprintf("  Путь: %s\n", disk.DevPath))
@@ -951,17 +951,17 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 	}
 
 	// Информация о сетевых интерфейсах
-	info.WriteString("\n=== Сетевые Интерфейсы ===\n")
+	info.WriteString("\n=== Сетевые Interfaceы ===\n")
 	if len(nodeInfo.Hardware.Interfaces) > 0 {
 		for i, iface := range nodeInfo.Hardware.Interfaces {
-			info.WriteString(fmt.Sprintf("Интерфейс %d:\n", i+1))
+			info.WriteString(fmt.Sprintf("Interface %d:\n", i+1))
 			info.WriteString(fmt.Sprintf("  Имя: %s\n", iface.Name))
 			info.WriteString(fmt.Sprintf("  MAC: %s\n", iface.MAC))
 
 			if len(iface.IPs) > 0 {
-				info.WriteString(fmt.Sprintf("  IP адреса: %s\n", strings.Join(iface.IPs, ", ")))
+				info.WriteString(fmt.Sprintf("  IP Addressа: %s\n", strings.Join(iface.IPs, ", ")))
 			} else {
-				info.WriteString("  IP адреса: не настроены\n")
+				info.WriteString("  IP Addressа: не настроены\n")
 			}
 		}
 	} else {
@@ -973,7 +973,7 @@ func (p *PresenterImpl) ShowNodeDetails(data *InitData) {
 
 	// Создаем кнопки
 	buttons := tview.NewForm().
-		AddButton("Назад", func() {
+		AddButton("Back", func() {
 				p.Go(StateNodeSelect)
 			})
 
@@ -1028,7 +1028,7 @@ func (p *PresenterImpl) showCozystackScanningModal(data *InitData) {
 	// Создаем функцию отмены
 	dismissModal := func() {
 		if cancelled {
-			log.Printf("[FIXED-UI] Отмена Cozystack уже выполняется, пропускаем")
+			log.Printf("[FIXED-UI] Cancel Cozystack уже выполняется, пропускаем")
 			return
 		}
 		cancelled = true
@@ -1374,7 +1374,7 @@ func (p *PresenterImpl) initializeCluster(data *InitData) {
 
 		// Показываем успешное завершение
 		p.app.QueueUpdateDraw(func() {
-			p.ShowSuccessModal(fmt.Sprintf("%s кластер успешно инициализирован!\n\nСозданные файлы:\n- talosconfig\n- secrets.yaml\n- Chart.yaml\n- values.yaml\n- templates/\n\nСледующие шаги:\n1. Проверьте созданные файлы\n2. Запустите 'helm install' для развертывания\n3. Используйте 'kubectl' для управления кластером",
+			p.ShowSuccessModal(fmt.Sprintf("%s кластер успешно инициализирован!\n\nСозданные файлы:\n- talosconfig\n- secrets.yaml\n- Chart.yaml\n- values.yaml\n- templates/\n\nNext steps:\n1. Проверьте созданные файлы\n2. Запустите 'helm install' для развертывания\n3. Use 'kubectl' to manage the cluster",
 				strings.Title(data.Preset)))
 		})
 	})
@@ -1505,7 +1505,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 			nodeValues["nodeInterfaces"] = nodeInterface
 		}
 
-		// Добавляем DNS серверы
+		// Добавляем DNS Servers
 		if data.DNSServers != "" {
 			dns := strings.Split(data.DNSServers, ",")
 			for i, server := range dns {
@@ -1613,7 +1613,7 @@ func (p *PresenterImpl) generateMachineConfig(data *InitData) {
 
 		// Показываем результат
 		p.app.QueueUpdateDraw(func() {
-			p.ShowSuccessModal(fmt.Sprintf("Машинная конфигурация успешно создана!\n\nФайл: %s\nНода: %s (%s)\nТип: %s\n\nСледующие шаги:\n1. Установите Talos на ноду используя этот файл\n2. Примените конфигурацию: talosctl apply-config -n %s -f %s",
+			p.ShowSuccessModal(fmt.Sprintf("Машинная конфигурация успешно создана!\n\nФайл: %s\nНода: %s (%s)\nТип: %s\n\nNext steps:\n1. Установите Talos на ноду используя этот файл\n2. Примените конфигурацию: talosctl apply-config -n %s -f %s",
 				configFilename, data.Hostname, data.SelectedNode, data.NodeType, data.SelectedNode, configFilename))
 		})
 	})

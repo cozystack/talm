@@ -25,18 +25,18 @@ type WizardImpl struct {
 
 // NewWizard создает новый экземпляр мастера инициализации
 func NewWizard() *WizardImpl {
-	// Инициализируем данные
+	// Initialize data
 	data := &InitData{
 		Preset:        "generic",
 		ClusterName:   "mycluster",
 		NetworkToScan: "192.168.1.0/24", // Значение по умолчанию для сканирования сети
 	}
 
-	// Создаем приложение
+	// Create application
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
-	// Создаем компоненты
+	// Create components
 	validator := NewValidator()
 	commandExecutor := &DefaultCommandExecutor{}
 	scanner := NewNetworkScanner(commandExecutor)
@@ -53,87 +53,87 @@ func NewWizard() *WizardImpl {
 		generator: generator,
 	}
 
-	// Создаем презентер с зависимостями
+	// Create presenter with dependencies
 	presenter := NewPresenter(app, pages, data, wizard)
 	wizard.presenter = presenter
 
 	return wizard
 }
 
-// Run запускает мастер инициализации
+// Run starts the initialization wizard
 func (w *WizardImpl) Run() error {
-	// Настраиваем логирование в файл
+	// Configure logging to file
 	logFile, err := os.OpenFile("debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть файл логов: %v", err)
+		return fmt.Errorf("failed to open log file: %v", err)
 	}
 	defer logFile.Close()
 	log.SetOutput(logFile)
 	log.SetFlags(log.LstdFlags)
 	log.SetPrefix("DEBUG: ")
-	log.Printf("Запуск мастера инициализации")
+	log.Printf("Starting initialization wizard")
 
-	// Проверяем существующие файлы
+	// Check existing files
 	filesExist := w.checkExistingFiles()
-	log.Printf("Проверка существующих файлов: %v", filesExist)
+	log.Printf("Checking existing files: %v", filesExist)
 
-	// Создаем первую страницу в зависимости от состояния
+	// Create first page depending on state
 	if filesExist {
-		// Если файлы уже существуют, показываем мастер для добавления новой ноды
-		log.Printf("Диагностика: вызываем ShowAddNodeWizard, filesExist=%v", filesExist)
+		// If files already exist, show wizard for adding new node
+		log.Printf("Diagnostics: calling ShowAddNodeWizard, filesExist=%v", filesExist)
 		w.presenter.ShowAddNodeWizard(w.data)
 	} else {
 		// Иначе показываем полный мастер
-		log.Printf("Диагностика: вызываем ShowStep1Form, filesExist=%v", filesExist)
-		log.Printf("Диагностика: w.presenter=%v, w.data=%v", w.presenter, w.data)
+		log.Printf("Diagnostics: calling ShowStep1Form, filesExist=%v", filesExist)
+		log.Printf("Diagnostics: w.presenter=%v, w.data=%v", w.presenter, w.data)
 		
-		// Проверяем состояние presenter'а
+		// Check presenter state
 		if w.presenter == nil {
-			log.Printf("КРИТИЧЕСКАЯ ОШИБКА: w.presenter равен nil!")
-			return fmt.Errorf("presenter не инициализирован")
+			log.Printf("CRITICAL ERROR: w.presenter is nil!")
+			return fmt.Errorf("presenter not initialized")
 		}
 		
-		// Проверяем состояние данных
+		// Check data state
 		if w.data == nil {
-			log.Printf("КРИТИЧЕСКАЯ ОШИБКА: w.data равен nil!")
-			return fmt.Errorf("данные инициализации не инициализированы")
+			log.Printf("CRITICAL ERROR: w.data is nil!")
+			return fmt.Errorf("initialization data not initialized")
 		}
 		
-		log.Printf("Диагностика: presenter и data в порядке, вызываем ShowStep1Form")
-		// ShowStep1Form уже создает и добавляет страницу самостоятельно
+		log.Printf("Diagnostics: presenter and data are fine, calling ShowStep1Form")
+		// ShowStep1Form already creates and adds the page itself
 		w.presenter.ShowStep1Form(w.data)
 	}
 
-	// Настраиваем обработку Ctrl+C
+	// Configure Ctrl+C handling
 	w.setupInputCapture()
 
-	// Запускаем приложение
-	log.Printf("ДИАГНОСТИКА WIZARD: Перед запуском app.SetRoot...")
+	// Start application
+	log.Printf("WIZARD DIAGNOSTICS: Before app.SetRoot...")
 	if err := w.app.SetRoot(w.pages, true).SetFocus(w.pages).Run(); err != nil {
-		log.Printf("ДИАГНОСТИКА WIZARD: Ошибка запуска приложения: %v", err)
-		return fmt.Errorf("не удалось запустить приложение: %v", err)
+		log.Printf("WIZARD DIAGNOSTICS: Application startup error: %v", err)
+		return fmt.Errorf("failed to start application: %v", err)
 	}
-	log.Printf("ДИАГНОСТИКА WIZARD: Приложение завершено")
+	log.Printf("WIZARD DIAGNOSTICS: Application finished")
 
 	return nil
 }
 
-// getData возвращает данные инициализации
+// getData returns initialization data
 func (w *WizardImpl) getData() *InitData {
 	return w.data
 }
 
-// getApp возвращает приложение
+// getApp returns application
 func (w *WizardImpl) getApp() *tview.Application {
 	return w.app
 }
 
-// getPages возвращает страницы
+// getPages returns pages
 func (w *WizardImpl) getPages() *tview.Pages {
 	return w.pages
 }
 
-// setupInputCapture настраивает обработку ввода
+// setupInputCapture configures input handling
 func (w *WizardImpl) setupInputCapture() {
 	w.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyCtrlC {
@@ -144,7 +144,7 @@ func (w *WizardImpl) setupInputCapture() {
 	})
 }
 
-// checkExistingFiles проверяет наличие существующих файлов конфигурации
+// checkExistingFiles checks for existing configuration files
 func (w *WizardImpl) checkExistingFiles() bool {
 	files := []string{"Chart.yaml", "values.yaml", "secrets.yaml", "talosconfig", "kubeconfig"}
 	for _, file := range files {
@@ -155,38 +155,38 @@ func (w *WizardImpl) checkExistingFiles() bool {
 	return false
 }
 
-// PerformNetworkScan выполняет сканирование сети с прогрессом
+// PerformNetworkScan performs network scanning with progress
 func (w *WizardImpl) PerformNetworkScan(ctx context.Context, cidr string) ([]NodeInfo, error) {
-	log.Printf("Запуск сканирования сети для CIDR: %s", cidr)
+	log.Printf("Starting network scan for CIDR: %s", cidr)
 
-	// Валидируем CIDR
+	// Validate CIDR
 	if err := w.validator.ValidateNetworkCIDR(cidr); err != nil {
-		return nil, fmt.Errorf("некорректный CIDR: %v", err)
+		return nil, fmt.Errorf("incorrect CIDR: %v", err)
 	}
 
-	// Создаем контекст с таймаутом
+	// Create context with timeout
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Сканируем сеть с прогрессом
+	// Scan network with progress
 	nodes, err := w.scanner.ScanNetworkWithProgress(scanCtx, cidr, func(progress int) {
-		log.Printf("Прогресс сканирования: %d%%", progress)
+		log.Printf("Scan progress: %d%%", progress)
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("сканирование не удалось: %v", err)
+		return nil, fmt.Errorf("scanning failed: %v", err)
 	}
 
-	// Обрабатываем результаты сканирования
+	// Process scan results
 	processedNodes := w.processor.ProcessScanResults(nodes)
 	
-	log.Printf("Сканирование завершено, найдено %d нод", len(processedNodes))
+	log.Printf("Scanning completed, found %d nodes", len(processedNodes))
 	return processedNodes, nil
 }
 
-// ValidateAndProcessNodeConfig валидирует и обрабатывает конфигурацию ноды
+// ValidateAndProcessNodeConfig validates and processes node configuration
 func (w *WizardImpl) ValidateAndProcessNodeConfig(data *InitData) error {
-	// Валидируем обязательные поля
+	// Validate required fields
 	if err := w.validator.ValidateRequiredField(data.NodeType, "Role"); err != nil {
 		return err
 	}
@@ -203,12 +203,12 @@ func (w *WizardImpl) ValidateAndProcessNodeConfig(data *InitData) error {
 		return err
 	}
 
-	// Валидируем сетевую конфигурацию
+	// Validate network configuration
 	if err := w.validator.ValidateNetworkConfig(data.Addresses, data.Gateway, data.DNSServers); err != nil {
 		return err
 	}
 
-	// Валидируем VIP если указан
+	// Validate VIP if specified
 	if err := w.validator.ValidateVIP(data.VIP); err != nil {
 		return err
 	}
@@ -216,25 +216,25 @@ func (w *WizardImpl) ValidateAndProcessNodeConfig(data *InitData) error {
 	return nil
 }
 
-// GenerateAndSaveConfig генерирует и сохраняет конфигурацию
+// GenerateAndSaveConfig generates and saves configuration
 func (w *WizardImpl) GenerateAndSaveConfig(data *InitData, isFirstNode bool) error {
-	log.Printf("Генерация и сохранение конфигурации, первая нода: %v", isFirstNode)
+	log.Printf("Configuration generation and saving, first node: %v", isFirstNode)
 
 	if isFirstNode {
-		// Генерируем полную конфигурацию кластера
+		// Generate full cluster configuration
 		if err := w.generator.GenerateBootstrapConfig(data); err != nil {
-			return fmt.Errorf("не удалось сгенерировать конфигурацию кластера: %v", err)
+			return fmt.Errorf("failed to generate cluster configuration: %v", err)
 		}
 
-		// Показываем запрос на bootstrap
+		// Show bootstrap prompt
 		w.presenter.ShowBootstrapPrompt(data, "nodes/node1.yaml")
 	} else {
-		// Обновляем существующий values.yaml
+		// Update existing values.yaml
 		if err := w.generator.UpdateValuesYAMLWithNode(data); err != nil {
-			return fmt.Errorf("не удалось обновить values.yaml: %v", err)
+			return fmt.Errorf("failed to update values.yaml: %v", err)
 		}
 
-		// Генерируем конфигурацию ноды
+		// Generate node configuration
 		nodeFileName := fmt.Sprintf("nodes/node-%d.yaml", len(w.getExistingNodes())+1)
 		values, err := w.generator.LoadValuesYAML()
 		if err != nil {
@@ -242,10 +242,10 @@ func (w *WizardImpl) GenerateAndSaveConfig(data *InitData, isFirstNode bool) err
 		}
 
 		if err := w.generator.GenerateNodeConfig(nodeFileName, data, values); err != nil {
-			return fmt.Errorf("не удалось сгенерировать конфигурацию ноды: %v", err)
+			return fmt.Errorf("failed to generate node configuration: %v", err)
 		}
 
-		// Показываем успешное сообщение
+		// Show success message
 		w.presenter.ShowSuccessModal(fmt.Sprintf("Нода %s успешно добавлена!\n\nКонфигурация сохранена в: %s", 
 			data.Hostname, nodeFileName))
 	}
@@ -253,24 +253,24 @@ func (w *WizardImpl) GenerateAndSaveConfig(data *InitData, isFirstNode bool) err
 	return nil
 }
 
-// BootstrapCluster выполняет bootstrap кластера
+// BootstrapCluster performs cluster bootstrap
 func (w *WizardImpl) BootstrapCluster() error {
-	log.Printf("Запуск bootstrap кластера")
+	log.Printf("Starting cluster bootstrap")
 
 	w.presenter.ShowProgressModal("Выполняется bootstrap etcd...", func() {
-		// Загружаем существующий values.yaml
+		// Load existing values.yaml
 		values, err := w.generator.LoadValuesYAML()
 		if err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось загрузить values.yaml: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to load values.yaml: %v", err))
 			return
 		}
 
-		// Обновляем флаг etcdBootstrapped
+		// Update etcdBootstrapped flag
 		values.EtcdBootstrapped = true
 
-		// Сохраняем обновленный values.yaml
+		// Save updated values.yaml
 		if err := w.generator.SaveValuesYAML(*values); err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось сохранить values.yaml: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to save values.yaml: %v", err))
 			return
 		}
 
@@ -280,26 +280,26 @@ func (w *WizardImpl) BootstrapCluster() error {
 	return nil
 }
 
-// InitializeGenericCluster инициализирует generic кластер
+// InitializeGenericCluster initializes generic cluster
 func (w *WizardImpl) InitializeGenericCluster(data *InitData) error {
-	log.Printf("Инициализация generic кластера")
+	log.Printf("Generic cluster initialization")
 
-	w.presenter.ShowProgressModal("Инициализация generic кластера...", func() {
-		// Создаем необходимые директории
+	w.presenter.ShowProgressModal("Generic cluster initialization...", func() {
+		// Create necessary directories
 		if err := os.MkdirAll("nodes", 0755); err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось создать директории: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to create directories: %v", err))
 			return
 		}
 
-		// Генерируем Chart.yaml
+		// Generate Chart.yaml
 		chart, err := w.generator.GenerateChartYAML(data.ClusterName, data.Preset)
 		if err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось сгенерировать Chart.yaml: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to generate Chart.yaml: %v", err))
 			return
 		}
 
 		if err := w.generator.SaveChartYAML(chart); err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось сохранить Chart.yaml: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to save Chart.yaml: %v", err))
 			return
 		}
 
@@ -311,7 +311,7 @@ func (w *WizardImpl) InitializeGenericCluster(data *InitData) error {
 		}
 
 		if err := w.generator.SaveValuesYAML(values); err != nil {
-			w.presenter.ShowErrorModal(fmt.Sprintf("Не удалось сохранить values.yaml: %v", err))
+			w.presenter.ShowErrorModal(fmt.Sprintf("Failed to save values.yaml: %v", err))
 			return
 		}
 
@@ -321,21 +321,21 @@ func (w *WizardImpl) InitializeGenericCluster(data *InitData) error {
 	return nil
 }
 
-// ProcessCozyStackNode обрабатывает ноду для Cozystack пресета
+// ProcessCozyStackNode processes node for Cozystack preset
 func (w *WizardImpl) ProcessCozyStackNode(data *InitData) error {
-	log.Printf("Обработка ноды для Cozystack пресета")
+	log.Printf("Processing node for Cozystack preset")
 
-	// Для Cozystack используем упрощенный workflow
+	// For Cozystack use simplified workflow
 	w.presenter.ShowNodeSelection(data, "Select First Control Plane Node")
 	return nil
 }
 
-// getExistingNodes получает список существующих нод
+// getExistingNodes gets list of existing nodes
 func (w *WizardImpl) getExistingNodes() []NodeInfo {
-	// Загружаем values.yaml для получения списка нод
+	// Load values.yaml to get list of nodes
 	values, err := w.generator.LoadValuesYAML()
 	if err != nil {
-		log.Printf("Не удалось загрузить values.yaml: %v", err)
+		log.Printf("Failed to load values.yaml: %v", err)
 		return []NodeInfo{}
 	}
 
@@ -351,42 +351,42 @@ func (w *WizardImpl) getExistingNodes() []NodeInfo {
 	return nodes
 }
 
-// GetValidator возвращает валидатор
+// GetValidator returns validator
 func (w *WizardImpl) GetValidator() Validator {
 	return w.validator
 }
 
-// GetScanner возвращает сканер сети
+// GetScanner returns network scanner
 func (w *WizardImpl) GetScanner() NetworkScanner {
 	return w.scanner
 }
 
-// GetProcessor возвращает процессор данных
+// GetProcessor returns data processor
 func (w *WizardImpl) GetProcessor() DataProcessor {
 	return w.processor
 }
 
-// GetGenerator возвращает генератор конфигураций
+// GetGenerator returns configuration generator
 func (w *WizardImpl) GetGenerator() Generator {
 	return w.generator
 }
 
-// GetPresenter возвращает презентер
+// GetPresenter returns presenter
 func (w *WizardImpl) GetPresenter() Presenter {
 	return w.presenter
 }
 
-// RunWithCustomConfig запускает мастер с пользовательской конфигурацией
+// RunWithCustomConfig starts wizard with custom configuration
 func (w *WizardImpl) RunWithCustomConfig(config InitData) error {
 	w.data = &config
 	return w.Run()
 }
 
-// SetupLogging настраивает логирование
+// SetupLogging configures logging
 func (w *WizardImpl) SetupLogging(logFile string) error {
 	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть файл логов: %v", err)
+		return fmt.Errorf("failed to open log file: %v", err)
 	}
 	
 	log.SetOutput(file)
@@ -398,7 +398,7 @@ func (w *WizardImpl) SetupLogging(logFile string) error {
 
 // Shutdown корректно завершает работу мастера
 func (w *WizardImpl) Shutdown() {
-	log.Printf("Завершение работы мастера инициализации")
+	log.Printf("Shutting down initialization wizard")
 	if w.app != nil {
 		w.app.Stop()
 	}

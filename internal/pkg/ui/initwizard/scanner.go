@@ -19,13 +19,13 @@ type NodeCommandExecutor interface {
 	ExecuteNodeCommand(ctx context.Context, nodeIP, command string) (string, error)
 }
 
-// NetworkScannerImpl реализует интерфейс NetworkScanner
+// NetworkScannerImpl implements the NetworkScanner interface
 type NetworkScannerImpl struct {
 	timeout         time.Duration
 	commandExecutor NodeCommandExecutor
 }
 
-// NewNetworkScanner создает новый экземпляр сканера сети
+// NewNetworkScanner creates a new network scanner instance
 func NewNetworkScanner(commandExecutor NodeCommandExecutor) NetworkScanner {
 	return &NetworkScannerImpl{
 		timeout:         2 * time.Second,
@@ -35,7 +35,7 @@ func NewNetworkScanner(commandExecutor NodeCommandExecutor) NetworkScanner {
 
 // ScanNetwork сканирует сеть для обнаружения нод Talos
 func (s *NetworkScannerImpl) ScanNetwork(ctx context.Context, cidr string) ([]NodeInfo, error) {
-	log.Printf("[DIAGNOSTIC] Запуск сканирования сети для CIDR: %s", cidr)
+	log.Printf("[DIAGNOSTIC] Starting network scan for CIDR: %s", cidr)
 	start := time.Now()
 	log.Printf("[DIAGNOSTIC] Контекст отмены: %v", ctx.Err())
 
@@ -80,7 +80,7 @@ func (s *NetworkScannerImpl) ScanNetworkWithProgress(ctx context.Context, cidr s
 
 	updateProgress("Начало", 5)
 
-	// Сканируем сеть с heartbeat
+	// Scan the network с heartbeat
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
 	defer heartbeatCancel()
 
@@ -106,7 +106,7 @@ func (s *NetworkScannerImpl) ScanNetworkWithProgress(ctx context.Context, cidr s
 
 	updateProgress("Сканирование nmap", 10)
 
-	// Сканируем сеть
+	// Scan the network
 	ips, err := s.scanForTalOSNodes(ctx, cidr)
 	if err != nil {
 		heartbeatCancel()
@@ -146,7 +146,7 @@ func (s *NetworkScannerImpl) IsTalosNode(ctx context.Context, ip string) bool {
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -843,7 +843,7 @@ func (s *NetworkScannerImpl) getHostname(ctx context.Context, ip string) (string
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -934,7 +934,7 @@ func (s *NetworkScannerImpl) getProcessors(ctx context.Context, ip string) ([]Pr
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -985,7 +985,7 @@ func (s *NetworkScannerImpl) getMemory(ctx context.Context, ip string) (Memory, 
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -1036,7 +1036,7 @@ func (s *NetworkScannerImpl) getBlockdevices(ctx context.Context, ip string) ([]
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -1138,7 +1138,7 @@ func (s *NetworkScannerImpl) getInterfaceIPs(ctx context.Context, ip, interfaceN
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -1212,7 +1212,7 @@ func (s *NetworkScannerImpl) getInterfaceStatus(ctx context.Context, ip, interfa
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -1297,7 +1297,7 @@ func (s *NetworkScannerImpl) getInterfaces(ctx context.Context, ip string) ([]In
 	default:
 	}
 
-	// Создаем контекст с таймаутом для этой операции
+	// Create context with timeout для этой операции
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 

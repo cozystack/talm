@@ -7,7 +7,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 )
 
-// Wizard интерфейс основного компонента мастера инициализации
+// Wizard interface of the main initialization wizard component
 type Wizard interface {
 	Run() error
 	getData() *InitData
@@ -17,7 +17,7 @@ type Wizard interface {
 	GetScanner() NetworkScanner
 }
 
-// Validator интерфейс компонента валидации
+// Validator interface of the validation component
 type Validator interface {
 	ValidateNetworkCIDR(cidr string) error
 	ValidateClusterName(name string) error
@@ -32,7 +32,7 @@ type Validator interface {
 	ValidateAPIServerURL(url string) error
 }
 
-// DataProcessor интерфейс компонента обработки данных
+// DataProcessor interface of the data processing component
 type DataProcessor interface {
 	FilterAndSortNodes(nodes []NodeInfo) []NodeInfo
 	ExtractHardwareInfo(ip string) (Hardware, error)
@@ -41,7 +41,7 @@ type DataProcessor interface {
 	RemoveDuplicatesByMAC(nodes []NodeInfo) []NodeInfo
 }
 
-// Generator интерфейс компонента генерации конфигураций
+// Generator interface of the configuration generation component
 type Generator interface {
 	GenerateChartYAML(clusterName, preset string) (ChartYAML, error)
 	GenerateValuesYAML(data *InitData) (ValuesYAML, error)
@@ -59,7 +59,7 @@ type Generator interface {
 	SaveSecretsBundle(bundle *secrets.Bundle) error
 }
 
-// NetworkScanner интерфейс компонента сканирования сети
+// NetworkScanner interface of the network scanning component
 type NetworkScanner interface {
 	ScanNetwork(ctx context.Context, cidr string) ([]NodeInfo, error)
 	ScanNetworkWithProgress(ctx context.Context, cidr string, progressFunc func(int)) ([]NodeInfo, error)
@@ -69,7 +69,7 @@ type NetworkScanner interface {
 	ParallelScan(ctx context.Context, ips []string) ([]NodeInfo, error)
 }
 
-// Presenter интерфейс компонента пользовательского интерфейса
+// Presenter interface of the user interface component
 type Presenter interface {
 	ShowStep1Form(data *InitData) *tview.Form
 	ShowGenericStep2(data *InitData)
@@ -87,7 +87,7 @@ type Presenter interface {
 	ShowFirstNodeConfig(data *InitData)
 }
 
-// UIHelper интерфейс вспомогательных функций UI
+// UIHelper interface of UI helper functions
 type UIHelper interface {
 	CreateButton(text string, handler func()) *tview.Button
 	CreateInputField(label, initialText string, fieldWidth int, validator func(string), changed func(string)) *tview.InputField

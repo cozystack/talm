@@ -1,6 +1,6 @@
 package initwizard
 
-// InitData содержит данные для инициализации кластера
+// InitData contains data for cluster initialization
 type InitData struct {
 	TalosVersion      string
 	Preset            string
@@ -29,7 +29,7 @@ type InitData struct {
 	MachineConfig     string
 }
 
-// NodeInfo содержит информацию о ноде
+// NodeInfo contains node information
 type NodeInfo struct {
 	Name         string
 	IP           string
@@ -44,12 +44,12 @@ type NodeInfo struct {
 	Hardware     Hardware
 }
 
-// Hostname представляет имя хоста
+// Hostname represents hostname
 type Hostname struct {
 	Hostname string `json:"hostname"`
 }
 
-// Hardware представляет информацию об оборудовании
+// Hardware represents hardware information
 type Hardware struct {
 	Processors   []Processor   `json:"processors"`
 	Memory       Memory        `json:"memory"`
@@ -57,19 +57,19 @@ type Hardware struct {
 	Interfaces   []Interface   `json:"interfaces"`
 }
 
-// Processor представляет процессор
+// Processor represents processor
 type Processor struct {
 	Manufacturer string `json:"manufacturer"`
 	ProductName  string `json:"productName"`
 	ThreadCount  int    `json:"threadCount"`
 }
 
-// Memory представляет информацию о памяти
+// Memory represents memory information
 type Memory struct {
 	Size int `json:"size"`
 }
 
-// Blockdevice представляет блочное устройство
+// Blockdevice represents block device
 type Blockdevice struct {
 	Name      string `json:"-"`
 	Size      int    `json:"size"`
@@ -81,19 +81,19 @@ type Blockdevice struct {
 	} `json:"metadata"`
 }
 
-// Interfaces представляет список сетевых интерфейсов
+// Interfaces represents list of network interfaces
 type Interfaces struct {
 	Interfaces []Interface `json:"interfaces"`
 }
 
-// Interface представляет сетевой интерфейс
+// Interface represents network interface
 type Interface struct {
 	Name string   `json:"name"`
 	MAC  string   `json:"hardwareAddr"`
 	IPs  []string `json:"ips,omitempty"`
 }
 
-// ValuesYAML представляет структуру values.yaml
+// ValuesYAML represents values.yaml structure
 type ValuesYAML struct {
 	ClusterName        string                `yaml:"clusterName"`
 	FloatingIP         string                `yaml:"floatingIP,omitempty"`
@@ -112,13 +112,13 @@ type ValuesYAML struct {
 	Nodes              map[string]NodeConfig `yaml:"nodes,omitempty"`
 }
 
-// NodeConfig представляет конфигурацию ноды
+// NodeConfig represents node configuration
 type NodeConfig struct {
 	Type string `yaml:"type"`
 	IP   string `yaml:"ip"`
 }
 
-// ChartYAML представляет структуру Chart.yaml
+// ChartYAML represents Chart.yaml structure
 type ChartYAML struct {
 	APIVersion  string            `yaml:"apiVersion"`
 	Name        string            `yaml:"name"`
