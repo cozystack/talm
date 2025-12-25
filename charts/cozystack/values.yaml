@@ -11,4 +11,4 @@ advertisedSubnets:
 oidcIssuerUrl: ""
 certSANs: []
 nr_hugepages: 0
-allocateNodeCIDRs: false
+allocateNodeCIDRs: true
