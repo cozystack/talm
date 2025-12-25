@@ -7,21 +7,21 @@ import (
 	"strings"
 )
 
-// ValidatorImpl реализует интерфейс Validator
+// ValidatorImpl implements the Validator interface
 type ValidatorImpl struct{}
 
-// NewValidator создает новый экземпляр валидатора
+// NewValidator creates a new validator instance
 func NewValidator() Validator {
 	return &ValidatorImpl{}
 }
 
-// ValidateNetworkCIDR проверяет корректность CIDR нотации сети
+// ValidateNetworkCIDR validates the correctness of CIDR network notation
 func (v *ValidatorImpl) ValidateNetworkCIDR(cidr string) error {
 	if strings.TrimSpace(cidr) == "" {
 		return NewValidationError(
 			"VAL_001", 
-			"сеть для сканирования не может быть пустой", 
-			"поле CIDR сети обязательно для сканирования",
+			"network for scanning cannot be empty", 
+			"CIDR network field is required for scanning",
 		)
 	}
 
@@ -29,8 +29,8 @@ func (v *ValidatorImpl) ValidateNetworkCIDR(cidr string) error {
 	if err != nil {
 		return NewValidationErrorWithCause(
 			"VAL_002", 
-			"некорректная CIDR нотация", 
-			fmt.Sprintf("предоставленная CIDR: %s", cidr), 
+			"incorrect CIDR notation", 
+			fmt.Sprintf("provided CIDR: %s", cidr), 
 			err,
 		)
 	}
@@ -38,17 +38,17 @@ func (v *ValidatorImpl) ValidateNetworkCIDR(cidr string) error {
 	return nil
 }
 
-// ValidateClusterName проверяет корректность имени кластера
+// ValidateClusterName validates the correctness of the cluster name
 func (v *ValidatorImpl) ValidateClusterName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return NewValidationError(
 			"VAL_003", 
-			"имя кластера не может быть пустым", 
-			"поле имени кластера обязательно",
+			"cluster name cannot be empty", 
+			"cluster name field is required",
 		)
 	}
 
-	// Проверяем, что имя содержит только допустимые символы
+	// Check that the name contains only valid characters
 	validName := regexp.MustCompile(`^[a-z0-9-]+$`)
 	if !validName.MatchString(name) {
 		return NewValidationError(
@@ -58,7 +58,7 @@ func (v *ValidatorImpl) ValidateClusterName(name string) error {
 		)
 	}
 
-	// Проверяем длину имени
+	// Check the name length
 	if len(name) > 50 {
 		return NewValidationError(
 			"VAL_005", 
@@ -70,83 +70,83 @@ func (v *ValidatorImpl) ValidateClusterName(name string) error {
 	return nil
 }
 
-// ValidateHostname проверяет корректность имени хоста
+// ValidateHostname validates the correctness of the hostname
 func (v *ValidatorImpl) ValidateHostname(hostname string) error {
 	if strings.TrimSpace(hostname) == "" {
 		return NewValidationError(
 			"VAL_006", 
-			"имя хоста не может быть пустым", 
-			"поле имени хоста обязательно",
+			"hostname cannot be empty", 
+			"hostname field is required",
 		)
 	}
 
-	// Проверяем, что hostname соответствует RFC стандарту
+	// Check that hostname complies with RFC standard
 	validHostname := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
 	if !validHostname.MatchString(hostname) {
 		return NewValidationError(
 			"VAL_007", 
-			"некорректное имя хоста", 
-			fmt.Sprintf("предоставленное имя хоста: %s", hostname),
+			"incorrect hostname", 
+			fmt.Sprintf("provided hostname: %s", hostname),
 		)
 	}
 
 	return nil
 }
 
-// ValidateRequiredField проверяет, что обязательное поле не пустое
+// ValidateRequiredField checks that the required field is not empty
 func (v *ValidatorImpl) ValidateRequiredField(value, fieldName string) error {
 	if strings.TrimSpace(value) == "" {
 		return NewValidationError(
 			"VAL_008", 
-			fmt.Sprintf("поле '%s' является обязательным", fieldName), 
-			"значение поля не должно быть пустым",
+			fmt.Sprintf("field '%s' is required", fieldName), 
+			"field value should not be empty",
 		)
 	}
 	return nil
 }
 
-// ValidateIP проверяет корректность IP адреса
+// ValidateIP validates the correctness of the IP address
 func (v *ValidatorImpl) ValidateIP(ip string) error {
 	if strings.TrimSpace(ip) == "" {
 		return NewValidationError(
 			"VAL_009", 
-			"IP адрес не может быть пустым", 
-			"поле IP адреса обязательно",
+			"IP address cannot be empty", 
+			"IP address field is required",
 		)
 	}
 
 	if parsedIP := net.ParseIP(ip); parsedIP == nil {
 		return NewValidationError(
 			"VAL_010", 
-			"некорректный IP адрес", 
-			fmt.Sprintf("предоставленный IP: %s", ip),
+			"incorrect IP address", 
+			fmt.Sprintf("provided IP: %s", ip),
 		)
 	}
 
 	return nil
 }
 
-// ValidateVIP проверяет корректность виртуального IP адреса
+// ValidateVIP validates the correctness of the virtual IP address
 func (v *ValidatorImpl) ValidateVIP(vip string) error {
 	if strings.TrimSpace(vip) == "" {
-		// VIP опциональный, пустая строка допустима
+		// VIP is optional, empty string is allowed
 		return nil
 	}
 
 	return v.ValidateIP(vip)
 }
 
-// ValidateDNSservers проверяет корректность списка DNS серверов
+// ValidateDNSservers validates the correctness of the DNS servers list
 func (v *ValidatorImpl) ValidateDNSservers(dns string) error {
 	if strings.TrimSpace(dns) == "" {
 		return NewValidationError(
 			"VAL_011", 
-			"DNS серверы не могут быть пустыми", 
-			"необходимо указать хотя бы один DNS сервер",
+			"DNS servers cannot be empty", 
+			"at least one DNS server must be specified",
 		)
 	}
 
-	// Разделяем список DNS серверов
+	// Split the DNS servers list
 	dnsServers := strings.Split(dns, ",")
 
 	var invalidServers []string
@@ -156,7 +156,7 @@ func (v *ValidatorImpl) ValidateDNSservers(dns string) error {
 			continue
 		}
 
-		// Проверяем каждый DNS сервер
+		// Check each DNS server
 		if err := v.ValidateIP(server); err != nil {
 			invalidServers = append(invalidServers, server)
 		}
@@ -165,27 +165,27 @@ func (v *ValidatorImpl) ValidateDNSservers(dns string) error {
 	if len(invalidServers) > 0 {
 		return NewValidationError(
 			"VAL_012", 
-			"обнаружены некорректные DNS серверы", 
-			fmt.Sprintf("некорректные серверы: %v", invalidServers),
+			"incorrect DNS servers found", 
+			fmt.Sprintf("incorrect servers: %v", invalidServers),
 		)
 	}
 
 	return nil
 }
 
-// ValidateNetworkConfig проверяет корректность сетевой конфигурации
+// ValidateNetworkConfig validates the correctness of the network configuration
 func (v *ValidatorImpl) ValidateNetworkConfig(addresses, gateway, dnsServers string) error {
-	// Проверяем адреса
+	// Check addresses
 	if err := v.ValidateRequiredField(addresses, "Addresses"); err != nil {
 		return err
 	}
 
-	// Проверяем шлюз
+	// Check gateway
 	if err := v.ValidateRequiredField(gateway, "Gateway"); err != nil {
 		return err
 	}
 
-	// Проверяем DNS серверы
+	// Check DNS servers
 	if err := v.ValidateDNSservers(dnsServers); err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func (v *ValidatorImpl) ValidateNetworkConfig(addresses, gateway, dnsServers str
 	return nil
 }
 
-// ValidateNodeType проверяет корректность типа ноды
+// ValidateNodeType validates the correctness of the node type
 func (v *ValidatorImpl) ValidateNodeType(nodeType string) error {
 	validTypes := []string{"controlplane", "worker", "control-plane"}
 
@@ -205,12 +205,12 @@ func (v *ValidatorImpl) ValidateNodeType(nodeType string) error {
 
 	return NewValidationError(
 		"VAL_013", 
-		"некорректный тип ноды", 
-		fmt.Sprintf("тип: %s, допустимые значения: %v", nodeType, validTypes),
+		"incorrect node type", 
+		fmt.Sprintf("type: %s, valid values: %v", nodeType, validTypes),
 	)
 }
 
-// ValidatePreset проверяет корректность пресета
+// ValidatePreset validates the correctness of the preset
 func (v *ValidatorImpl) ValidatePreset(preset string) error {
 	validPresets := []string{"generic", "cozystack"}
 
@@ -222,36 +222,36 @@ func (v *ValidatorImpl) ValidatePreset(preset string) error {
 
 	return NewValidationError(
 		"VAL_014", 
-		"некорректный пресет", 
-		fmt.Sprintf("пресет: %s, допустимые значения: %v", preset, validPresets),
+		"incorrect preset", 
+		fmt.Sprintf("preset: %s, valid values: %v", preset, validPresets),
 	)
 }
 
-// ValidateAPIServerURL проверяет корректность URL API сервера
+// ValidateAPIServerURL validates the correctness of the API server URL
 func (v *ValidatorImpl) ValidateAPIServerURL(url string) error {
 	if strings.TrimSpace(url) == "" {
 		return NewValidationError(
 			"VAL_015", 
-			"URL API сервера не может быть пустым", 
-			"необходимо указать URL API сервера кластера",
+			"API server URL cannot be empty", 
+			"cluster API server URL must be specified",
 		)
 	}
 
-	// Проверяем базовый формат URL
+	// Check the basic URL format
 	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
 		return NewValidationError(
 			"VAL_016", 
-			"URL API сервера должен начинаться с http:// или https://", 
-			fmt.Sprintf("предоставленный URL: %s", url),
+			"API server URL must start with http:// or https://", 
+			fmt.Sprintf("provided URL: %s", url),
 		)
 	}
 
-	// Проверяем, что URL содержит порт
+	// Check that the URL contains a port
 	if !strings.Contains(url, ":") {
 		return NewValidationError(
 			"VAL_017", 
-			"URL API сервера должен содержать порт (например, :6443)", 
-			fmt.Sprintf("предоставленный URL: %s", url),
+			"API server URL must contain a port (e.g., :6443)", 
+			fmt.Sprintf("provided URL: %s", url),
 		)
 	}
 
