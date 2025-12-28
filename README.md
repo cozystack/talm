@@ -159,7 +159,7 @@ Lookup function example:
 {{ lookup "nodeaddresses" "network" "default" }}
 ```
 
-\- is equiualent to:
+\- is equivalent to:
 
 ```bash
 talosctl get nodeaddresses --namespace=network default
