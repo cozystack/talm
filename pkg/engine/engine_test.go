@@ -18,9 +18,10 @@ import "testing"
 
 func TestIsTalosConfigPatch(t *testing.T) {
 	tests := []struct {
-		name     string
-		doc      string
-		expected bool
+		name      string
+		doc       string
+		expected  bool
+		expectErr bool
 	}{
 		{
 			name:     "machine config",
@@ -53,15 +54,26 @@ func TestIsTalosConfigPatch(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "invalid yaml",
-			doc:      "not: valid: yaml: here",
-			expected: false,
+			name:      "invalid yaml",
+			doc:       "not: valid: yaml: here",
+			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isTalosConfigPatch(tt.doc); got != tt.expected {
+			got, err := isTalosConfigPatch(tt.doc)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("isTalosConfigPatch() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("isTalosConfigPatch() unexpected error: %v", err)
+				return
+			}
+			if got != tt.expected {
 				t.Errorf("isTalosConfigPatch() = %v, want %v", got, tt.expected)
 			}
 		})
@@ -74,6 +86,7 @@ func TestExtractExtraDocuments(t *testing.T) {
 		patches   []string
 		wantTalos int
 		wantExtra int
+		wantErr   bool
 	}{
 		{
 			name:      "issue #66 scenario - talos config with UserVolumeConfig",
@@ -117,11 +130,26 @@ func TestExtractExtraDocuments(t *testing.T) {
 			wantTalos: 1,
 			wantExtra: 1,
 		},
+		{
+			name:    "invalid yaml should return error",
+			patches: []string{"machine:\n  network:\n    interfaces:\n    \n    []"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			talos, extra := extractExtraDocuments(tt.patches)
+			talos, extra, err := extractExtraDocuments(tt.patches)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("extractExtraDocuments() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("extractExtraDocuments() unexpected error: %v", err)
+				return
+			}
 			if len(talos) != tt.wantTalos {
 				t.Errorf("talosPatches count = %d, want %d", len(talos), tt.wantTalos)
 			}
