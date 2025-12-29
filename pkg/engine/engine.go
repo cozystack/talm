@@ -344,17 +344,16 @@ func mergeMaps(a, b map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-// isTalosConfigPatch checks if a YAML document is a Talos machine config patch
-// (contains machine: or cluster: keys) as opposed to other document types
-// like UserVolumeConfig, SideroLinkConfig, etc.
-func isTalosConfigPatch(doc string) bool {
+// isTalosConfigPatch checks if a YAML document is a Talos config patch.
+// Returns (isTalosPatch, parseError) - parseError is non-nil if YAML is invalid.
+func isTalosConfigPatch(doc string) (bool, error) {
 	var parsed map[string]interface{}
 	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
-		return false
+		return false, err
 	}
 	_, hasMachine := parsed["machine"]
 	_, hasCluster := parsed["cluster"]
-	return hasMachine || hasCluster
+	return hasMachine || hasCluster, nil
 }
 
 // yamlDocSeparator matches YAML document separator at the start of a line.
@@ -362,8 +361,8 @@ func isTalosConfigPatch(doc string) bool {
 var yamlDocSeparator = regexp.MustCompile(`(?m)^---[ \t]*$`)
 
 // extractExtraDocuments separates Talos config patches from other YAML documents.
-// Returns the Talos patches to be processed and extra documents to be appended to output.
-func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string) {
+// Returns the Talos patches to be processed, extra documents to be appended to output, and any error.
+func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string, err error) {
 	for _, patch := range patches {
 		// Normalize CRLF to LF for consistent splitting
 		patch = strings.ReplaceAll(patch, "\r\n", "\n")
@@ -374,19 +373,26 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 			if doc == "" {
 				continue
 			}
-			if isTalosConfigPatch(doc) {
+			isTalos, parseErr := isTalosConfigPatch(doc)
+			if parseErr != nil {
+				return nil, nil, fmt.Errorf("invalid YAML in template output: %w\n\nTemplate output:\n%s", parseErr, doc)
+			}
+			if isTalos {
 				talosPatches = append(talosPatches, doc)
 			} else {
 				extraDocs = append(extraDocs, doc)
 			}
 		}
 	}
-	return talosPatches, extraDocs
+	return talosPatches, extraDocs, nil
 }
 
 func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatches []string, chrt *chart.Chart) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
-	talosPatches, extraDocs := extractExtraDocuments(configPatches)
+	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
+	if err != nil {
+		return nil, err
+	}
 
 	// Generate options for the configuration based on the provided flags
 	genOptions := []generate.Option{}
