@@ -144,6 +144,15 @@ busPath: {{ .spec.busPath }}
 
 {{- define "talm.discovered.existing_interfaces_configuration" }}
 {{- with (lookup "machineconfig" "" "v1alpha1") }}
-{{ toYaml .spec | fromYaml | dig "machine" "network" "interfaces" (list) | toYaml }}
+{{- $spec := .spec }}
+{{- $interfaces := list }}
+{{- if kindIs "string" $spec }}
+{{- $interfaces = $spec | fromYaml | dig "machine" "network" "interfaces" (list) }}
+{{- else }}
+{{- $interfaces = $spec | dig "machine" "network" "interfaces" (list) }}
+{{- end }}
+{{- if $interfaces }}
+{{- $interfaces | toYaml }}
+{{- end }}
 {{- end }}
 {{- end }}
