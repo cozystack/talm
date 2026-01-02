@@ -72,8 +72,14 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// Preset and name are not required when using --encrypt, --decrypt, or --update flags
-		if initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update {
+		// Preset and name are not required when using --encrypt or --decrypt flags
+		if initCmdFlags.encrypt || initCmdFlags.decrypt {
+			return nil
+		}
+		// For --update flag, only preset is required (name is not needed)
+		if initCmdFlags.update {
+			// Preset validation happens in updateTalmLibraryChart()
+			// where it can come from -p flag or Chart.yaml
 			return nil
 		}
 		if initCmdFlags.preset == "" {
@@ -582,9 +588,8 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 }
 
 func updateTalmLibraryChart() error {
-	// Determine preset: use -p flag if provided, otherwise read from Chart.yaml
+	// Determine preset: use -p flag if provided, otherwise try to read from Chart.yaml
 	var presetName string
-	var err error
 
 	if initCmdFlags.preset != "" {
 		// Use preset from flag
@@ -599,9 +604,10 @@ func updateTalmLibraryChart() error {
 		}
 	} else {
 		// Try to read from Chart.yaml
+		var err error
 		presetName, err = readChartYamlPreset()
 		if err != nil {
-			return fmt.Errorf("failed to determine preset: %w (use -p flag to specify preset)", err)
+			return fmt.Errorf("preset is required: use --preset flag or ensure Chart.yaml has a preset dependency: %w", err)
 		}
 	}
 
@@ -637,32 +643,34 @@ func updateTalmLibraryChart() error {
 	}
 
 	// Step 2: Update preset template files (with interactive confirmation)
-	fmt.Fprintf(os.Stderr, "Updating preset templates...\n")
-	for path, content := range presetFiles {
-		parts := strings.SplitN(path, "/", 2)
-		chartName := parts[0]
-		if chartName == presetName {
-			file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
-			var fileContent []byte
-			if parts[len(parts)-1] == "Chart.yaml" {
-				// Read cluster name from existing Chart.yaml
-				existingChartPath := filepath.Join(Config.RootDir, "Chart.yaml")
-				existingData, err := os.ReadFile(existingChartPath)
-				if err != nil {
-					return fmt.Errorf("failed to read existing Chart.yaml: %w", err)
+	if presetName != "" {
+		fmt.Fprintf(os.Stderr, "Updating preset templates...\n")
+		for path, content := range presetFiles {
+			parts := strings.SplitN(path, "/", 2)
+			chartName := parts[0]
+			if chartName == presetName {
+				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
+				var fileContent []byte
+				if parts[len(parts)-1] == "Chart.yaml" {
+					// Read cluster name from existing Chart.yaml
+					existingChartPath := filepath.Join(Config.RootDir, "Chart.yaml")
+					existingData, err := os.ReadFile(existingChartPath)
+					if err != nil {
+						return fmt.Errorf("failed to read existing Chart.yaml: %w", err)
+					}
+					var existingChart struct {
+						Name string `yaml:"name"`
+					}
+					if err := yaml.Unmarshal(existingData, &existingChart); err != nil {
+						return fmt.Errorf("failed to parse existing Chart.yaml: %w", err)
+					}
+					fileContent = []byte(fmt.Sprintf(content, existingChart.Name, Config.InitOptions.Version))
+				} else {
+					fileContent = []byte(content)
 				}
-				var existingChart struct {
-					Name string `yaml:"name"`
+				if err := updateFileWithConfirmation(file, fileContent, 0o644); err != nil {
+					return err
 				}
-				if err := yaml.Unmarshal(existingData, &existingChart); err != nil {
-					return fmt.Errorf("failed to parse existing Chart.yaml: %w", err)
-				}
-				fileContent = []byte(fmt.Sprintf(content, existingChart.Name, Config.InitOptions.Version))
-			} else {
-				fileContent = []byte(content)
-			}
-			if err := updateFileWithConfirmation(file, fileContent, 0o644); err != nil {
-				return err
 			}
 		}
 	}
