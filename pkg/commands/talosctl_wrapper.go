@@ -62,6 +62,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 				Value:       flag.Value,
 				DefValue:    flag.DefValue,
 				Changed:     flag.Changed,
+				NoOptDefVal: flag.NoOptDefVal, // Important for bool flags to work without '='
 				Deprecated:  flag.Deprecated,
 				Hidden:      flag.Hidden,
 				Shorthand:   "F", // Change shorthand from 'f' to 'F'
