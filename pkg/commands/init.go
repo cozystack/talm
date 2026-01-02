@@ -62,7 +62,7 @@ var initCmd = &cobra.Command{
 				return fmt.Errorf("failed to verify project root: %w", err)
 			}
 			if detectedRoot == "" {
-				return fmt.Errorf("not in a project root: Chart.yaml and secrets.yaml must exist in %s or parent directories", Config.RootDir)
+				return fmt.Errorf("not in a project root: Chart.yaml and secrets.yaml (or secrets.encrypted.yaml) must exist in %s or parent directories", Config.RootDir)
 			}
 			// Ensure Config.RootDir is set to the detected root
 			absDetectedRoot, _ := filepath.Abs(detectedRoot)

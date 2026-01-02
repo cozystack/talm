@@ -116,7 +116,7 @@ func addCommand(cmd *cobra.Command) {
 }
 
 // DetectProjectRoot automatically detects the project root directory by looking
-// for Chart.yaml and secrets.yaml files in the current directory and parent directories.
+// for Chart.yaml and secrets.yaml (or secrets.encrypted.yaml) files in the current directory and parent directories.
 // Returns the absolute path to the project root, or empty string if not found.
 func DetectProjectRoot(startDir string) (string, error) {
 	absStartDir, err := filepath.Abs(startDir)
@@ -128,6 +128,7 @@ func DetectProjectRoot(startDir string) (string, error) {
 	for {
 		chartYaml := filepath.Join(currentDir, "Chart.yaml")
 		secretsYaml := filepath.Join(currentDir, "secrets.yaml")
+		secretsEncryptedYaml := filepath.Join(currentDir, "secrets.encrypted.yaml")
 
 		chartExists := false
 		secretsExists := false
@@ -136,6 +137,9 @@ func DetectProjectRoot(startDir string) (string, error) {
 			chartExists = true
 		}
 		if _, err := os.Stat(secretsYaml); err == nil {
+			secretsExists = true
+		}
+		if _, err := os.Stat(secretsEncryptedYaml); err == nil {
 			secretsExists = true
 		}
 
