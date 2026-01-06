@@ -88,7 +88,7 @@ func init() {
 		
 		// Load config after root detection (skip for init and completion commands)
 		cmdName := cmd.Use
-		if !strings.HasPrefix(cmdName, "init") && !strings.HasPrefix(cmdName, "completion") {
+		if !strings.HasPrefix(cmdName, "init") && !strings.HasPrefix(cmdName, "completion") && !strings.HasPrefix(cmdName, "interactive") {
 			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
 			if err := loadConfig(configFile); err != nil {
 				return fmt.Errorf("error loading configuration: %w", err)
