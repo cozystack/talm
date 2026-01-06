@@ -42,7 +42,11 @@ func writeFile(opts Options, dest string, content []byte) error {
 }
 
 func writePresets(opts Options, clusterName string) error {
-	for path, content := range generated.PresetFiles {
+	presetFiles, err := generated.PresetFiles()
+	if err != nil {
+		return fmt.Errorf("failed to get preset files: %w", err)
+	}
+	for path, content := range presetFiles {
 
 		parts := strings.SplitN(path, "/", 2)
 		chartName := parts[0]

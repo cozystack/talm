@@ -109,7 +109,11 @@ func GenerateFromTUI(data *InitData) error {
 //
 
 func isValidPreset(preset string) bool {
-	for _, p := range generated.AvailablePresets {
+	presets, err := generated.AvailablePresets()
+	if err != nil {
+		return false
+	}
+	for _, p := range presets {
 		if p == preset {
 			return true
 		}
@@ -128,7 +132,11 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 
 func writePresetCharts(data *InitData) error {
 	log.Printf("DEBUG writePresetCharts: Starting for preset %s", data.Preset)
-	for path, content := range generated.PresetFiles {
+	presetFiles, err := generated.PresetFiles()
+	if err != nil {
+		return fmt.Errorf("failed to get preset files: %w", err)
+	}
+	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) < 2 {
 			continue
@@ -264,7 +272,11 @@ func formatFileContent(content, filePath string, data *InitData) string {
 }
 
 func writeTalmLibraryChart() error {
-	for path, content := range generated.PresetFiles {
+	presetFiles, err := generated.PresetFiles()
+	if err != nil {
+		return fmt.Errorf("failed to get preset files: %w", err)
+	}
+	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) < 2 {
 			continue
