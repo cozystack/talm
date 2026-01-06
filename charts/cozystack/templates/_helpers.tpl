@@ -75,7 +75,12 @@ machine:
     {{- if $existingInterfacesConfiguration }}
     {{- $existingInterfacesConfiguration | nindent 4 }}
     {{- else }}
-    - interface: {{ include "talm.discovered.default_link_name_by_gateway" . }}
+    {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
+    - interface: {{ $defaultLinkName }}
+      {{- $bondConfig := include "talm.discovered.bond_config" $defaultLinkName }}
+      {{- if $bondConfig }}
+      {{- $bondConfig | nindent 6 }}
+      {{- end }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0

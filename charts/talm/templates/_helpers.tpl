@@ -156,3 +156,55 @@ busPath: {{ .spec.busPath }}
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{- /* Get bond slave interfaces for a given bond index */ -}}
+{{- define "talm.discovered.bond_slaves" -}}
+{{- $bondIndex := . -}}
+{{- $slaves := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if and (eq .spec.slaveKind "bond") (eq (int .spec.masterIndex) (int $bondIndex)) -}}
+{{- $slaves = append $slaves .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $slaves -}}
+{{- end -}}
+
+{{- /* Generate bond configuration from bondMaster spec */ -}}
+{{- define "talm.discovered.bond_config" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link (eq $link.spec.kind "bond") -}}
+{{- $bondMaster := $link.spec.bondMaster -}}
+{{- $slaves := fromJsonArray (include "talm.discovered.bond_slaves" $link.spec.index) -}}
+bond:
+  interfaces:
+    {{- range $slaves }}
+    - {{ . }}
+    {{- end }}
+  mode: {{ $bondMaster.mode }}
+  {{- if $bondMaster.xmitHashPolicy }}
+  xmitHashPolicy: {{ $bondMaster.xmitHashPolicy }}
+  {{- end }}
+  {{- if $bondMaster.lacpRate }}
+  lacpRate: {{ $bondMaster.lacpRate }}
+  {{- end }}
+  {{- if $bondMaster.miimon }}
+  miimon: {{ $bondMaster.miimon }}
+  {{- end }}
+  {{- if $bondMaster.updelay }}
+  updelay: {{ $bondMaster.updelay }}
+  {{- end }}
+  {{- if $bondMaster.downdelay }}
+  downdelay: {{ $bondMaster.downdelay }}
+  {{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- /* Check if a link is a bond interface */ -}}
+{{- define "talm.discovered.is_bond" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link (eq $link.spec.kind "bond") -}}
+true
+{{- end -}}
+{{- end -}}
