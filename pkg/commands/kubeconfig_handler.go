@@ -29,6 +29,12 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 	// Add --login flag to update system kubeconfig file instead of local one
 	wrappedCmd.Flags().BoolP("login", "l", false, "update system kubeconfig file, not local one")
 
+	// Fix help text for unused arg [local-path] from talosctl kubeconfig command
+	wrappedCmd.Use = "kubeconfig"
+	wrappedCmd.Long = `Download the admin kubeconfig from the node.
+If merge flag is true, config will be merged with ~/.kube/config.
+Otherwise, kubeconfig will be written to PWD.`
+
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Ensure project root is detected
 		if !Config.RootDirExplicit {
