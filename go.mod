@@ -17,20 +17,12 @@ replace (
 
 	// see https://github.com/siderolabs/talos/issues/8514
 	golang.zx2c4.com/wireguard/wgctrl => github.com/siderolabs/wgctrl-go v0.0.0-20240401105613-579af3342774
-
-	// forked go-yaml that introduces RawYAML interface, which can be used to populate YAML fields using bytes
-	// which are then encoded as a valid YAML blocks with proper indentiation
-	gopkg.in/yaml.v3 => github.com/unix4ever/yaml v0.0.0-20220527175918-f17b0f05cf2c
 )
-
-// fd-leak related replacements: https://github.com/siderolabs/talos/issues/9412
-// https://github.com/insomniacslk/dhcp/pull/550
-replace github.com/insomniacslk/dhcp => github.com/smira/dhcp v0.0.0-20241001122726-31e9ef21c016
 
 // Kubernetes dependencies sharing the same version.
 require (
 	k8s.io/api v0.33.1 // indirect
-	k8s.io/apimachinery v0.33.1
+	k8s.io/apimachinery v0.33.1 // indirect
 	k8s.io/client-go v0.33.1
 	k8s.io/component-base v0.33.1 // indirect
 )
