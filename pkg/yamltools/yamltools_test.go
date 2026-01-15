@@ -49,7 +49,7 @@ parent:
 			require.NoError(t, yaml.Unmarshal([]byte(tt.src), &srcNode))
 
 			dstPaths := make(map[string]*yaml.Node)
-			CopyComments(&srcNode, &srcNode, "", dstPaths)
+			CopyComments(&srcNode, nil, "", dstPaths)
 
 			assert.Len(t, dstPaths, tt.expectPaths, "expected %d paths with comments", tt.expectPaths)
 		})
@@ -93,7 +93,7 @@ key: value1`,
 			require.NoError(t, yaml.Unmarshal([]byte(tt.dst), &dstNode))
 
 			dstPaths := make(map[string]*yaml.Node)
-			CopyComments(&srcNode, &srcNode, "", dstPaths)
+			CopyComments(&srcNode, nil, "", dstPaths)
 			ApplyComments(&dstNode, "", dstPaths)
 
 			if tt.expectComments {
