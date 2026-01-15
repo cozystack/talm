@@ -4,6 +4,7 @@ package yamltools
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,7 +19,7 @@ func CopyComments(srcNode, dstNode *yaml.Node, path string, dstPaths map[string]
 	for i := 0; i < len(srcNode.Content); i++ {
 		newPath := path + "/" + srcNode.Content[i].Value
 		if srcNode.Kind == yaml.SequenceNode {
-			newPath = path + "/" + string(i)
+			newPath = path + "/" + strconv.Itoa(i)
 		}
 		CopyComments(srcNode.Content[i], dstNode, newPath, dstPaths)
 	}
@@ -35,7 +36,7 @@ func ApplyComments(dstNode *yaml.Node, path string, dstPaths map[string]*yaml.No
 	for i := 0; i < len(dstNode.Content); i++ {
 		newPath := path + "/" + dstNode.Content[i].Value
 		if dstNode.Kind == yaml.SequenceNode {
-			newPath = path + "/" + string(i)
+			newPath = path + "/" + strconv.Itoa(i)
 		}
 		ApplyComments(dstNode.Content[i], newPath, dstPaths)
 	}
