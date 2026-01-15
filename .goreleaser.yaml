@@ -28,6 +28,3 @@ archives:
 
 checksum:
   name_template: "{{ .ProjectName }}-checksums.txt"
-
-changelog:
-  disable: true
