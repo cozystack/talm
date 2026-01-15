@@ -2,14 +2,6 @@ module github.com/cozystack/talm
 
 go 1.25.5
 
-replace (
-	// forked coredns so we don't carry caddy and other stuff into the Talos
-	github.com/coredns/coredns => github.com/siderolabs/coredns v1.12.54
-
-	// Talos-specific userspace socket location for WireGuard
-	golang.zx2c4.com/wireguard/wgctrl => github.com/siderolabs/wgctrl-go v0.0.0-20251029173431-c4fd5f6a4e72
-)
-
 // Kubernetes dependencies sharing the same version.
 require (
 	k8s.io/api v0.35.0 // indirect
