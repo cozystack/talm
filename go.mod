@@ -1,6 +1,6 @@
 module github.com/cozystack/talm
 
-go 1.25.3
+go 1.25.5
 
 replace (
 	// forked coredns so we don't carry caddy and other stuff into the Talos
