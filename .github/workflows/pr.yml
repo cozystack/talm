@@ -1,0 +1,45 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Run tests
+        run: go test ./...
+
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check DCO sign-off
+        run: |
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+
+          UNSIGNED=""
+          while read -r sha; do
+            if ! git log --format='%B' -n 1 "$sha" | grep -q "^Signed-off-by: "; then
+              UNSIGNED="${UNSIGNED}${sha}\n"
+            fi
+          done < <(git rev-list ${BASE_SHA}..${HEAD_SHA})
+
+          if [ -n "$UNSIGNED" ]; then
+            echo "::error::The following commits are missing DCO sign-off:"
+            echo -e "$UNSIGNED"
+            echo "Please sign-off commits with: git commit --signoff"
+            exit 1
+          fi
