@@ -612,6 +612,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 			res, err := extractResourceData(r)
 			if err != nil {
+				multiErr = multierror.Append(multiErr, fmt.Errorf("resource %s/%s: %w", r.Metadata().Type(), r.Metadata().ID(), err))
 				return nil
 			}
 
@@ -625,6 +626,9 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
 		if helperErr != nil {
 			return map[string]interface{}{}, helperErr
+		}
+		if err := multiErr.ErrorOrNil(); err != nil {
+			return map[string]interface{}{}, err
 		}
 		if len(resources) == 0 {
 			return map[string]interface{}{}, nil
