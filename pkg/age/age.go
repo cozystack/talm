@@ -420,15 +420,8 @@ func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X2551
 				// Values are the same, keep existing encrypted value (idempotent)
 				return encryptedStr, nil
 			}
-			// If decryption fails or values differ, encrypt new value
-		} else if encryptedStr == plainVal {
-			// Both are plain strings and equal, but we need encrypted version
-			// Encrypt the plain value
-		} else {
-			// Values differ, encrypt new value
 		}
-		
-		// Encrypt the new value
+		// Encrypt the new value (if decryption fails, values differ, or both are plain)
 		return encryptYAMLValues(plain, identity.Recipient())
 		
 	default:

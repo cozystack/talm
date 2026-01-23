@@ -94,9 +94,8 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		}
 		if baseCmdName == "kubeconfig" {
 			if !cmd.Flags().Changed("force") {
-				if err := cmd.Flags().Set("force", "true"); err != nil {
-					// Flag might not exist, ignore error
-				}
+				// Flag might not exist, ignore error
+				_ = cmd.Flags().Set("force", "true")
 			}
 		}
 
@@ -162,6 +161,11 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	// Special handling for upgrade command
 	if baseCmdName == "upgrade" {
 		wrapUpgradeCommand(wrappedCmd, originalRunE)
+	}
+
+	// Special handling for rotate-ca command
+	if baseCmdName == "rotate-ca" {
+		wrapRotateCACommand(wrappedCmd)
 	}
 
 	// Copy all subcommands

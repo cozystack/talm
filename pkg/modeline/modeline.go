@@ -56,7 +56,7 @@ func ReadAndParseModeline(filePath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error opening config file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	if scanner.Scan() {

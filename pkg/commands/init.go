@@ -324,10 +324,8 @@ var initCmd = &cobra.Command{
 
 		// If encrypted file exists, decrypt it (don't require key - will generate if needed)
 		if encryptedTalosconfigFileExists && !talosconfigFileExists {
-			_, err := handleTalosconfigEncryption(false)
-			if err != nil {
-				// If decryption fails (e.g., no key), continue to generate
-			}
+			// If decryption fails (e.g., no key), continue to generate
+			_, _ = handleTalosconfigEncryption(false)
 			talosconfigFileExists = fileExists(talosconfigFile)
 		}
 
@@ -347,7 +345,6 @@ var initCmd = &cobra.Command{
 			if err = writeToDestination(data, talosconfigFile, 0o600); err != nil {
 				return err
 			}
-			talosconfigFileExists = true
 		}
 
 		// Encrypt talosconfig if needed
@@ -385,7 +382,6 @@ var initCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("failed to generate key: %w", err)
 				}
-				keyFileExists = true // Update flag after creation
 				keyWasCreated = keyCreated
 			}
 
@@ -417,7 +413,7 @@ var initCmd = &cobra.Command{
 			if chartName == initCmdFlags.preset {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
 				if parts[len(parts)-1] == "Chart.yaml" {
-					writeToDestination([]byte(fmt.Sprintf(content, clusterName, Config.InitOptions.Version)), file, 0o644)
+					err = writeToDestination([]byte(fmt.Sprintf(content, clusterName, Config.InitOptions.Version)), file, 0o644)
 				} else {
 					err = writeToDestination([]byte(content), file, 0o644)
 				}
@@ -429,7 +425,7 @@ var initCmd = &cobra.Command{
 			if chartName == "talm" {
 				file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
 				if parts[len(parts)-1] == "Chart.yaml" {
-					writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
+					err = writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
 				} else {
 					err = writeToDestination([]byte(content), file, 0o644)
 				}
@@ -856,7 +852,6 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 			if keyCreated {
 				fmt.Fprintf(os.Stderr, "Generated new encryption key: talm.key\n")
 			}
-			keyFileExists = true
 		}
 
 		// Encrypt talosconfig
