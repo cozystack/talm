@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cozystack/talm/pkg/age"
 	"github.com/spf13/cobra"
 )
 
@@ -128,29 +127,9 @@ func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.C
 			// Automatically update kubeconfig.encrypted if it exists and talm.key exists
 			// Skip this if --login flag is set
 			if !loginFlagValue {
-				// Get relative path from project root for encryption
-				rootAbs, err := filepath.Abs(Config.RootDir)
-				if err == nil {
-					relKubeconfigPath, err := filepath.Rel(rootAbs, absPath)
-					if err == nil && !strings.HasPrefix(relKubeconfigPath, "..") {
-						// Path is within project root
-						encryptedKubeconfigPath := relKubeconfigPath + ".encrypted"
-						encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
-						keyFile := filepath.Join(Config.RootDir, "talm.key")
-
-						encryptedExists := fileExists(encryptedKubeconfigFile)
-						keyExists := fileExists(keyFile)
-
-						if encryptedExists && keyExists {
-							// Both files exist, encrypt kubeconfig
-							if err := age.EncryptYAMLFile(Config.RootDir, relKubeconfigPath, encryptedKubeconfigPath); err != nil {
-								// Don't fail the command if encryption fails, but log warning
-								fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
-							} else {
-								fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
-							}
-						}
-					}
+				if err := UpdateKubeconfigEncryption(absPath); err != nil {
+					// Don't fail the command if encryption fails, but log warning
+					fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 				}
 			}
 		}

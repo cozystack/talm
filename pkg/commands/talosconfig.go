@@ -64,7 +64,12 @@ Use this command when your client certificate has expired.`,
 			return err
 		}
 
-		// Handle encryption (encrypt if needed)
+		// Update talosconfig.encrypted if it exists
+		if err := UpdateTalosconfigEncryption(); err != nil {
+			return err
+		}
+
+		// Handle encryption (encrypt if needed for first time)
 		if _, err := handleTalosconfigEncryption(false); err != nil {
 			return err
 		}
