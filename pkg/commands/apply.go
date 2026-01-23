@@ -15,11 +15,9 @@
 package commands
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/cozystack/talm/pkg/engine"
@@ -186,33 +184,6 @@ func apply(args []string) error {
 		}
 	}
 	return nil
-}
-
-// readFirstLine reads and returns the first line of the file specified by the filename.
-// It returns an error if opening or reading the file fails.
-func readFirstLine(filename string) (string, error) {
-	// Open the file
-	file, err := os.Open(filename)
-	if err != nil {
-		return "", fmt.Errorf("error opening file: %v", err)
-	}
-	defer file.Close() // Ensure the file is closed after reading
-
-	// Create a scanner to read the file
-	scanner := bufio.NewScanner(file)
-
-	// Read the first line
-	if scanner.Scan() {
-		return scanner.Text(), nil
-	}
-
-	// Check for errors during scanning
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading file: %v", err)
-	}
-
-	// If no lines in the file, return an empty string
-	return "", nil
 }
 
 func init() {

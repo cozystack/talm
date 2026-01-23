@@ -77,7 +77,7 @@ func DiffYAMLs(original, modified []byte) ([]byte, error) {
 	if err := encoder.Encode(diff); err != nil {
 		return nil, err
 	}
-	encoder.Close()
+	_ = encoder.Close()
 
 	return buffer.Bytes(), nil
 }

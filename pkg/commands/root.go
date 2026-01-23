@@ -30,8 +30,6 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 
-var kubernetesFlag bool
-
 // GlobalArgs is the common arguments for the root command.
 var GlobalArgs global.Args
 
@@ -71,8 +69,6 @@ var Config struct {
 		Version string
 	}
 }
-
-const pathAutoCompleteLimit = 500
 
 // WithClientNoNodes wraps common code to initialize Talos client and provide cancellable context.
 //

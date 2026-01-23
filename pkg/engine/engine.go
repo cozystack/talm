@@ -544,7 +544,7 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 	if err := encoder.Encode(&targetNode); err != nil {
 		return nil, err
 	}
-	encoder.Close()
+	_ = encoder.Close()
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
 	for _, extraDoc := range extraDocs {
