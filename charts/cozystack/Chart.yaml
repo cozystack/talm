@@ -14,7 +14,7 @@ templateOptions:
   literalValues: []
   talosVersion: "v1.11"
   withSecrets: "secrets.yaml"
-  kubernetesVersion: ""
+  kubernetesVersion: "v1.34.3"
   full: false
 applyOptions:
   preserve: false
