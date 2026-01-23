@@ -563,11 +563,18 @@ func readUnexportedField(field reflect.Value) any {
 // builds resource with metadata, spec and stringSpec fields
 func extractResourceData(r resource.Resource) (map[string]interface{}, error) {
 	// extract metadata
-	o, _ := resource.MarshalYAML(r)
-	m, _ := yaml.Marshal(o)
-	var res map[string]interface{}
-
-	yaml.Unmarshal(m, &res)
+	o, err := resource.MarshalYAML(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource to YAML: %w", err)
+	}
+	m, err := yaml.Marshal(o)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal metadata to YAML: %w", err)
+	}
+	res := make(map[string]interface{})
+	if err := yaml.Unmarshal(m, &res); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
 
 	// extract spec
 	val := reflect.ValueOf(r.Spec())
@@ -605,6 +612,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 			res, err := extractResourceData(r)
 			if err != nil {
+				multiErr = multierror.Append(multiErr, fmt.Errorf("resource %s/%s: %w", r.Metadata().Type(), r.Metadata().ID(), err))
 				return nil
 			}
 
@@ -618,6 +626,9 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
 		if helperErr != nil {
 			return map[string]interface{}{}, helperErr
+		}
+		if err := multiErr.ErrorOrNil(); err != nil {
+			return map[string]interface{}{}, err
 		}
 		if len(resources) == 0 {
 			return map[string]interface{}{}, nil
