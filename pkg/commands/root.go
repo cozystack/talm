@@ -108,6 +108,22 @@ func WithClientMaintenance(enforceFingerprints []string, action func(context.Con
 	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
 }
 
+// WithClientSkipVerify wraps common code to initialize Talos client with TLS verification disabled
+// but with client certificate authentication preserved.
+// This is useful when connecting to nodes via IP addresses not listed in the server certificate's SANs.
+func WithClientSkipVerify(action func(context.Context, *client.Client) error) error {
+	return GlobalArgs.WithClientSkipVerify(action)
+}
+
+// WithClientAuto automatically selects the appropriate client wrapper based on GlobalArgs.SkipVerify.
+// If SkipVerify is true, uses WithClientSkipVerify, otherwise uses WithClientNoNodes.
+func WithClientAuto(action func(context.Context, *client.Client) error) error {
+	if GlobalArgs.SkipVerify {
+		return WithClientSkipVerify(action)
+	}
+	return WithClientNoNodes(action)
+}
+
 // Commands is a list of commands published by the package.
 var Commands []*cobra.Command
 

@@ -107,6 +107,9 @@ var templateCmd = &cobra.Command{
 		if templateCmdFlags.insecure {
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
+		if GlobalArgs.SkipVerify {
+			return WithClientSkipVerify(templateFunc(args))
+		}
 
 		return WithClient(templateFunc(args))
 	},
@@ -192,6 +195,8 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 				err = template(args)(context.Background(), nil)
 			} else if templateCmdFlags.insecure {
 				err = WithClientMaintenance(nil, template(args))
+			} else if GlobalArgs.SkipVerify {
+				err = WithClientSkipVerify(template(args))
 			} else {
 				err = WithClient(template(args))
 			}

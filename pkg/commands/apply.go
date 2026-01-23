@@ -87,101 +87,105 @@ var applyCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return WithClientNoNodes(apply(args))
+		return apply(args)
 	},
 }
 
-func apply(args []string) func(ctx context.Context, c *client.Client) error {
-	return func(ctx context.Context, c *client.Client) error {
-		// Expand directories to YAML files
-		expandedFiles, err := ExpandFilePaths(applyCmdFlags.configFiles)
+func apply(args []string) error {
+	ctx := context.Background()
+
+	// Expand directories to YAML files
+	expandedFiles, err := ExpandFilePaths(applyCmdFlags.configFiles)
+	if err != nil {
+		return err
+	}
+
+	// Detect root from files if specified, otherwise fallback to cwd
+	if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
+		return err
+	}
+
+	for _, configFile := range expandedFiles {
+		if err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true); err != nil {
+			return err
+		}
+
+		// Resolve secrets.yaml path relative to project root if not absolute
+		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
+
+		opts := engine.Options{
+			TalosVersion:      applyCmdFlags.talosVersion,
+			WithSecrets:       withSecretsPath,
+			KubernetesVersion: applyCmdFlags.kubernetesVersion,
+			Debug:             applyCmdFlags.debug,
+		}
+
+		patches := []string{"@" + configFile}
+		configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
+		if err != nil {
+			return fmt.Errorf("full config processing error: %s", err)
+		}
+
+		result, err := engine.SerializeConfiguration(configBundle, machineType)
+		if err != nil {
+			return fmt.Errorf("error serializing configuration: %s", err)
+		}
+
+		withClient := func(f func(ctx context.Context, c *client.Client) error) error {
+			if applyCmdFlags.insecure {
+				return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
+			}
+
+			if GlobalArgs.SkipVerify {
+				return WithClientSkipVerify(f)
+			}
+
+			return WithClientNoNodes(func(ctx context.Context, cli *client.Client) error {
+				if len(GlobalArgs.Nodes) < 1 {
+					configContext := cli.GetConfigContext()
+					if configContext == nil {
+						return errors.New("failed to resolve config context")
+					}
+
+					GlobalArgs.Nodes = configContext.Nodes
+				}
+
+				ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+
+				return f(ctx, cli)
+			})
+		}
+
+		err = withClient(func(ctx context.Context, c *client.Client) error {
+			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
+
+			resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+				Data:           result,
+				Mode:           applyCmdFlags.Mode.Mode,
+				DryRun:         applyCmdFlags.dryRun,
+				TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+			})
+			if err != nil {
+				return fmt.Errorf("error applying new configuration: %s", err)
+			}
+
+			helpers.PrintApplyResults(resp)
+
+			return nil
+		})
 		if err != nil {
 			return err
 		}
 
-		// Detect root from files if specified, otherwise fallback to cwd
-		if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
-			return err
+		// Reset args
+		if !applyCmdFlags.nodesFromArgs {
+			GlobalArgs.Nodes = []string{}
 		}
-
-		for _, configFile := range expandedFiles {
-			if err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true); err != nil {
-				return err
-			}
-
-			// Resolve secrets.yaml path relative to project root if not absolute
-			withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
-
-			opts := engine.Options{
-				TalosVersion:      applyCmdFlags.talosVersion,
-				WithSecrets:       withSecretsPath,
-				KubernetesVersion: applyCmdFlags.kubernetesVersion,
-				Debug:             applyCmdFlags.debug,
-			}
-
-			patches := []string{"@" + configFile}
-			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
-			if err != nil {
-				return fmt.Errorf("full config processing error: %s", err)
-			}
-
-			result, err := engine.SerializeConfiguration(configBundle, machineType)
-			if err != nil {
-				return fmt.Errorf("error serializing configuration: %s", err)
-			}
-
-			withClient := func(f func(ctx context.Context, c *client.Client) error) error {
-				if applyCmdFlags.insecure {
-					return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
-				}
-
-				return WithClientNoNodes(func(ctx context.Context, cli *client.Client) error {
-					if len(GlobalArgs.Nodes) < 1 {
-						configContext := cli.GetConfigContext()
-						if configContext == nil {
-							return errors.New("failed to resolve config context")
-						}
-
-						GlobalArgs.Nodes = configContext.Nodes
-					}
-
-					ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
-
-					return f(ctx, cli)
-				})
-			}
-
-			err = withClient(func(ctx context.Context, c *client.Client) error {
-				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
-
-				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
-					Data:           result,
-					Mode:           applyCmdFlags.Mode.Mode,
-					DryRun:         applyCmdFlags.dryRun,
-					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
-				})
-				if err != nil {
-					return fmt.Errorf("error applying new configuration: %s", err)
-				}
-
-				helpers.PrintApplyResults(resp)
-
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-
-			// Reset args
-			if !applyCmdFlags.nodesFromArgs {
-				GlobalArgs.Nodes = []string{}
-			}
-			if !applyCmdFlags.endpointsFromArgs {
-				GlobalArgs.Endpoints = []string{}
-			}
+		if !applyCmdFlags.endpointsFromArgs {
+			GlobalArgs.Endpoints = []string{}
 		}
-		return nil
 	}
+	return nil
 }
 
 // readFirstLine reads and returns the first line of the file specified by the filename.

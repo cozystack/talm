@@ -137,6 +137,9 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		
 		// Sync GlobalArgs to talosctl commands
 		taloscommands.GlobalArgs = GlobalArgs
+
+		// Note: --skip-verify is now supported for all commands via GlobalArgs.SkipVerify
+
 		if originalPreRunE != nil {
 			return originalPreRunE(cmd, args)
 		}
