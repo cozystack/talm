@@ -40,6 +40,22 @@
 {{- end }}
 {{- end }}
 
+{{- define "talm.discovered.system_disk_nvme_id" }}
+{{- $diskName := (include "talm.discovered.system_disk_name" .) }}
+{{- $diskStablePath := "" }}
+{{- range (lookup "disks" "" "").items }}
+{{- if and (eq .spec.dev_path $diskName) (eq .spec.transport "nvme") .spec.wwid }}
+{{- $diskStablePath = (printf "/dev/disk/by-id/nvme-%s" .spec.wwid) }}
+{{- break }}
+{{- end }}
+{{- end }}
+{{- if $diskStablePath }}
+{{- $diskStablePath }}
+{{- else }}
+{{- $diskName }} # Unable to determine a stable NVMe disk path, falling back to the disk name
+{{- end }}
+{{- end }}
+
 {{- define "talm.discovered.default_addresses" }}
 {{- with (lookup "nodeaddress" "" "default") }}
 {{- toJson .spec.addresses }}
