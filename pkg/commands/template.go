@@ -107,6 +107,9 @@ var templateCmd = &cobra.Command{
 		if templateCmdFlags.insecure {
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
+		if GlobalArgs.SkipVerify {
+			return WithClientSkipVerify(templateFunc(args))
+		}
 
 		return WithClient(templateFunc(args))
 	},
