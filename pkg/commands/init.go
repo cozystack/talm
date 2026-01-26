@@ -324,8 +324,9 @@ var initCmd = &cobra.Command{
 
 		// If encrypted file exists, decrypt it (don't require key - will generate if needed)
 		if encryptedTalosconfigFileExists && !talosconfigFileExists {
-			// If decryption fails (e.g., no key), continue to generate
-			_, _ = handleTalosconfigEncryption(false)
+			if _, err := handleTalosconfigEncryption(false); err != nil {
+				return err
+			}
 			talosconfigFileExists = fileExists(talosconfigFile)
 		}
 
