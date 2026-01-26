@@ -120,10 +120,10 @@ github.com/coreos/go-systemd/v22 v22.6.0 h1:aGVa/v8B7hpb0TKl0MWoAavPDmHvobFe5R5z
 github.com/coreos/go-systemd/v22 v22.6.0/go.mod h1:iG+pp635Fo7ZmV/j14KUcmEyWF+0X7Lua8rrTWzYgWU=
 github.com/cosi-project/runtime v1.13.0 h1:EKy/GwhVTgq131w0g3pbB0bTEf6FiZFjbK6go/I0pmE=
 github.com/cosi-project/runtime v1.13.0/go.mod h1:/9fspODJfZrO5dQatMRgN440K8DjWP1jFSgiLX+FmQc=
-github.com/cozystack/talos v0.0.0-20260123183527-007119acefcd h1:vkw7VhxJEc54/Cqsr0NMIYW5r2R0XSYYCmnczyNR8UU=
-github.com/cozystack/talos v0.0.0-20260123183527-007119acefcd/go.mod h1:8ltdWw6w4fruILycZHvL91TlB7D6+P1vc2a0gbNC8sw=
-github.com/cozystack/talos/pkg/machinery v0.0.0-20260123183527-007119acefcd h1:M3PgvR2g3BlxtCbv/MWnW93ipOrx2hXQ+mPEDl2lp2Y=
-github.com/cozystack/talos/pkg/machinery v0.0.0-20260123183527-007119acefcd/go.mod h1:dNc4lG9yb2CzCwnJbfSUO9ZmkXE6P3BnVo1UsCITr/U=
+github.com/cozystack/talos v0.0.0-20260126122716-d18a185e3680 h1:4SR6MxhhXvfczmyS4+JXyQhY3L8DvFwOsYDU2qKk/dQ=
+github.com/cozystack/talos v0.0.0-20260126122716-d18a185e3680/go.mod h1:8ltdWw6w4fruILycZHvL91TlB7D6+P1vc2a0gbNC8sw=
+github.com/cozystack/talos/pkg/machinery v0.0.0-20260126122716-d18a185e3680 h1:p8xt+lGJBmlv7YTeg9HyynlIgjd22o3zcCV4WGaJpwA=
+github.com/cozystack/talos/pkg/machinery v0.0.0-20260126122716-d18a185e3680/go.mod h1:dNc4lG9yb2CzCwnJbfSUO9ZmkXE6P3BnVo1UsCITr/U=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creack/pty v1.1.21 h1:1/QdRyBaHHJP61QkWMXlOIBfsgdDeeKfK8SYVUWJKf0=
 github.com/creack/pty v1.1.21/go.mod h1:MOBLtS5ELjhRRrroQr9kyvTxUAFNvYEK993ew/Vr4O4=

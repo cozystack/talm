@@ -263,6 +263,6 @@ exclude github.com/containerd/containerd v1.7.0
 // - https://github.com/siderolabs/talos/pull/12644 (--k8s-endpoint)
 // - https://github.com/siderolabs/talos/pull/12652 (--skip-verify)
 replace (
-	github.com/siderolabs/talos => github.com/cozystack/talos v0.0.0-20260123183527-007119acefcd
-	github.com/siderolabs/talos/pkg/machinery => github.com/cozystack/talos/pkg/machinery v0.0.0-20260123183527-007119acefcd
+	github.com/siderolabs/talos => github.com/cozystack/talos v0.0.0-20260126122716-d18a185e3680
+	github.com/siderolabs/talos/pkg/machinery => github.com/cozystack/talos/pkg/machinery v0.0.0-20260126122716-d18a185e3680
 )
