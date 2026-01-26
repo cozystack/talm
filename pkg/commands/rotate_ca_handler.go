@@ -74,11 +74,11 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 	// Disable --with-docs and --with-examples by default
 	if f := wrappedCmd.Flags().Lookup("with-docs"); f != nil {
 		f.DefValue = "false"
-		wrappedCmd.Flags().Set("with-docs", "false")
+		_ = wrappedCmd.Flags().Set("with-docs", "false")
 	}
 	if f := wrappedCmd.Flags().Lookup("with-examples"); f != nil {
 		f.DefValue = "false"
-		wrappedCmd.Flags().Set("with-examples", "false")
+		_ = wrappedCmd.Flags().Set("with-examples", "false")
 	}
 
 	// Store original PreRunE to chain it
@@ -96,7 +96,6 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 		if len(GlobalArgs.Endpoints) > 1 {
 			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d endpoints were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one endpoint using -e flag or a single config file", len(GlobalArgs.Endpoints))
 		}
-
 		if len(GlobalArgs.Nodes) > 1 {
 			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d nodes were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one node using -n flag or a single config file", len(GlobalArgs.Nodes))
 		}
@@ -128,9 +127,13 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 			if err != nil {
 				return fmt.Errorf("failed to auto-discover nodes: %w", err)
 			}
-			cmd.Flags().Set("control-plane-nodes", strings.Join(cpNodes, ","))
+			if err := cmd.Flags().Set("control-plane-nodes", strings.Join(cpNodes, ",")); err != nil {
+				return fmt.Errorf("failed to set control-plane-nodes: %w", err)
+			}
 			if len(wNodes) > 0 {
-				cmd.Flags().Set("worker-nodes", strings.Join(wNodes, ","))
+				if err := cmd.Flags().Set("worker-nodes", strings.Join(wNodes, ",")); err != nil {
+					return fmt.Errorf("failed to set worker-nodes: %w", err)
+				}
 			}
 			fmt.Fprintf(os.Stderr, "  Control plane: %v\n", cpNodes)
 			fmt.Fprintf(os.Stderr, "  Workers: %v\n", wNodes)
@@ -142,7 +145,9 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 			if talosconfigPath == "" {
 				talosconfigPath = filepath.Join(Config.RootDir, "talosconfig")
 			}
-			cmd.Flags().Set("output", talosconfigPath)
+			if err := cmd.Flags().Set("output", talosconfigPath); err != nil {
+				return fmt.Errorf("failed to set output: %w", err)
+			}
 		}
 
 		// Set --k8s-endpoint from GlobalArgs.Endpoints
@@ -154,7 +159,9 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 				host = h
 			}
 			k8sEndpoint := fmt.Sprintf("https://%s:6443", host)
-			cmd.Flags().Set("k8s-endpoint", k8sEndpoint)
+			if err := cmd.Flags().Set("k8s-endpoint", k8sEndpoint); err != nil {
+				return fmt.Errorf("failed to set k8s-endpoint: %w", err)
+			}
 		}
 
 		// Run the original rotate-ca command
@@ -396,7 +403,11 @@ func runKubeconfigCmd() error {
 	for _, cmd := range Commands {
 		if cmd.Name() == "kubeconfig" {
 			// Set --force to avoid interactive prompt
-			cmd.Flags().Set("force", "true")
+			if cmd.Flags().Lookup("force") != nil {
+				if err := cmd.Flags().Set("force", "true"); err != nil {
+					return fmt.Errorf("failed to set force flag: %w", err)
+				}
+			}
 			return cmd.RunE(cmd, []string{})
 		}
 	}

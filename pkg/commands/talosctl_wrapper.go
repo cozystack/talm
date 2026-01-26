@@ -93,9 +93,10 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 			baseCmdName = cmdName[:idx]
 		}
 		if baseCmdName == "kubeconfig" {
-			if !cmd.Flags().Changed("force") {
-				// Flag might not exist, ignore error
-				_ = cmd.Flags().Set("force", "true")
+			if !cmd.Flags().Changed("force") && cmd.Flags().Lookup("force") != nil {
+				if err := cmd.Flags().Set("force", "true"); err != nil {
+					return err
+				}
 			}
 		}
 
