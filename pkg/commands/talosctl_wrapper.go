@@ -165,7 +165,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 	// Special handling for rotate-ca command
 	if baseCmdName == "rotate-ca" {
-		wrapRotateCACommand(wrappedCmd)
+		wrapRotateCACommand(wrappedCmd, originalRunE)
 	}
 
 	// Copy all subcommands
