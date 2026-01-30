@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"unsafe"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
 	"github.com/cosi-project/runtime/pkg/resource"
@@ -562,19 +563,20 @@ func readUnexportedField(field reflect.Value) any {
 
 // builds resource with metadata, spec and stringSpec fields
 func extractResourceData(r resource.Resource) (map[string]interface{}, error) {
-	// extract metadata
-	o, err := resource.MarshalYAML(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal resource to YAML: %w", err)
-	}
-	m, err := yaml.Marshal(o)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal metadata to YAML: %w", err)
-	}
 	res := make(map[string]interface{})
-	if err := yaml.Unmarshal(m, &res); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+
+	// Extract metadata directly from resource methods
+	md := r.Metadata()
+	metadata := map[string]interface{}{
+		"namespace": string(md.Namespace()),
+		"type":      string(md.Type()),
+		"id":        string(md.ID()),
+		"version":   md.Version().String(),
+		"phase":     md.Phase().String(),
+		"owner":     string(md.Owner()),
 	}
+
+	res["metadata"] = metadata
 
 	// extract spec
 	val := reflect.ValueOf(r.Spec())
@@ -606,6 +608,13 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 		callbackResource := func(parentCtx context.Context, hostname string, r resource.Resource, callError error) error {
 			if callError != nil {
+				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
+				errCode := status.Code(callError)
+				errStr := callError.Error()
+				if errCode == codes.NotFound || errCode == codes.PermissionDenied ||
+					strings.Contains(errStr, "code = NotFound") || strings.Contains(errStr, "code = PermissionDenied") {
+					return nil
+				}
 				multiErr = multierror.Append(multiErr, callError)
 				return nil
 			}
@@ -636,9 +645,10 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		if id != "" && len(resources) == 1 {
 			return resources[0], nil
 		}
-		items := map[string]interface{}{}
+		// Return items as a slice for proper range iteration in templates
+		items := make([]interface{}, len(resources))
 		for i, res := range resources {
-			items["_"+strconv.Itoa(i)] = res
+			items[i] = res
 		}
 		return map[string]interface{}{
 			"apiVersion": "v1",
