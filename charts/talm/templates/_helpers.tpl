@@ -224,3 +224,45 @@ bond:
 true
 {{- end -}}
 {{- end -}}
+
+{{- /* Check if a link is a vlan interface */ -}}
+{{- define "talm.discovered.is_vlan" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link (eq $link.spec.kind "vlan") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{- /* Get parent link name by linkIndex */ -}}
+{{- define "talm.discovered.parent_link_name" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link $link.spec.linkIndex -}}
+{{- $parentIndex := $link.spec.linkIndex -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if eq (int .spec.index) (int $parentIndex) -}}
+{{- .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Get vlan ID from link */ -}}
+{{- define "talm.discovered.vlan_id" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link $link.spec.vlan -}}
+{{- $link.spec.vlan.vlanID -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Generate vlan configuration */ -}}
+{{- define "talm.discovered.vlan_config" -}}
+{{- $linkName := . -}}
+{{- $link := lookup "links" "" $linkName -}}
+{{- if and $link (eq $link.spec.kind "vlan") -}}
+vlans:
+  - vlanId: {{ $link.spec.vlan.vlanID }}
+{{- end -}}
+{{- end -}}

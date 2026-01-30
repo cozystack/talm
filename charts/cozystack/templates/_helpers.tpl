@@ -76,11 +76,32 @@ machine:
     {{- $existingInterfacesConfiguration | nindent 4 }}
     {{- else }}
     {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
-    - interface: {{ $defaultLinkName }}
-      {{- $bondConfig := include "talm.discovered.bond_config" $defaultLinkName }}
+    {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
+    {{- $parentLinkName := "" }}
+    {{- if $isVlan }}
+    {{- $parentLinkName = include "talm.discovered.parent_link_name" $defaultLinkName }}
+    {{- end }}
+    {{- $interfaceName := $defaultLinkName }}
+    {{- if and $isVlan $parentLinkName }}
+    {{- $interfaceName = $parentLinkName }}
+    {{- end }}
+    - interface: {{ $interfaceName }}
+      {{- $bondConfig := include "talm.discovered.bond_config" $interfaceName }}
       {{- if $bondConfig }}
       {{- $bondConfig | nindent 6 }}
       {{- end }}
+      {{- if $isVlan }}
+      vlans:
+        - vlanId: {{ include "talm.discovered.vlan_id" $defaultLinkName }}
+          addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
+          routes:
+            - network: 0.0.0.0/0
+              gateway: {{ include "talm.discovered.default_gateway" . }}
+          {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+          vip:
+            ip: {{ .Values.floatingIP }}
+          {{- end }}
+      {{- else }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
@@ -88,6 +109,7 @@ machine:
       {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
       vip:
         ip: {{ .Values.floatingIP }}
+      {{- end }}
       {{- end }}
     {{- end }}
 
