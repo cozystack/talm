@@ -87,8 +87,7 @@ func init() {
 		}
 		
 		// Load config after root detection (skip for init and completion commands)
-		cmdName := cmd.Use
-		if !strings.HasPrefix(cmdName, "init") && !strings.HasPrefix(cmdName, "completion") {
+		if !isCommandOrParent(cmd, "init", "completion") {
 			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
 			if err := loadConfig(configFile); err != nil {
 				return fmt.Errorf("error loading configuration: %w", err)
@@ -141,6 +140,18 @@ func initConfig() {
 			commands.Config.InitOptions.Version = "0.1.0"
 		}
 	}
+}
+
+// isCommandOrParent checks if the command or any of its parents matches one of the given names.
+func isCommandOrParent(cmd *cobra.Command, names ...string) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		for _, name := range names {
+			if c.Name() == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func loadConfig(filename string) error {
