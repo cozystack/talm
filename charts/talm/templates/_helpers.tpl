@@ -85,7 +85,7 @@
 {{- define "talm.discovered.physical_links_info" }}
 # -- Discovered interfaces:
 {{- range (lookup "links" "" "").items }}
-{{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" .metadata.id) }}
+{{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) }}
 # {{ .metadata.id }}:
 #   hardwareAddr:{{ .spec.hardwareAddr }}
 #   busPath: {{ .spec.busPath }}
