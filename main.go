@@ -19,6 +19,12 @@ import (
 
 var Version = "dev"
 
+// skipConfigCommands lists commands that should not load Chart.yaml config.
+// - init: creates the config, so it doesn't exist yet
+// - completion: generates shell completion scripts
+// - __complete: cobra's internal command for shell autocompletion (Tab key)
+var skipConfigCommands = []string{"init", "completion", "__complete"}
+
 // rootCmd represents the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
 	Use:               "talm",
@@ -87,7 +93,7 @@ func init() {
 		}
 		
 		// Load config after root detection (skip for init and completion commands)
-		if !isCommandOrParent(cmd, "init", "completion") {
+		if !isCommandOrParent(cmd, skipConfigCommands...) {
 			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
 			if err := loadConfig(configFile); err != nil {
 				return fmt.Errorf("error loading configuration: %w", err)
