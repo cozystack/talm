@@ -241,6 +241,10 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		return nil, err
 	}
 
+	if len(opts.TemplateFiles) == 0 {
+		return nil, fmt.Errorf("templates are not set for the command: please use `--file` or `--template` flag")
+	}
+
 	configPatches := []string{}
 	for _, templateFile := range opts.TemplateFiles {
 		// Use path.Join (not filepath.Join) because helm engine keys always use forward slashes
