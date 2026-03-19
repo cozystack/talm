@@ -96,9 +96,6 @@ var templateCmd = &cobra.Command{
 		templateFunc := template
 		if len(templateCmdFlags.configFiles) > 0 {
 			templateFunc = templateWithFiles
-			if len(templateCmdFlags.configFiles) == 0 {
-				return fmt.Errorf("cannot use --in-place without --file")
-			}
 		}
 
 		if templateCmdFlags.offline {
