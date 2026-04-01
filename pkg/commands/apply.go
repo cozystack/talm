@@ -113,7 +113,7 @@ func apply(args []string) error {
 		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
 
 		var result []byte
-		if shouldUseTemplateRendering(modelineTemplates) {
+		if len(modelineTemplates) > 0 {
 			// Template rendering path: render templates via Helm engine to produce full config
 			resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 			opts := engine.Options{
@@ -152,6 +152,9 @@ func apply(args []string) error {
 
 		withClient := func(f func(ctx context.Context, c *client.Client) error) error {
 			if applyCmdFlags.insecure {
+				// Maintenance mode connects directly to the node IP without talosconfig;
+				// node context injection is not needed — the maintenance client handles
+				// node targeting internally via GlobalArgs.Nodes.
 				return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
 			}
 
@@ -199,9 +202,11 @@ func apply(args []string) error {
 // wrapWithNodeContext wraps a client action function to resolve and inject node
 // context. If GlobalArgs.Nodes is already set, uses those directly. Otherwise,
 // attempts to resolve nodes from the client's config context.
+// This function does not mutate GlobalArgs — it uses a local copy of nodes.
 func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
-		if len(GlobalArgs.Nodes) < 1 {
+		nodes := GlobalArgs.Nodes
+		if len(nodes) < 1 {
 			if c == nil {
 				return fmt.Errorf("failed to resolve config context: no client available")
 			}
@@ -209,23 +214,21 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 			if configContext == nil {
 				return fmt.Errorf("failed to resolve config context")
 			}
-			GlobalArgs.Nodes = configContext.Nodes
+			nodes = configContext.Nodes
 		}
 
-		ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+		ctx = client.WithNodes(ctx, nodes...)
 		return f(ctx, c)
 	}
-}
-
-// shouldUseTemplateRendering returns true if templates are available from modeline
-// and should be rendered via the Helm engine before applying.
-func shouldUseTemplateRendering(templates []string) bool {
-	return len(templates) > 0
 }
 
 // resolveTemplatePaths resolves template file paths relative to the project root,
 // normalizing them for the Helm engine (forward slashes).
 // Relative paths from the modeline are resolved against rootDir, not CWD.
+//
+// Note: template.go has similar path resolution in generateOutput() but resolves
+// against CWD via filepath.Abs. This function intentionally resolves against rootDir
+// because modeline template paths are relative to the project root by convention.
 func resolveTemplatePaths(templates []string, rootDir string) []string {
 	resolved := make([]string, len(templates))
 	absRootDir, rootErr := filepath.Abs(rootDir)

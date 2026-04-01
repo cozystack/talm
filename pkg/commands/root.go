@@ -219,7 +219,7 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 	return DetectProjectRootForFile(templatePath)
 }
 
-func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, owerwrite bool) ([]string, error) {
+func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, overwrite bool) ([]string, error) {
 	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 	if err != nil {
 		fmt.Printf("Warning: modeline parsing failed: %v\n", err)
@@ -231,14 +231,14 @@ func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endp
 	// Update global settings if modeline was successfully parsed
 	if modelineConfig != nil {
 		if !nodesFromArgs && len(modelineConfig.Nodes) > 0 {
-			if owerwrite {
+			if overwrite {
 				GlobalArgs.Nodes = modelineConfig.Nodes
 			} else {
 				GlobalArgs.Nodes = append(GlobalArgs.Nodes, modelineConfig.Nodes...)
 			}
 		}
 		if !endpointsFromArgs && len(modelineConfig.Endpoints) > 0 {
-			if owerwrite {
+			if overwrite {
 				GlobalArgs.Endpoints = modelineConfig.Endpoints
 			} else {
 				GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, modelineConfig.Endpoints...)
