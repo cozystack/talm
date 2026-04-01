@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/siderolabs/talos/pkg/machinery/client"
@@ -30,6 +32,12 @@ func TestShouldUseTemplateRendering(t *testing.T) {
 }
 
 func TestResolveTemplatePaths(t *testing.T) {
+	// Create a real rootDir with template files for testing
+	tmpRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "templates"), 0o755); err != nil {
+		t.Fatalf("failed to create templates dir: %v", err)
+	}
+
 	tests := []struct {
 		name      string
 		templates []string
@@ -37,16 +45,34 @@ func TestResolveTemplatePaths(t *testing.T) {
 		want      []string
 	}{
 		{
-			name:      "simple relative path",
+			name:      "relative path with empty rootDir",
 			templates: []string{"templates/controlplane.yaml"},
 			rootDir:   "",
 			want:      []string{"templates/controlplane.yaml"},
 		},
 		{
-			name:      "multiple paths",
+			name:      "relative path resolved against rootDir",
+			templates: []string{"templates/controlplane.yaml"},
+			rootDir:   tmpRoot,
+			want:      []string{"templates/controlplane.yaml"},
+		},
+		{
+			name:      "multiple paths with rootDir",
 			templates: []string{"templates/controlplane.yaml", "templates/worker.yaml"},
-			rootDir:   "",
+			rootDir:   tmpRoot,
 			want:      []string{"templates/controlplane.yaml", "templates/worker.yaml"},
+		},
+		{
+			name:      "absolute path inside rootDir",
+			templates: []string{filepath.Join(tmpRoot, "templates", "controlplane.yaml")},
+			rootDir:   tmpRoot,
+			want:      []string{"templates/controlplane.yaml"},
+		},
+		{
+			name:      "path outside rootDir is kept as-is",
+			templates: []string{"/other/project/templates/controlplane.yaml"},
+			rootDir:   tmpRoot,
+			want:      []string{"/other/project/templates/controlplane.yaml"},
 		},
 	}
 
