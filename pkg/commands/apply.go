@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cozystack/talm/pkg/engine"
@@ -108,27 +111,45 @@ func apply(args []string) error {
 		if err != nil {
 			return err
 		}
-		_ = modelineTemplates // TODO: used in template rendering path below
-
 		// Resolve secrets.yaml path relative to project root if not absolute
 		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
 
-		opts := engine.Options{
-			TalosVersion:      applyCmdFlags.talosVersion,
-			WithSecrets:       withSecretsPath,
-			KubernetesVersion: applyCmdFlags.kubernetesVersion,
-			Debug:             applyCmdFlags.debug,
-		}
+		var result []byte
+		if shouldUseTemplateRendering(modelineTemplates) {
+			// Template rendering path: render templates via Helm engine, then apply node file as patch
+			resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
+			opts := engine.Options{
+				TalosVersion:      applyCmdFlags.talosVersion,
+				WithSecrets:       withSecretsPath,
+				KubernetesVersion: applyCmdFlags.kubernetesVersion,
+				Debug:             applyCmdFlags.debug,
+				Full:              true,
+				Offline:           true,
+				Root:              Config.RootDir,
+				TemplateFiles:     resolvedTemplates,
+			}
+			result, err = engine.Render(ctx, nil, opts)
+			if err != nil {
+				return fmt.Errorf("template rendering error: %s", err)
+			}
+		} else {
+			// Direct patch path: apply config file as patch against empty bundle
+			opts := engine.Options{
+				TalosVersion:      applyCmdFlags.talosVersion,
+				WithSecrets:       withSecretsPath,
+				KubernetesVersion: applyCmdFlags.kubernetesVersion,
+				Debug:             applyCmdFlags.debug,
+			}
+			patches := []string{"@" + configFile}
+			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
+			if err != nil {
+				return fmt.Errorf("full config processing error: %s", err)
+			}
 
-		patches := []string{"@" + configFile}
-		configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
-		if err != nil {
-			return fmt.Errorf("full config processing error: %s", err)
-		}
-
-		result, err := engine.SerializeConfiguration(configBundle, machineType)
-		if err != nil {
-			return fmt.Errorf("error serializing configuration: %s", err)
+			result, err = engine.SerializeConfiguration(configBundle, machineType)
+			if err != nil {
+				return fmt.Errorf("error serializing configuration: %s", err)
+			}
 		}
 
 		withClient := func(f func(ctx context.Context, c *client.Client) error) error {
@@ -186,6 +207,58 @@ func apply(args []string) error {
 		}
 	}
 	return nil
+}
+
+// shouldUseTemplateRendering returns true if templates are available from modeline
+// and should be rendered via the Helm engine before applying.
+func shouldUseTemplateRendering(templates []string) bool {
+	return len(templates) > 0
+}
+
+// resolveTemplatePaths resolves template file paths relative to the project root,
+// normalizing them for the Helm engine (forward slashes).
+func resolveTemplatePaths(templates []string, rootDir string) []string {
+	resolved := make([]string, len(templates))
+	absRootDir, rootErr := filepath.Abs(rootDir)
+	if rootErr != nil {
+		for i, p := range templates {
+			resolved[i] = engine.NormalizeTemplatePath(p)
+		}
+		return resolved
+	}
+
+	for i, templatePath := range templates {
+		var absTemplatePath string
+		if filepath.IsAbs(templatePath) {
+			absTemplatePath = templatePath
+		} else {
+			var absErr error
+			absTemplatePath, absErr = filepath.Abs(templatePath)
+			if absErr != nil {
+				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+				continue
+			}
+		}
+		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
+		if relErr != nil {
+			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+			continue
+		}
+		relPath = filepath.Clean(relPath)
+		if strings.HasPrefix(relPath, "..") {
+			templateName := filepath.Base(templatePath)
+			possiblePath := filepath.Join("templates", templateName)
+			fullPath := filepath.Join(absRootDir, possiblePath)
+			if _, statErr := os.Stat(fullPath); statErr == nil {
+				relPath = possiblePath
+			} else {
+				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+				continue
+			}
+		}
+		resolved[i] = engine.NormalizeTemplatePath(relPath)
+	}
+	return resolved
 }
 
 func init() {
