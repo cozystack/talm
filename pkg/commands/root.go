@@ -219,12 +219,14 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 	return DetectProjectRootForFile(templatePath)
 }
 
-func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, owerwrite bool) error {
+func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, owerwrite bool) ([]string, error) {
 	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 	if err != nil {
 		fmt.Printf("Warning: modeline parsing failed: %v\n", err)
-		return err
+		return nil, err
 	}
+
+	var templates []string
 
 	// Update global settings if modeline was successfully parsed
 	if modelineConfig != nil {
@@ -242,11 +244,12 @@ func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endp
 				GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, modelineConfig.Endpoints...)
 			}
 		}
+		templates = modelineConfig.Templates
 	}
 
 	if len(GlobalArgs.Nodes) < 1 {
-		return errors.New("nodes are not set for the command: please use `--nodes` flag or configuration file to set the nodes to run the command against")
+		return nil, errors.New("nodes are not set for the command: please use `--nodes` flag or configuration file to set the nodes to run the command against")
 	}
 
-	return nil
+	return templates, nil
 }

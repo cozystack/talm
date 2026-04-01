@@ -104,9 +104,11 @@ func apply(args []string) error {
 	}
 
 	for _, configFile := range expandedFiles {
-		if err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true); err != nil {
+		modelineTemplates, err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true)
+		if err != nil {
 			return err
 		}
+		_ = modelineTemplates // TODO: used in template rendering path below
 
 		// Resolve secrets.yaml path relative to project root if not absolute
 		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
