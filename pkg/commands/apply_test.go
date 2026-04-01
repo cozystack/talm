@@ -11,6 +11,78 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+func TestBuildApplyRenderOptions(t *testing.T) {
+	origTalosVersion := applyCmdFlags.talosVersion
+	origKubeVersion := applyCmdFlags.kubernetesVersion
+	origDebug := applyCmdFlags.debug
+	origRootDir := Config.RootDir
+	defer func() {
+		applyCmdFlags.talosVersion = origTalosVersion
+		applyCmdFlags.kubernetesVersion = origKubeVersion
+		applyCmdFlags.debug = origDebug
+		Config.RootDir = origRootDir
+	}()
+
+	applyCmdFlags.talosVersion = "v1.12"
+	applyCmdFlags.kubernetesVersion = "1.31.0"
+	applyCmdFlags.debug = false
+	Config.RootDir = "/project"
+
+	opts := buildApplyRenderOptions(
+		[]string{"templates/controlplane.yaml"},
+		"/project/secrets.yaml",
+	)
+
+	if !opts.Full {
+		t.Error("expected Full=true for template rendering path")
+	}
+	if !opts.Offline {
+		t.Error("expected Offline=true for template rendering path")
+	}
+	if opts.Root != "/project" {
+		t.Errorf("expected Root=/project, got %s", opts.Root)
+	}
+	if opts.TalosVersion != "v1.12" {
+		t.Errorf("expected TalosVersion=v1.12, got %s", opts.TalosVersion)
+	}
+	if opts.WithSecrets != "/project/secrets.yaml" {
+		t.Errorf("expected WithSecrets=/project/secrets.yaml, got %s", opts.WithSecrets)
+	}
+	if len(opts.TemplateFiles) != 1 || opts.TemplateFiles[0] != "templates/controlplane.yaml" {
+		t.Errorf("expected TemplateFiles=[templates/controlplane.yaml], got %v", opts.TemplateFiles)
+	}
+}
+
+func TestBuildApplyPatchOptions(t *testing.T) {
+	origTalosVersion := applyCmdFlags.talosVersion
+	origKubeVersion := applyCmdFlags.kubernetesVersion
+	origDebug := applyCmdFlags.debug
+	defer func() {
+		applyCmdFlags.talosVersion = origTalosVersion
+		applyCmdFlags.kubernetesVersion = origKubeVersion
+		applyCmdFlags.debug = origDebug
+	}()
+
+	applyCmdFlags.talosVersion = "v1.12"
+	applyCmdFlags.kubernetesVersion = "1.31.0"
+	applyCmdFlags.debug = false
+
+	opts := buildApplyPatchOptions("/project/secrets.yaml")
+
+	if opts.Full {
+		t.Error("expected Full=false for direct patch path")
+	}
+	if opts.Offline {
+		t.Error("expected Offline=false for direct patch path")
+	}
+	if opts.Root != "" {
+		t.Errorf("expected empty Root for direct patch path, got %s", opts.Root)
+	}
+	if len(opts.TemplateFiles) != 0 {
+		t.Errorf("expected no TemplateFiles for direct patch path, got %v", opts.TemplateFiles)
+	}
+}
+
 func TestResolveTemplatePaths(t *testing.T) {
 	// Create a real rootDir with template files for testing
 	tmpRoot := t.TempDir()
@@ -109,31 +181,36 @@ func TestWrapWithNodeContext_DoesNotMutateGlobalArgs(t *testing.T) {
 	origNodes := GlobalArgs.Nodes
 	defer func() { GlobalArgs.Nodes = origNodes }()
 
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
+	// Use a slice with extra capacity so append inside the closure could
+	// theoretically leak back to GlobalArgs if the copy is shallow
+	nodes := make([]string, 1, 10)
+	nodes[0] = "10.0.0.1"
+	GlobalArgs.Nodes = nodes
 
 	inner := func(ctx context.Context, c *client.Client) error {
 		return nil
 	}
 
 	wrapped := wrapWithNodeContext(inner)
-
-	// Mutate GlobalArgs.Nodes after creating wrapper but before calling it
-	GlobalArgs.Nodes = []string{"10.0.0.2"}
-
-	var capturedCtx context.Context
-	innerCapture := func(ctx context.Context, c *client.Client) error {
-		capturedCtx = ctx
-		return nil
-	}
-	wrapped2 := wrapWithNodeContext(innerCapture)
-
-	// Call the first wrapper — should NOT see the mutation (reads at call time,
-	// but we test that the defensive copy prevents cross-contamination)
 	if err := wrapped(context.Background(), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Call the second wrapper — should see "10.0.0.2"
+	// Verify GlobalArgs.Nodes is unchanged after wrapWithNodeContext call
+	if !slices.Equal(GlobalArgs.Nodes, []string{"10.0.0.1"}) {
+		t.Errorf("GlobalArgs.Nodes was mutated to %v, expected [10.0.0.1]", GlobalArgs.Nodes)
+	}
+
+	// Verify that the defensive copy is independent: mutating GlobalArgs
+	// after wrapper creation doesn't affect a subsequent call
+	GlobalArgs.Nodes = []string{"10.0.0.2"}
+
+	var capturedCtx context.Context
+	inner2 := func(ctx context.Context, c *client.Client) error {
+		capturedCtx = ctx
+		return nil
+	}
+	wrapped2 := wrapWithNodeContext(inner2)
 	if err := wrapped2(context.Background(), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,11 +222,6 @@ func TestWrapWithNodeContext_DoesNotMutateGlobalArgs(t *testing.T) {
 	gotNodes := md.Get("nodes")
 	if !slices.Equal(gotNodes, []string{"10.0.0.2"}) {
 		t.Errorf("nodes in context = %v, want [10.0.0.2]", gotNodes)
-	}
-
-	// Verify GlobalArgs.Nodes was not mutated by wrapWithNodeContext
-	if !slices.Equal(GlobalArgs.Nodes, []string{"10.0.0.2"}) {
-		t.Errorf("GlobalArgs.Nodes was mutated to %v, expected [10.0.0.2]", GlobalArgs.Nodes)
 	}
 }
 
