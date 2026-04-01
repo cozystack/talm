@@ -202,10 +202,11 @@ func apply(args []string) error {
 // wrapWithNodeContext wraps a client action function to resolve and inject node
 // context. If GlobalArgs.Nodes is already set, uses those directly. Otherwise,
 // attempts to resolve nodes from the client's config context.
-// This function does not mutate GlobalArgs — it uses a local copy of nodes.
+// This function does not mutate GlobalArgs. It reads GlobalArgs.Nodes at
+// invocation time (not at wrapper creation time) and makes a defensive copy.
 func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
-		nodes := GlobalArgs.Nodes
+		nodes := append([]string(nil), GlobalArgs.Nodes...)
 		if len(nodes) < 1 {
 			if c == nil {
 				return fmt.Errorf("failed to resolve config context: no client available")
@@ -227,8 +228,11 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 // Relative paths from the modeline are resolved against rootDir, not CWD.
 //
 // Note: template.go has similar path resolution in generateOutput() but resolves
-// against CWD via filepath.Abs. This function intentionally resolves against rootDir
-// because modeline template paths are relative to the project root by convention.
+// against CWD via filepath.Abs and has an additional fallback that tries
+// templates/<basename> when a path resolves outside the root. This function
+// intentionally resolves against rootDir (modeline paths are root-relative by
+// convention) and does not perform the basename fallback to avoid silently
+// substituting a different file.
 func resolveTemplatePaths(templates []string, rootDir string) []string {
 	resolved := make([]string, len(templates))
 	absRootDir, rootErr := filepath.Abs(rootDir)

@@ -7,7 +7,13 @@ import (
 )
 
 func TestProcessModelineAndUpdateGlobals_ReturnsTemplates(t *testing.T) {
-	// Create temp file with modeline containing templates
+	origNodes := GlobalArgs.Nodes
+	origEndpoints := GlobalArgs.Endpoints
+	defer func() {
+		GlobalArgs.Nodes = origNodes
+		GlobalArgs.Endpoints = origEndpoints
+	}()
+
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "node0.yaml")
 	content := `# talm: nodes=["10.0.0.1"], endpoints=["10.0.0.1"], templates=["templates/controlplane.yaml"]
@@ -18,7 +24,6 @@ machine:
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	// Reset global state
 	GlobalArgs.Nodes = []string{}
 	GlobalArgs.Endpoints = []string{}
 
@@ -36,7 +41,13 @@ machine:
 }
 
 func TestProcessModelineAndUpdateGlobals_NoTemplates(t *testing.T) {
-	// Create temp file with modeline without templates
+	origNodes := GlobalArgs.Nodes
+	origEndpoints := GlobalArgs.Endpoints
+	defer func() {
+		GlobalArgs.Nodes = origNodes
+		GlobalArgs.Endpoints = origEndpoints
+	}()
+
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "node0.yaml")
 	content := `# talm: nodes=["10.0.0.1"], endpoints=["10.0.0.1"]
@@ -47,7 +58,6 @@ machine:
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	// Reset global state
 	GlobalArgs.Nodes = []string{}
 	GlobalArgs.Endpoints = []string{}
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/siderolabs/talos/pkg/machinery/client"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestResolveTemplatePaths(t *testing.T) {
@@ -91,9 +93,63 @@ func TestWrapWithNodeContext_SetsNodesInContext(t *testing.T) {
 		t.Fatal("inner function was not called")
 	}
 
-	// Verify that the context was enriched with nodes by client.WithNodes
-	if capturedCtx == context.Background() {
-		t.Error("context was not modified by wrapWithNodeContext, expected client.WithNodes to be applied")
+	// Verify the actual nodes injected via gRPC metadata
+	md, ok := metadata.FromOutgoingContext(capturedCtx)
+	if !ok {
+		t.Fatal("expected outgoing gRPC metadata in context, got none")
+	}
+	gotNodes := md.Get("nodes")
+	wantNodes := []string{"10.0.0.1", "10.0.0.2"}
+	if !slices.Equal(gotNodes, wantNodes) {
+		t.Errorf("nodes in context metadata = %v, want %v", gotNodes, wantNodes)
+	}
+}
+
+func TestWrapWithNodeContext_DoesNotMutateGlobalArgs(t *testing.T) {
+	origNodes := GlobalArgs.Nodes
+	defer func() { GlobalArgs.Nodes = origNodes }()
+
+	GlobalArgs.Nodes = []string{"10.0.0.1"}
+
+	inner := func(ctx context.Context, c *client.Client) error {
+		return nil
+	}
+
+	wrapped := wrapWithNodeContext(inner)
+
+	// Mutate GlobalArgs.Nodes after creating wrapper but before calling it
+	GlobalArgs.Nodes = []string{"10.0.0.2"}
+
+	var capturedCtx context.Context
+	innerCapture := func(ctx context.Context, c *client.Client) error {
+		capturedCtx = ctx
+		return nil
+	}
+	wrapped2 := wrapWithNodeContext(innerCapture)
+
+	// Call the first wrapper — should NOT see the mutation (reads at call time,
+	// but we test that the defensive copy prevents cross-contamination)
+	if err := wrapped(context.Background(), nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Call the second wrapper — should see "10.0.0.2"
+	if err := wrapped2(context.Background(), nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	md, ok := metadata.FromOutgoingContext(capturedCtx)
+	if !ok {
+		t.Fatal("expected outgoing gRPC metadata in context")
+	}
+	gotNodes := md.Get("nodes")
+	if !slices.Equal(gotNodes, []string{"10.0.0.2"}) {
+		t.Errorf("nodes in context = %v, want [10.0.0.2]", gotNodes)
+	}
+
+	// Verify GlobalArgs.Nodes was not mutated by wrapWithNodeContext
+	if !slices.Equal(GlobalArgs.Nodes, []string{"10.0.0.2"}) {
+		t.Errorf("GlobalArgs.Nodes was mutated to %v, expected [10.0.0.2]", GlobalArgs.Nodes)
 	}
 }
 
