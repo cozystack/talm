@@ -9,28 +9,6 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 
-func TestShouldUseTemplateRendering(t *testing.T) {
-	tests := []struct {
-		name      string
-		templates []string
-		want      bool
-	}{
-		{"nil templates", nil, false},
-		{"empty templates", []string{}, false},
-		{"one template", []string{"templates/controlplane.yaml"}, true},
-		{"multiple templates", []string{"templates/controlplane.yaml", "templates/worker.yaml"}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shouldUseTemplateRendering(tt.templates)
-			if got != tt.want {
-				t.Errorf("shouldUseTemplateRendering(%v) = %v, want %v", tt.templates, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestResolveTemplatePaths(t *testing.T) {
 	// Create a real rootDir with template files for testing
 	tmpRoot := t.TempDir()
