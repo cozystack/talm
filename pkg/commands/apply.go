@@ -16,7 +16,6 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,24 +156,13 @@ func apply(args []string) error {
 				return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
 			}
 
+			wrappedF := wrapWithNodeContext(f)
+
 			if GlobalArgs.SkipVerify {
-				return WithClientSkipVerify(f)
+				return WithClientSkipVerify(wrappedF)
 			}
 
-			return WithClientNoNodes(func(ctx context.Context, cli *client.Client) error {
-				if len(GlobalArgs.Nodes) < 1 {
-					configContext := cli.GetConfigContext()
-					if configContext == nil {
-						return errors.New("failed to resolve config context")
-					}
-
-					GlobalArgs.Nodes = configContext.Nodes
-				}
-
-				ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
-
-				return f(ctx, cli)
-			})
+			return WithClientNoNodes(wrappedF)
 		}
 
 		err = withClient(func(ctx context.Context, c *client.Client) error {
@@ -207,6 +195,27 @@ func apply(args []string) error {
 		}
 	}
 	return nil
+}
+
+// wrapWithNodeContext wraps a client action function to resolve and inject node
+// context. If GlobalArgs.Nodes is already set, uses those directly. Otherwise,
+// attempts to resolve nodes from the client's config context.
+func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) func(ctx context.Context, c *client.Client) error {
+	return func(ctx context.Context, c *client.Client) error {
+		if len(GlobalArgs.Nodes) < 1 {
+			if c == nil {
+				return fmt.Errorf("failed to resolve config context: no client available")
+			}
+			configContext := c.GetConfigContext()
+			if configContext == nil {
+				return fmt.Errorf("failed to resolve config context")
+			}
+			GlobalArgs.Nodes = configContext.Nodes
+		}
+
+		ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+		return f(ctx, c)
+	}
 }
 
 // shouldUseTemplateRendering returns true if templates are available from modeline
