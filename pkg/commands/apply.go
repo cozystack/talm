@@ -115,29 +115,14 @@ func apply(args []string) error {
 		var result []byte
 		if len(modelineTemplates) > 0 {
 			// Template rendering path: render templates via Helm engine to produce full config
-			resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
-			opts := engine.Options{
-				TalosVersion:      applyCmdFlags.talosVersion,
-				WithSecrets:       withSecretsPath,
-				KubernetesVersion: applyCmdFlags.kubernetesVersion,
-				Debug:             applyCmdFlags.debug,
-				Full:              true,
-				Offline:           true,
-				Root:              Config.RootDir,
-				TemplateFiles:     resolvedTemplates,
-			}
+			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 			result, err = engine.Render(ctx, nil, opts)
 			if err != nil {
 				return fmt.Errorf("template rendering error: %s", err)
 			}
 		} else {
 			// Direct patch path: apply config file as patch against empty bundle
-			opts := engine.Options{
-				TalosVersion:      applyCmdFlags.talosVersion,
-				WithSecrets:       withSecretsPath,
-				KubernetesVersion: applyCmdFlags.kubernetesVersion,
-				Debug:             applyCmdFlags.debug,
-			}
+			opts := buildApplyPatchOptions(withSecretsPath)
 			patches := []string{"@" + configFile}
 			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
 			if err != nil {
@@ -199,6 +184,31 @@ func apply(args []string) error {
 	return nil
 }
 
+// buildApplyRenderOptions constructs engine.Options for the template rendering path.
+func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
+	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
+	return engine.Options{
+		TalosVersion:      applyCmdFlags.talosVersion,
+		WithSecrets:       withSecretsPath,
+		KubernetesVersion: applyCmdFlags.kubernetesVersion,
+		Debug:             applyCmdFlags.debug,
+		Full:              true,
+		Offline:           true,
+		Root:              Config.RootDir,
+		TemplateFiles:     resolvedTemplates,
+	}
+}
+
+// buildApplyPatchOptions constructs engine.Options for the direct patch path.
+func buildApplyPatchOptions(withSecretsPath string) engine.Options {
+	return engine.Options{
+		TalosVersion:      applyCmdFlags.talosVersion,
+		WithSecrets:       withSecretsPath,
+		KubernetesVersion: applyCmdFlags.kubernetesVersion,
+		Debug:             applyCmdFlags.debug,
+	}
+}
+
 // wrapWithNodeContext wraps a client action function to resolve and inject node
 // context. If GlobalArgs.Nodes is already set, uses those directly. Otherwise,
 // attempts to resolve nodes from the client's config context.
@@ -235,6 +245,13 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 // substituting a different file.
 func resolveTemplatePaths(templates []string, rootDir string) []string {
 	resolved := make([]string, len(templates))
+	if rootDir == "" {
+		// No rootDir specified — normalize paths only, don't resolve against CWD
+		for i, p := range templates {
+			resolved[i] = engine.NormalizeTemplatePath(p)
+		}
+		return resolved
+	}
 	absRootDir, rootErr := filepath.Abs(rootDir)
 	if rootErr != nil {
 		for i, p := range templates {
