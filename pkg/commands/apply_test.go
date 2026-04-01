@@ -1,7 +1,10 @@
 package commands
 
 import (
+	"context"
 	"testing"
+
+	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 
 func TestShouldUseTemplateRendering(t *testing.T) {
@@ -59,5 +62,50 @@ func TestResolveTemplatePaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWrapWithNodeContext_SetsNodesInContext(t *testing.T) {
+	origNodes := GlobalArgs.Nodes
+	defer func() { GlobalArgs.Nodes = origNodes }()
+
+	GlobalArgs.Nodes = []string{"10.0.0.1", "10.0.0.2"}
+
+	var capturedCtx context.Context
+	inner := func(ctx context.Context, c *client.Client) error {
+		capturedCtx = ctx
+		return nil
+	}
+
+	wrapped := wrapWithNodeContext(inner)
+	err := wrapped(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedCtx == nil {
+		t.Fatal("inner function was not called")
+	}
+
+	// Verify that the context was enriched with nodes by client.WithNodes
+	if capturedCtx == context.Background() {
+		t.Error("context was not modified by wrapWithNodeContext, expected client.WithNodes to be applied")
+	}
+}
+
+func TestWrapWithNodeContext_NoNodesNoClient(t *testing.T) {
+	origNodes := GlobalArgs.Nodes
+	defer func() { GlobalArgs.Nodes = origNodes }()
+
+	GlobalArgs.Nodes = []string{}
+
+	inner := func(ctx context.Context, c *client.Client) error {
+		return nil
+	}
+
+	wrapped := wrapWithNodeContext(inner)
+	err := wrapped(context.Background(), nil)
+	if err == nil {
+		t.Error("expected error when no nodes and no client config context, got nil")
 	}
 }
