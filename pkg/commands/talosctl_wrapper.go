@@ -127,7 +127,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		}
 
 		for _, configFile := range expandedFiles {
-			if err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, false); err != nil {
+			if _, err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, false); err != nil {
 				return err
 			}
 		}

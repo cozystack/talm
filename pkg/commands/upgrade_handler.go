@@ -55,7 +55,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			// Process modeline to update GlobalArgs
 			nodesFromArgs := len(GlobalArgs.Nodes) > 0
 			endpointsFromArgs := len(GlobalArgs.Endpoints) > 0
-			if err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, true); err != nil {
+			if _, err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, true); err != nil {
 				return fmt.Errorf("failed to process modeline: %w", err)
 			}
 
