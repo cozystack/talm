@@ -17,7 +17,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -115,7 +114,7 @@ func apply(args []string) error {
 
 		var result []byte
 		if shouldUseTemplateRendering(modelineTemplates) {
-			// Template rendering path: render templates via Helm engine, then apply node file as patch
+			// Template rendering path: render templates via Helm engine to produce full config
 			resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 			opts := engine.Options{
 				TalosVersion:      applyCmdFlags.talosVersion,
@@ -226,6 +225,7 @@ func shouldUseTemplateRendering(templates []string) bool {
 
 // resolveTemplatePaths resolves template file paths relative to the project root,
 // normalizing them for the Helm engine (forward slashes).
+// Relative paths from the modeline are resolved against rootDir, not CWD.
 func resolveTemplatePaths(templates []string, rootDir string) []string {
 	resolved := make([]string, len(templates))
 	absRootDir, rootErr := filepath.Abs(rootDir)
@@ -241,12 +241,8 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 		if filepath.IsAbs(templatePath) {
 			absTemplatePath = templatePath
 		} else {
-			var absErr error
-			absTemplatePath, absErr = filepath.Abs(templatePath)
-			if absErr != nil {
-				resolved[i] = engine.NormalizeTemplatePath(templatePath)
-				continue
-			}
+			// Resolve relative paths against rootDir, not CWD
+			absTemplatePath = filepath.Join(absRootDir, templatePath)
 		}
 		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 		if relErr != nil {
@@ -255,15 +251,9 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 		}
 		relPath = filepath.Clean(relPath)
 		if strings.HasPrefix(relPath, "..") {
-			templateName := filepath.Base(templatePath)
-			possiblePath := filepath.Join("templates", templateName)
-			fullPath := filepath.Join(absRootDir, possiblePath)
-			if _, statErr := os.Stat(fullPath); statErr == nil {
-				relPath = possiblePath
-			} else {
-				resolved[i] = engine.NormalizeTemplatePath(templatePath)
-				continue
-			}
+			// Path goes outside project root — use original path as-is
+			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+			continue
 		}
 		resolved[i] = engine.NormalizeTemplatePath(relPath)
 	}
