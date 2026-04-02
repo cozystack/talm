@@ -78,7 +78,7 @@ var applyCmd = &cobra.Command{
 		}
 		applyCmdFlags.nodesFromArgs = len(GlobalArgs.Nodes) > 0
 		applyCmdFlags.endpointsFromArgs = len(GlobalArgs.Endpoints) > 0
-		// Set dummy endpoint to avoid errors on building clinet
+		// Set dummy endpoint to avoid errors on building client
 		if len(GlobalArgs.Endpoints) == 0 {
 			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, "127.0.0.1")
 		}
@@ -118,7 +118,7 @@ func apply(args []string) error {
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 			result, err = engine.Render(ctx, nil, opts)
 			if err != nil {
-				return fmt.Errorf("template rendering error: %s", err)
+				return fmt.Errorf("template rendering error: %w", err)
 			}
 		} else {
 			// Direct patch path: apply config file as patch against empty bundle
@@ -126,12 +126,12 @@ func apply(args []string) error {
 			patches := []string{"@" + configFile}
 			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
 			if err != nil {
-				return fmt.Errorf("full config processing error: %s", err)
+				return fmt.Errorf("full config processing error: %w", err)
 			}
 
 			result, err = engine.SerializeConfiguration(configBundle, machineType)
 			if err != nil {
-				return fmt.Errorf("error serializing configuration: %s", err)
+				return fmt.Errorf("error serializing configuration: %w", err)
 			}
 		}
 
@@ -185,6 +185,9 @@ func apply(args []string) error {
 }
 
 // buildApplyRenderOptions constructs engine.Options for the template rendering path.
+// Offline is set to true because at this point we don't have a Talos client for
+// Helm lookup functions. Templates that use lookup() should be rendered via
+// 'talm template' which supports online mode.
 func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
 	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 	return engine.Options{
