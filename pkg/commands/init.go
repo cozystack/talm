@@ -725,11 +725,12 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 }
 
 // writeFileIfNotExists generates content lazily and writes it via writeToFile.
-// The existence check is handled by writeToFile.
+// When force is false and the file exists, it is silently skipped (not an error).
+// This allows GenerateProject to be called on existing projects without failing.
 func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, error), perm os.FileMode) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("file %q already exists", path)
+			return nil // file exists, skip
 		}
 	}
 
@@ -743,10 +744,11 @@ func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, err
 }
 
 // writeToFile writes data to a file, creating parent directories as needed.
+// When force is false and the file exists, it is silently skipped.
 func writeToFile(path string, data []byte, force bool, perm os.FileMode) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("file %q already exists", path)
+			return nil // file exists, skip
 		}
 	}
 

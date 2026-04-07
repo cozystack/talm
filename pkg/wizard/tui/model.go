@@ -90,8 +90,8 @@ type Model struct {
 	// Context for cancelling long-running operations
 	cancelScan context.CancelFunc
 
-	// Step before error occurred, for returning on Esc
-	prevStep step
+	// Step before error occurred, for returning on Esc (nil = no previous step)
+	prevStep *step
 
 	// Terminal dimensions
 	width, height int
@@ -185,7 +185,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.discoveredNodes = msg.nodes
 		if len(msg.nodes) == 0 {
 			m.err = fmt.Errorf("no Talos nodes found in the specified network")
-			m.prevStep = stepScanCIDR
+			prev := stepScanCIDR
+			m.prevStep = &prev
 			m.step = stepError
 			return m, nil
 		}
@@ -194,7 +195,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanErrorMsg:
 		m.err = msg.err
-		m.prevStep = m.step
+		prev := m.step
+		m.prevStep = &prev
 		m.step = stepError
 		return m, nil
 
@@ -204,7 +206,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case generateErrorMsg:
 		m.err = msg.err
-		m.prevStep = m.step
+		prev := m.step
+		m.prevStep = &prev
 		m.step = stepError
 		return m, nil
 
@@ -254,6 +257,12 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 	case stepManualNodeEntry:
 		m.step = stepScanCIDR
 		m.manualNodes = nil
+	case stepScanning:
+		if m.cancelScan != nil {
+			m.cancelScan()
+			m.cancelScan = nil
+		}
+		m.step = stepScanCIDR
 	case stepSelectNodes:
 		m.step = stepScanCIDR
 	case stepConfigureNode:
@@ -265,15 +274,22 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 			m.step = stepSelectNodes
 		}
 	case stepConfirm:
+		// Go back to the last configured node
+		if m.currentNodeIdx > 0 {
+			m.currentNodeIdx--
+			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
+			m.result.Nodes = nil
+		}
 		m.step = stepConfigureNode
+		m.prepareNodeInputs()
 	case stepError:
-		if m.prevStep != 0 {
-			m.step = m.prevStep
+		if m.prevStep != nil {
+			m.step = *m.prevStep
 		} else {
 			m.step = stepSelectPreset
 		}
 		m.err = nil
-		m.prevStep = 0
+		m.prevStep = nil
 	}
 	return m, nil
 }

@@ -505,6 +505,51 @@ func TestBackFromConfigureNode_RestoresInputs(t *testing.T) {
 	}
 }
 
+// Verify back from confirm doesn't panic and restores last node
+
+func TestBackFromConfirm_NoPanic(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfirm
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1", Hostname: "cp-1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 1 // past the last node (confirm was reached)
+	m.configuredNodes = []wizard.NodeConfig{{Hostname: "cp-1", Role: "controlplane"}}
+	m.result.Nodes = m.configuredNodes
+
+	// Press Esc — should not panic
+	updated, _ := m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.Step() != stepConfigureNode {
+		t.Errorf("step = %d, want stepConfigureNode", m.Step())
+	}
+	if m.currentNodeIdx != 0 {
+		t.Errorf("currentNodeIdx = %d, want 0", m.currentNodeIdx)
+	}
+}
+
+// Verify Esc from scanning cancels context and returns to CIDR step
+
+func TestEscFromScanning(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepScanning
+	cancelled := false
+	m.cancelScan = func() { cancelled = true }
+
+	updated, _ := m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.Step() != stepScanCIDR {
+		t.Errorf("step = %d, want stepScanCIDR", m.Step())
+	}
+	if !cancelled {
+		t.Error("scan context should have been cancelled")
+	}
+	if m.cancelScan != nil {
+		t.Error("cancelScan should be nil after cancellation")
+	}
+}
+
 // Verify error recovery returns to the step that triggered the error
 
 func TestErrorBack_ReturnsToPreviousStep(t *testing.T) {
