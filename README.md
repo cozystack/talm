@@ -52,7 +52,16 @@ curl -sSL https://github.com/cozystack/talm/raw/refs/heads/main/hack/install.sh 
 
 ## Getting Started
 
-Create new project
+Create new project using the interactive wizard:
+
+```bash
+mkdir newcluster
+cd newcluster
+talm interactive
+```
+
+Or use the non-interactive command:
+
 ```bash
 mkdir newcluster
 cd newcluster

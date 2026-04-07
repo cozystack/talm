@@ -87,6 +87,9 @@ type Model struct {
 	scanner    wizard.Scanner
 	generateFn GenerateFunc
 
+	// Context for cancelling long-running operations
+	cancelScan context.CancelFunc
+
 	// Terminal dimensions
 	width, height int
 }
@@ -167,6 +170,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if m.cancelScan != nil {
+				m.cancelScan()
+			}
 			return m, tea.Quit
 		case "esc":
 			return m.handleBack()
@@ -329,9 +335,11 @@ func (m Model) updateScanCIDR(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.err = nil
 			m.step = stepScanning
+			ctx, cancel := context.WithCancel(context.Background())
+			m.cancelScan = cancel
 			return m, tea.Batch(
 				m.spinner.Tick,
-				scanNetworkCmd(m.scanner, cidr),
+				scanNetworkCmd(ctx, m.scanner, cidr),
 			)
 		case "s":
 			m.err = nil
@@ -587,9 +595,9 @@ func (m Model) updateError(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Async command functions.
 
-func scanNetworkCmd(scanner wizard.Scanner, cidr string) tea.Cmd {
+func scanNetworkCmd(ctx context.Context, scanner wizard.Scanner, cidr string) tea.Cmd {
 	return func() tea.Msg {
-		nodes, err := scanner.ScanNetwork(context.Background(), cidr)
+		nodes, err := scanner.ScanNetwork(ctx, cidr)
 		if err != nil {
 			return scanErrorMsg{err: err}
 		}
