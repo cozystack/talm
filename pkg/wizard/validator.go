@@ -26,7 +26,8 @@ func ValidateClusterName(name string) error {
 
 var hostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
 
-// ValidateHostname checks that hostname is a valid RFC 952 hostname.
+// ValidateHostname checks that hostname is a valid single-label hostname (no dots).
+// FQDNs are not accepted — Talos nodes use single-label hostnames.
 func ValidateHostname(hostname string) error {
 	if hostname == "" {
 		return fmt.Errorf("hostname must not be empty")
@@ -52,14 +53,14 @@ func ValidateCIDR(cidr string) error {
 	return nil
 }
 
-// ValidateEndpoint checks that endpoint is a valid https URL with a port.
+// ValidateEndpoint checks that endpoint is a valid https URL with a host and port.
 func ValidateEndpoint(endpoint string) error {
 	if endpoint == "" {
 		return fmt.Errorf("endpoint must not be empty")
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil {
-		return fmt.Errorf("invalid endpoint URL: %w", err)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid endpoint URL: %s", endpoint)
 	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("endpoint must use https scheme, got %q", u.Scheme)

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cozystack/talm/pkg/wizard"
 )
 
 func TestGenerateProject_Generic(t *testing.T) {
@@ -201,26 +203,85 @@ func TestGenerateProject_ValuesOverridesPreservesOtherFields(t *testing.T) {
 	assertFileContains(t, rootDir, "values.yaml", "serviceSubnets")
 }
 
-func TestGenerateProject_ValuesOverridesRejectsNestedMaps(t *testing.T) {
-	rootDir := t.TempDir()
-	opts := GenerateOptions{
-		RootDir:     rootDir,
-		Preset:      "generic",
-		ClusterName: "test",
-		Version:     "0.1.0",
-		ValuesOverrides: map[string]interface{}{
-			// podSubnets in generic preset is a list, not a map — this is fine.
-			// But if someone tried to override a hypothetical nested map, it should fail.
-			// We test by overriding with a flat value (valid case).
-			"endpoint": "https://10.0.0.1:6443",
+func TestMergeValuesOverrides_RejectsNestedMaps(t *testing.T) {
+	tmpDir := t.TempDir()
+	valuesPath := filepath.Join(tmpDir, "values.yaml")
+
+	// Write a values.yaml with a nested map
+	content := "network:\n  podSubnets:\n  - 10.244.0.0/16\n  serviceSubnets:\n  - 10.96.0.0/16\n"
+	if err := os.WriteFile(valuesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt to override the nested map — should be rejected
+	overrides := map[string]interface{}{
+		"network": map[string]interface{}{
+			"podSubnets": []string{"custom"},
 		},
 	}
 
-	if err := GenerateProject(opts); err != nil {
-		t.Fatalf("GenerateProject failed: %v", err)
+	err := mergeValuesOverrides(valuesPath, overrides)
+	if err == nil {
+		t.Fatal("expected error for nested map override, got nil")
+	}
+	if !strings.Contains(err.Error(), "nested map override") {
+		t.Errorf("expected 'nested map override' error, got: %v", err)
+	}
+}
+
+func TestMergeValuesOverrides_FlatKeysWork(t *testing.T) {
+	tmpDir := t.TempDir()
+	valuesPath := filepath.Join(tmpDir, "values.yaml")
+
+	content := "endpoint: \"https://old:6443\"\npodSubnets:\n- 10.244.0.0/16\n"
+	if err := os.WriteFile(valuesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	assertFileContains(t, rootDir, "values.yaml", "https://10.0.0.1:6443")
+	overrides := map[string]interface{}{
+		"endpoint": "https://new:6443",
+	}
+
+	if err := mergeValuesOverrides(valuesPath, overrides); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(valuesPath)
+	if !strings.Contains(string(data), "https://new:6443") {
+		t.Error("endpoint not updated")
+	}
+	if !strings.Contains(string(data), "podSubnets") {
+		t.Error("podSubnets lost after merge")
+	}
+}
+
+func TestBuildValuesOverrides_EmptyEndpoint(t *testing.T) {
+	result := wizard.WizardResult{Endpoint: ""}
+	overrides := buildValuesOverrides(result)
+	if _, ok := overrides["endpoint"]; ok {
+		t.Error("empty endpoint should not be included in overrides")
+	}
+}
+
+func TestBuildValuesOverrides_PopulatesFields(t *testing.T) {
+	result := wizard.WizardResult{
+		Endpoint:          "https://10.0.0.1:6443",
+		PodSubnets:        "10.244.0.0/16",
+		ServiceSubnets:    "10.96.0.0/16",
+		AdvertisedSubnets: "192.168.1.0/24",
+		FloatingIP:        "10.0.0.100",
+	}
+	overrides := buildValuesOverrides(result)
+
+	if overrides["endpoint"] != "https://10.0.0.1:6443" {
+		t.Errorf("endpoint = %v", overrides["endpoint"])
+	}
+	if overrides["floatingIP"] != "10.0.0.100" {
+		t.Errorf("floatingIP = %v", overrides["floatingIP"])
+	}
+	if _, ok := overrides["podSubnets"]; !ok {
+		t.Error("podSubnets missing")
+	}
 }
 
 // Test helpers

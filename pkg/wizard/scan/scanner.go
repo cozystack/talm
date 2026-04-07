@@ -178,7 +178,9 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wiz
 
 			node, err := s.GetNodeInfo(ctx, ip)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to collect info for %s: %v\n", ip, err)
+				// Connection-level failure means this is likely not a Talos node — skip it.
+				fmt.Fprintf(os.Stderr, "Skipping %s: %v\n", ip, err)
+				return
 			}
 			if node.IP == "" {
 				node.IP = ip

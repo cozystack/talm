@@ -68,6 +68,11 @@ func enumerateHosts(cidr string) ([]net.IP, error) {
 		return nil, fmt.Errorf("only IPv4 CIDR is supported, got /%d bits", bits)
 	}
 
+	// Reject unreasonably large scans (>/16 = 65534 hosts)
+	if ones < 16 {
+		return nil, fmt.Errorf("CIDR range /%d is too large (max /%d), would scan %d hosts", ones, 16, 1<<(32-ones))
+	}
+
 	// /32 — single host
 	if ones == 32 {
 		return []net.IP{ipNet.IP.To4()}, nil

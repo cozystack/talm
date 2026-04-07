@@ -118,3 +118,20 @@ func TestScanTCPPort_MultipleHosts(t *testing.T) {
 		t.Errorf("expected 1 IP, got %d", len(ips))
 	}
 }
+
+func TestEnumerateHosts_RejectsLargeCIDR(t *testing.T) {
+	_, err := enumerateHosts("10.0.0.0/8")
+	if err == nil {
+		t.Fatal("expected error for /8 CIDR, got nil")
+	}
+}
+
+func TestEnumerateHosts_AcceptsSlash16(t *testing.T) {
+	hosts, err := enumerateHosts("10.0.0.0/16")
+	if err != nil {
+		t.Fatalf("expected /16 to be accepted, got error: %v", err)
+	}
+	if len(hosts) != 65534 {
+		t.Errorf("expected 65534 hosts, got %d", len(hosts))
+	}
+}

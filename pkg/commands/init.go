@@ -810,13 +810,8 @@ func GenerateProject(opts GenerateOptions) error {
 		}
 	}
 
-	// Write .gitignore — temporarily set Config.RootDir for writeGitignoreFile
-	// which uses it to locate the .gitignore file.
-	origRootDir := Config.RootDir
-	Config.RootDir = opts.RootDir
-	err = writeGitignoreFile()
-	Config.RootDir = origRootDir
-	return err
+	// Write .gitignore
+	return writeGitignoreForDir(opts.RootDir)
 }
 
 // mergeValuesOverrides reads an existing values.yaml, applies top-level key overrides, and writes it back.
@@ -914,6 +909,10 @@ func validateFileExists(file string) error {
 }
 
 func writeGitignoreFile() error {
+	return writeGitignoreForDir(Config.RootDir)
+}
+
+func writeGitignoreForDir(rootDir string) error {
 	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key"}
 
 	// Add kubeconfig to required entries (use path from config or default)
@@ -925,7 +924,7 @@ func writeGitignoreFile() error {
 	kubeconfigBase := filepath.Base(kubeconfigPath)
 	requiredEntries = append(requiredEntries, kubeconfigBase)
 
-	gitignoreFile := filepath.Join(Config.RootDir, ".gitignore")
+	gitignoreFile := filepath.Join(rootDir, ".gitignore")
 
 	var existingStr string
 	// If .gitignore exists, read it
