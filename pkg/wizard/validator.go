@@ -32,8 +32,8 @@ func ValidateHostname(hostname string) error {
 	if hostname == "" {
 		return fmt.Errorf("hostname must not be empty")
 	}
-	if len(hostname) > 253 {
-		return fmt.Errorf("hostname must be at most 253 characters, got %d", len(hostname))
+	if len(hostname) > 63 {
+		return fmt.Errorf("hostname label must be at most 63 characters, got %d", len(hostname))
 	}
 	if !hostnameRegexp.MatchString(hostname) {
 		return fmt.Errorf("hostname must contain only letters, numbers, and hyphens, and must not start or end with a hyphen")

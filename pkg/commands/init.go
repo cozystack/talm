@@ -91,50 +91,9 @@ var initCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var (
-			secretsBundle   *secrets.Bundle
-			versionContract *config.VersionContract
-			err             error
-		)
-
 		if initCmdFlags.update {
 			return updateTalmLibraryChart()
 		}
-		if initCmdFlags.talosVersion != "" {
-			versionContract, err = config.ParseContractFromVersion(initCmdFlags.talosVersion)
-			if err != nil {
-				return fmt.Errorf("invalid talos-version: %w", err)
-			}
-		}
-
-		secretsBundle, err = secrets.NewBundle(secrets.NewFixedClock(time.Now()),
-			versionContract,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create secrets bundle: %w", err)
-		}
-		var genOptions []generate.Option //nolint:prealloc
-		// Validate preset only if not using --encrypt or --decrypt
-		if !initCmdFlags.encrypt && !initCmdFlags.decrypt {
-			availablePresets, err := generated.AvailablePresets()
-			if err != nil {
-				return fmt.Errorf("failed to get available presets: %w", err)
-			}
-			if !isValidPreset(initCmdFlags.preset, availablePresets) {
-				return fmt.Errorf("invalid preset: %s. Valid presets are: %v", initCmdFlags.preset, availablePresets)
-			}
-		}
-		if initCmdFlags.talosVersion != "" {
-			var versionContract *config.VersionContract
-
-			versionContract, err = config.ParseContractFromVersion(initCmdFlags.talosVersion)
-			if err != nil {
-				return fmt.Errorf("invalid talos-version: %w", err)
-			}
-
-			genOptions = append(genOptions, generate.WithVersionContract(versionContract))
-		}
-		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 
 		// Handle age encryption logic
 		secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
@@ -281,74 +240,41 @@ var initCmd = &cobra.Command{
 			return nil
 		}
 
-		// If encrypted file exists, decrypt it
+		// Decrypt existing encrypted files before generation
 		if encryptedSecretsFileExists && !secretsFileExists {
 			if err := age.DecryptSecretsFile(Config.RootDir); err != nil {
 				return fmt.Errorf("failed to decrypt secrets: %w", err)
 			}
 		}
 
-		// Write secrets.yaml only if it doesn't exist
-		if !secretsFileExists {
-			if err = writeSecretsBundleToFile(secretsBundle); err != nil {
-				return err
-			}
-			secretsFileExists = true // Update flag after creation
+		// Core project generation (shared with interactive wizard)
+		if err := GenerateProject(GenerateOptions{
+			RootDir:      Config.RootDir,
+			Preset:       initCmdFlags.preset,
+			ClusterName:  initCmdFlags.name,
+			TalosVersion: initCmdFlags.talosVersion,
+			Version:      Config.InitOptions.Version,
+			Force:        initCmdFlags.force,
+		}); err != nil {
+			return err
 		}
 
-		// If secrets.yaml exists but encrypted file doesn't, encrypt it
+		// Post-generation encryption
+		secretsFileExists = fileExists(secretsFile)
 		if secretsFileExists && !encryptedSecretsFileExists {
-			// Generate key if it doesn't exist
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
 					return fmt.Errorf("failed to generate key: %w", err)
 				}
-				keyFileExists = true // Update flag after creation
+				keyFileExists = true
 				keyWasCreated = keyCreated
 			}
-
-			// Encrypt secrets
 			if err := age.EncryptSecretsFile(Config.RootDir); err != nil {
 				return fmt.Errorf("failed to encrypt secrets: %w", err)
 			}
 		}
 
-		clusterName := initCmdFlags.name
-
-		// Handle talosconfig encryption logic
-		talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
-		encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
-		talosconfigFileExists := fileExists(talosconfigFile)
-		encryptedTalosconfigFileExists := fileExists(encryptedTalosconfigFile)
-
-		// If encrypted file exists, decrypt it (don't require key - will generate if needed)
-		if encryptedTalosconfigFileExists && !talosconfigFileExists {
-			if _, err := handleTalosconfigEncryption(false); err != nil {
-				return err
-			}
-			talosconfigFileExists = fileExists(talosconfigFile)
-		}
-
-		// Generate talosconfig only if it doesn't exist
-		if !talosconfigFileExists {
-			configBundle, err := gen.GenerateConfigBundle(genOptions, clusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
-			if err != nil {
-				return err
-			}
-			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
-
-			data, err := yaml.Marshal(configBundle.TalosConfig())
-			if err != nil {
-				return fmt.Errorf("failed to marshal config: %+v", err)
-			}
-
-			if err = writeToDestination(data, talosconfigFile, 0o600); err != nil {
-				return err
-			}
-		}
-
-		// Encrypt talosconfig if needed
 		talosKeyCreated, err := handleTalosconfigEncryption(false)
 		if err != nil {
 			return err
@@ -357,7 +283,6 @@ var initCmd = &cobra.Command{
 			keyWasCreated = true
 		}
 
-		// Handle kubeconfig encryption logic (check if kubeconfig exists from Chart.yaml)
 		kubeconfigPath := Config.GlobalOptions.Kubeconfig
 		if kubeconfigPath == "" {
 			kubeconfigPath = "kubeconfig"
@@ -367,7 +292,6 @@ var initCmd = &cobra.Command{
 		kubeconfigFileExists := fileExists(kubeconfigFile)
 		encryptedKubeconfigFileExists := fileExists(encryptedKubeconfigFile)
 
-		// If encrypted file exists, decrypt it
 		if encryptedKubeconfigFileExists && !kubeconfigFileExists {
 			if err := age.DecryptYAMLFile(Config.RootDir, kubeconfigPath+".encrypted", kubeconfigPath); err != nil {
 				return fmt.Errorf("failed to decrypt kubeconfig: %w", err)
@@ -375,9 +299,7 @@ var initCmd = &cobra.Command{
 			kubeconfigFileExists = true
 		}
 
-		// If kubeconfig exists but encrypted file doesn't, encrypt it
 		if kubeconfigFileExists && !encryptedKubeconfigFileExists {
-			// Ensure key exists
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
@@ -385,58 +307,11 @@ var initCmd = &cobra.Command{
 				}
 				keyWasCreated = keyCreated
 			}
-
-			// Encrypt kubeconfig
 			if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, kubeconfigPath+".encrypted"); err != nil {
 				return fmt.Errorf("failed to encrypt kubeconfig: %w", err)
 			}
 		}
 
-		// Create or update .gitignore file
-		if err = writeGitignoreFile(); err != nil {
-			return err
-		}
-
-		nodesDir := filepath.Join(Config.RootDir, "nodes")
-		if err := os.MkdirAll(nodesDir, os.ModePerm); err != nil {
-			return fmt.Errorf("failed to create nodes directory: %w", err)
-		}
-
-		presetFiles, err := generated.PresetFiles()
-		if err != nil {
-			return fmt.Errorf("failed to get preset files: %w", err)
-		}
-
-		for path, content := range presetFiles {
-			parts := strings.SplitN(path, "/", 2)
-			chartName := parts[0]
-			// Write preset files
-			if chartName == initCmdFlags.preset {
-				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
-				if parts[len(parts)-1] == "Chart.yaml" {
-					err = writeToDestination([]byte(fmt.Sprintf(content, clusterName, Config.InitOptions.Version)), file, 0o644)
-				} else {
-					err = writeToDestination([]byte(content), file, 0o644)
-				}
-				if err != nil {
-					return err
-				}
-			}
-			// Write library chart
-			if chartName == "talm" {
-				file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
-				if parts[len(parts)-1] == "Chart.yaml" {
-					err = writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
-				} else {
-					err = writeToDestination([]byte(content), file, 0o644)
-				}
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		// Print warning about secrets and key backup (only once, at the end, if key was created)
 		if keyWasCreated {
 			printSecretsWarning()
 		}
@@ -444,20 +319,6 @@ var initCmd = &cobra.Command{
 		return nil
 
 	},
-}
-
-func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
-	bundleBytes, err := yaml.Marshal(bundle)
-	if err != nil {
-		return err
-	}
-
-	secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
-	if err = validateFileExists(secretsFile); err != nil {
-		return err
-	}
-
-	return writeToDestination(bundleBytes, secretsFile, 0o600)
 }
 
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
@@ -811,7 +672,11 @@ func GenerateProject(opts GenerateOptions) error {
 	}
 
 	// Write .gitignore
-	return writeGitignoreForDir(opts.RootDir)
+	kubeconfigName := "kubeconfig"
+	if Config.GlobalOptions.Kubeconfig != "" {
+		kubeconfigName = filepath.Base(Config.GlobalOptions.Kubeconfig)
+	}
+	return writeGitignoreForDir(opts.RootDir, kubeconfigName)
 }
 
 // mergeValuesOverrides reads an existing values.yaml, applies top-level key overrides, and writes it back.
@@ -898,31 +763,18 @@ func isValidPreset(preset string, availablePresets []string) bool {
 	return false
 }
 
-func validateFileExists(file string) error {
-	if !initCmdFlags.force {
-		if _, err := os.Stat(file); err == nil {
-			return fmt.Errorf("file %q already exists, use --force to overwrite, and --update to update Talm library chart only", file)
-		}
-	}
-
-	return nil
-}
-
 func writeGitignoreFile() error {
-	return writeGitignoreForDir(Config.RootDir)
-}
-
-func writeGitignoreForDir(rootDir string) error {
-	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key"}
-
-	// Add kubeconfig to required entries (use path from config or default)
 	kubeconfigPath := Config.GlobalOptions.Kubeconfig
 	if kubeconfigPath == "" {
 		kubeconfigPath = "kubeconfig"
 	}
-	// Only add base name (not full path) to gitignore
-	kubeconfigBase := filepath.Base(kubeconfigPath)
-	requiredEntries = append(requiredEntries, kubeconfigBase)
+	return writeGitignoreForDir(Config.RootDir, filepath.Base(kubeconfigPath))
+}
+
+// writeGitignoreForDir creates or updates .gitignore with required entries.
+// kubeconfigName is the base filename of the kubeconfig (e.g. "kubeconfig").
+func writeGitignoreForDir(rootDir string, kubeconfigName string) error {
+	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key", kubeconfigName}
 
 	gitignoreFile := filepath.Join(rootDir, ".gitignore")
 
@@ -1067,21 +919,3 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	return keyWasCreated, nil
 }
 
-func writeToDestination(data []byte, destination string, permissions os.FileMode) error {
-	if err := validateFileExists(destination); err != nil {
-		return err
-	}
-
-	parentDir := filepath.Dir(destination)
-
-	// Create dir path, ignoring "already exists" messages
-	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
-	}
-
-	err := os.WriteFile(destination, data, permissions)
-
-	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
-
-	return err
-}
