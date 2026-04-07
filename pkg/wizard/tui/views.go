@@ -128,7 +128,7 @@ func (m Model) viewManualNodeEntry() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\nenter add node | d done | esc back"))
+	b.WriteString(helpStyle.Render("\nenter add node | ctrl+d done | esc back"))
 	return b.String()
 }
 
@@ -163,6 +163,14 @@ func (m Model) viewSelectNodes() string {
 		}
 
 		fmt.Fprintf(&b, "%s%s %s\n", cursor, selected, info)
+	}
+
+	if len(m.scanWarnings) > 0 {
+		b.WriteString("\n" + errorStyle.Render(fmt.Sprintf("%d node(s) found but failed gRPC:", len(m.scanWarnings))))
+		for _, w := range m.scanWarnings {
+			b.WriteString("\n  " + blurredStyle.Render(w))
+		}
+		b.WriteString("\n")
 	}
 
 	if m.err != nil {

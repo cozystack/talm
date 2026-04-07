@@ -306,8 +306,8 @@ func TestManualNodeEntry_AddAndDone(t *testing.T) {
 		t.Errorf("IP = %q, want 10.0.0.1", m.manualNodes[0].IP)
 	}
 
-	// Press d to finish
-	updated, _ = m.Update(keyMsg("d"))
+	// Press ctrl+d to finish
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
 	m = updated.(Model)
 
 	if m.Step() != stepSelectNodes {
@@ -339,7 +339,7 @@ func TestManualNodeEntry_DoneWithoutNodes(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 	m.step = stepManualNodeEntry
 
-	updated, _ := m.Update(keyMsg("d"))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
 	m = updated.(Model)
 
 	if m.err == nil {
@@ -428,6 +428,29 @@ func TestNodeConfigValidation_Success(t *testing.T) {
 	}
 	if len(n.DNS) != 2 || n.DNS[0] != "8.8.8.8" || n.DNS[1] != "1.1.1.1" {
 		t.Errorf("DNS = %v, want [8.8.8.8 1.1.1.1]", n.DNS)
+	}
+}
+
+func TestNodeConfigValidation_EmptyDisk(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("") // empty disk
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected validation error for empty disk path")
+	}
+	if m.Step() != stepConfigureNode {
+		t.Error("should stay on configure step")
 	}
 }
 

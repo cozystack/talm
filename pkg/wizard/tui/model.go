@@ -44,7 +44,10 @@ const (
 
 // Message types for async operations.
 type (
-	scanResultMsg    struct{ nodes []wizard.NodeInfo }
+	scanResultMsg struct {
+		nodes    []wizard.NodeInfo
+		warnings []string
+	}
 	scanErrorMsg     struct{ err error }
 	generateDoneMsg  struct{}
 	generateErrorMsg struct{ err error }
@@ -71,6 +74,7 @@ type Model struct {
 
 	// Node selection state
 	discoveredNodes []wizard.NodeInfo
+	scanWarnings    []string
 	selectedNodes   []int // indices into discoveredNodes
 	cursor          int   // for list navigation
 
@@ -183,6 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanResultMsg:
 		m.discoveredNodes = msg.nodes
+		m.scanWarnings = msg.warnings
 		if len(msg.nodes) == 0 {
 			m.err = fmt.Errorf("no Talos nodes found in the specified network")
 			prev := stepScanCIDR
@@ -397,7 +402,7 @@ func (m Model) updateManualNodeEntry(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.manualNodes = append(m.manualNodes, wizard.NodeInfo{IP: ip})
 			m.manualIPInput.SetValue("")
 			return m, nil
-		case "d":
+		case "ctrl+d":
 			if len(m.manualNodes) == 0 {
 				m.err = fmt.Errorf("add at least one node")
 				return m, nil
@@ -537,6 +542,11 @@ func (m Model) validateAndBuildNodeConfig() (wizard.NodeConfig, error) {
 		return wizard.NodeConfig{}, err
 	}
 
+	diskPath := m.nodeInputs[fieldDisk].Value()
+	if diskPath == "" {
+		return wizard.NodeConfig{}, fmt.Errorf("install disk is required")
+	}
+
 	address := m.nodeInputs[fieldAddress].Value()
 	if address != "" {
 		if err := wizard.ValidateCIDR(address); err != nil {
@@ -569,7 +579,7 @@ func (m Model) validateAndBuildNodeConfig() (wizard.NodeConfig, error) {
 	return wizard.NodeConfig{
 		Hostname:  hostname,
 		Role:      role,
-		DiskPath:  m.nodeInputs[fieldDisk].Value(),
+		DiskPath:  diskPath,
 		Interface: m.nodeInputs[fieldInterface].Value(),
 		Addresses: address,
 		Gateway:   gateway,
@@ -628,7 +638,7 @@ func scanNetworkCmd(ctx context.Context, scanner wizard.Scanner, cidr string) te
 		if err != nil {
 			return scanErrorMsg{err: err}
 		}
-		return scanResultMsg{nodes: nodes}
+		return scanResultMsg{nodes: nodes, warnings: nil}
 	}
 }
 
