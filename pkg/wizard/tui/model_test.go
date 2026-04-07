@@ -28,16 +28,16 @@ func (m *mockScanner) GetNodeInfo(_ context.Context, ip string) (wizard.NodeInfo
 	return wizard.NodeInfo{IP: ip}, nil
 }
 
-func keyMsg(key string) tea.Msg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
-}
-
 func enterMsg() tea.Msg {
 	return tea.KeyMsg{Type: tea.KeyEnter}
 }
 
 func escMsg() tea.Msg {
 	return tea.KeyMsg{Type: tea.KeyEsc}
+}
+
+func keyMsg(key string) tea.Msg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 }
 
 func TestInitialStep(t *testing.T) {
@@ -50,7 +50,6 @@ func TestInitialStep(t *testing.T) {
 func TestSelectPreset(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic", "cozystack"}, nil)
 
-	// Select first preset (generic)
 	updated, _ := m.Update(enterMsg())
 	m = updated.(Model)
 
@@ -65,10 +64,8 @@ func TestSelectPreset(t *testing.T) {
 func TestSelectSecondPreset(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic", "cozystack"}, nil)
 
-	// Move down to cozystack
 	updated, _ := m.Update(keyMsg("j"))
 	m = updated.(Model)
-
 	updated, _ = m.Update(enterMsg())
 	m = updated.(Model)
 
@@ -80,12 +77,9 @@ func TestSelectSecondPreset(t *testing.T) {
 func TestClusterNameValidation(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 
-	// Go to cluster name step
-	updated, _ := m.Update(enterMsg())
+	updated, _ := m.Update(enterMsg()) // select preset
 	m = updated.(Model)
-
-	// Try to submit empty name
-	updated, _ = m.Update(enterMsg())
+	updated, _ = m.Update(enterMsg()) // submit empty name
 	m = updated.(Model)
 
 	if m.Step() != stepClusterName {
@@ -99,18 +93,13 @@ func TestClusterNameValidation(t *testing.T) {
 func TestClusterNameSuccess(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 
-	// Go to cluster name step
-	updated, _ := m.Update(enterMsg())
+	updated, _ := m.Update(enterMsg()) // select preset
 	m = updated.(Model)
-
-	// Type cluster name character by character
 	for _, ch := range "test" {
 		updated, _ = m.Update(keyMsg(string(ch)))
 		m = updated.(Model)
 	}
-
-	// Submit
-	updated, _ = m.Update(enterMsg())
+	updated, _ = m.Update(enterMsg()) // submit name
 	m = updated.(Model)
 
 	if m.Step() != stepEndpoint {
@@ -124,16 +113,9 @@ func TestClusterNameSuccess(t *testing.T) {
 func TestBackNavigation(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 
-	// Go to cluster name step
-	updated, _ := m.Update(enterMsg())
+	updated, _ := m.Update(enterMsg()) // go to cluster name
 	m = updated.(Model)
-
-	if m.Step() != stepClusterName {
-		t.Fatalf("expected stepClusterName, got %d", m.Step())
-	}
-
-	// Go back
-	updated, _ = m.Update(escMsg())
+	updated, _ = m.Update(escMsg()) // go back
 	m = updated.(Model)
 
 	if m.Step() != stepSelectPreset {
@@ -145,20 +127,16 @@ func TestEndpointValidation(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 
 	// Navigate to endpoint step
-	updated, _ := m.Update(enterMsg()) // select preset
+	updated, _ := m.Update(enterMsg())
 	m = updated.(Model)
 	for _, ch := range "test" {
 		updated, _ = m.Update(keyMsg(string(ch)))
 		m = updated.(Model)
 	}
-	updated, _ = m.Update(enterMsg()) // submit name
+	updated, _ = m.Update(enterMsg())
 	m = updated.(Model)
 
-	if m.Step() != stepEndpoint {
-		t.Fatalf("expected stepEndpoint, got %d", m.Step())
-	}
-
-	// Try to submit empty endpoint
+	// Submit empty endpoint
 	updated, _ = m.Update(enterMsg())
 	m = updated.(Model)
 
@@ -243,9 +221,7 @@ func TestNodeSelection(t *testing.T) {
 }
 
 func TestConfirmToGenerate(t *testing.T) {
-	generated := false
 	m := New(&mockScanner{}, []string{"generic"}, func(_ wizard.WizardResult) error {
-		generated = true
 		return nil
 	})
 	m.step = stepConfirm
@@ -255,20 +231,12 @@ func TestConfirmToGenerate(t *testing.T) {
 		Endpoint:    "https://10.0.0.1:6443",
 	}
 
-	updated, cmd := m.Update(keyMsg("y"))
+	updated, _ := m.Update(keyMsg("y"))
 	m = updated.(Model)
 
 	if m.Step() != stepGenerating {
 		t.Errorf("step = %d, want stepGenerating (%d)", m.Step(), stepGenerating)
 	}
-
-	// Execute the command to trigger generation
-	if cmd != nil {
-		// cmd is a tea.Batch, we need to process messages
-		// For simplicity, just check the step transition
-		_ = cmd
-	}
-	_ = generated
 }
 
 func TestGenerateDone(t *testing.T) {
@@ -306,12 +274,190 @@ func TestWindowResize(t *testing.T) {
 	}
 }
 
+// Manual node entry tests
+
+func TestSkipScanTransition(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepScanCIDR
+
+	updated, _ := m.Update(keyMsg("s"))
+	m = updated.(Model)
+
+	if m.Step() != stepManualNodeEntry {
+		t.Errorf("step = %d, want stepManualNodeEntry (%d)", m.Step(), stepManualNodeEntry)
+	}
+}
+
+func TestManualNodeEntry_AddAndDone(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepManualNodeEntry
+
+	// Set IP directly (textinput doesn't process rune messages without Focus)
+	m.manualIPInput.SetValue("10.0.0.1")
+
+	// Add it
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if len(m.manualNodes) != 1 {
+		t.Fatalf("expected 1 manual node, got %d", len(m.manualNodes))
+	}
+	if m.manualNodes[0].IP != "10.0.0.1" {
+		t.Errorf("IP = %q, want 10.0.0.1", m.manualNodes[0].IP)
+	}
+
+	// Press d to finish
+	updated, _ = m.Update(keyMsg("d"))
+	m = updated.(Model)
+
+	if m.Step() != stepSelectNodes {
+		t.Errorf("step = %d, want stepSelectNodes (%d)", m.Step(), stepSelectNodes)
+	}
+	if len(m.selectedNodes) != 1 {
+		t.Error("manual nodes should be pre-selected")
+	}
+}
+
+func TestManualNodeEntry_InvalidIP(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepManualNodeEntry
+
+	m.manualIPInput.SetValue("not-an-ip")
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected validation error for invalid IP")
+	}
+	if m.Step() != stepManualNodeEntry {
+		t.Error("should stay on manual entry step")
+	}
+}
+
+func TestManualNodeEntry_DoneWithoutNodes(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepManualNodeEntry
+
+	updated, _ := m.Update(keyMsg("d"))
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected error when pressing done with no nodes")
+	}
+	if m.Step() != stepManualNodeEntry {
+		t.Error("should stay on manual entry step")
+	}
+}
+
+// Node configuration validation tests
+
+func TestNodeConfigValidation_InvalidRole(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	// Set invalid role
+	m.nodeInputs[fieldRole].SetValue("master")
+	m.nodeInputs[fieldHostname].SetValue("node-01")
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected validation error for invalid role")
+	}
+	if m.Step() != stepConfigureNode {
+		t.Error("should stay on configure step on validation error")
+	}
+}
+
+func TestNodeConfigValidation_InvalidHostname(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("-bad-name")
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected validation error for invalid hostname")
+	}
+}
+
+func TestNodeConfigValidation_Success(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/sda")
+	m.nodeInputs[fieldInterface].SetValue("eth0")
+	m.nodeInputs[fieldAddress].SetValue("10.0.0.1/24")
+	m.nodeInputs[fieldGateway].SetValue("10.0.0.254")
+	m.nodeInputs[fieldDNS].SetValue("8.8.8.8,1.1.1.1")
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.Step() != stepConfirm {
+		t.Errorf("step = %d, want stepConfirm (%d), err = %v", m.Step(), stepConfirm, m.err)
+	}
+	if len(m.result.Nodes) != 1 {
+		t.Fatalf("expected 1 configured node, got %d", len(m.result.Nodes))
+	}
+	n := m.result.Nodes[0]
+	if n.Role != "controlplane" {
+		t.Errorf("role = %q, want controlplane", n.Role)
+	}
+	if n.Gateway != "10.0.0.254" {
+		t.Errorf("gateway = %q, want 10.0.0.254", n.Gateway)
+	}
+	if len(n.DNS) != 2 || n.DNS[0] != "8.8.8.8" || n.DNS[1] != "1.1.1.1" {
+		t.Errorf("DNS = %v, want [8.8.8.8 1.1.1.1]", n.DNS)
+	}
+}
+
+func TestNodeConfigDefaultRole(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}, {IP: "10.0.0.2"}}
+	m.selectedNodes = []int{0, 1}
+
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+	if m.nodeInputs[fieldRole].Value() != "controlplane" {
+		t.Errorf("first node role = %q, want controlplane", m.nodeInputs[fieldRole].Value())
+	}
+
+	m.currentNodeIdx = 1
+	m.prepareNodeInputs()
+	if m.nodeInputs[fieldRole].Value() != "worker" {
+		t.Errorf("second node role = %q, want worker", m.nodeInputs[fieldRole].Value())
+	}
+}
+
+// View rendering tests
+
 func TestViewRendersWithoutPanic(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic", "cozystack"}, nil)
 
 	steps := []step{
 		stepSelectPreset, stepClusterName, stepEndpoint,
-		stepScanCIDR, stepScanning, stepDone,
+		stepScanCIDR, stepScanning, stepManualNodeEntry, stepDone,
 	}
 
 	for _, s := range steps {
@@ -322,42 +468,38 @@ func TestViewRendersWithoutPanic(t *testing.T) {
 		}
 	}
 
-	// Test error view with error set
+	// Error view
 	m.step = stepError
 	m.err = fmt.Errorf("test error")
-	output := m.View()
-	if output == "" {
-		t.Error("View() returned empty string for error step")
+	if m.View() == "" {
+		t.Error("View() returned empty for error step")
 	}
 
-	// Test select nodes view
+	// Select nodes view
 	m.step = stepSelectNodes
 	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1", Hostname: "node-01"}}
-	output = m.View()
-	if output == "" {
-		t.Error("View() returned empty string for selectNodes step")
+	if m.View() == "" {
+		t.Error("View() returned empty for selectNodes step")
 	}
 
-	// Test configure node view
+	// Configure node view
 	m.step = stepConfigureNode
 	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
 	m.selectedNodes = []int{0}
 	m.currentNodeIdx = 0
-	output = m.View()
-	if output == "" {
-		t.Error("View() returned empty string for configureNode step")
+	if m.View() == "" {
+		t.Error("View() returned empty for configureNode step")
 	}
 
-	// Test confirm view
+	// Confirm view
 	m.step = stepConfirm
 	m.result = wizard.WizardResult{
 		Preset:      "generic",
 		ClusterName: "test",
 		Endpoint:    "https://10.0.0.1:6443",
-		Nodes:       []wizard.NodeConfig{{Hostname: "node-01", Role: "controlplane"}},
+		Nodes:       []wizard.NodeConfig{{Hostname: "cp-1", Role: "controlplane", DNS: []string{"8.8.8.8"}}},
 	}
-	output = m.View()
-	if output == "" {
-		t.Error("View() returned empty string for confirm step")
+	if m.View() == "" {
+		t.Error("View() returned empty for confirm step")
 	}
 }

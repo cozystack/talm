@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -20,12 +21,25 @@ const (
 	stepEndpoint
 	stepScanCIDR
 	stepScanning
+	stepManualNodeEntry
 	stepSelectNodes
 	stepConfigureNode
 	stepConfirm
 	stepGenerating
 	stepDone
 	stepError
+)
+
+// Node configuration field indices.
+const (
+	fieldRole      = 0
+	fieldHostname  = 1
+	fieldDisk      = 2
+	fieldInterface = 3
+	fieldAddress   = 4
+	fieldGateway   = 5
+	fieldDNS       = 6
+	nodeFieldCount = 7
 )
 
 // Message types for async operations.
@@ -52,6 +66,7 @@ type Model struct {
 	nameInput     textinput.Model
 	endpointInput textinput.Model
 	cidrInput     textinput.Model
+	manualIPInput textinput.Model
 	spinner       spinner.Model
 
 	// Node selection state
@@ -59,9 +74,12 @@ type Model struct {
 	selectedNodes   []int // indices into discoveredNodes
 	cursor          int   // for list navigation
 
+	// Manual node entry
+	manualNodes []wizard.NodeInfo
+
 	// Node configuration state
 	configuredNodes []wizard.NodeConfig
-	nodeInputs      [4]textinput.Model // hostname, disk, interface, address
+	nodeInputs      [nodeFieldCount]textinput.Model
 	nodeInputFocus  int
 	currentNodeIdx  int
 
@@ -88,14 +106,20 @@ func New(scanner wizard.Scanner, presets []string, generateFn GenerateFunc) Mode
 	cidr := textinput.New()
 	cidr.Placeholder = "192.168.1.0/24"
 
-	var nodeInputs [4]textinput.Model
+	manualIP := textinput.New()
+	manualIP.Placeholder = "192.168.1.10"
+
+	var nodeInputs [nodeFieldCount]textinput.Model
 	for i := range nodeInputs {
 		nodeInputs[i] = textinput.New()
 	}
-	nodeInputs[0].Placeholder = "node-01"
-	nodeInputs[1].Placeholder = "/dev/sda"
-	nodeInputs[2].Placeholder = "eth0"
-	nodeInputs[3].Placeholder = "192.168.1.10/24"
+	nodeInputs[fieldRole].Placeholder = "controlplane"
+	nodeInputs[fieldHostname].Placeholder = "node-01"
+	nodeInputs[fieldDisk].Placeholder = "/dev/sda"
+	nodeInputs[fieldInterface].Placeholder = "eth0"
+	nodeInputs[fieldAddress].Placeholder = "192.168.1.10/24"
+	nodeInputs[fieldGateway].Placeholder = "192.168.1.1"
+	nodeInputs[fieldDNS].Placeholder = "8.8.8.8,1.1.1.1"
 
 	return Model{
 		step:    stepSelectPreset,
@@ -105,6 +129,7 @@ func New(scanner wizard.Scanner, presets []string, generateFn GenerateFunc) Mode
 		nameInput:     name,
 		endpointInput: endpoint,
 		cidrInput:     cidr,
+		manualIPInput: manualIP,
 		spinner:       s,
 		nodeInputs:    nodeInputs,
 		generateFn:    generateFn,
@@ -189,6 +214,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEndpoint(msg)
 	case stepScanCIDR:
 		return m.updateScanCIDR(msg)
+	case stepManualNodeEntry:
+		return m.updateManualNodeEntry(msg)
 	case stepSelectNodes:
 		return m.updateSelectNodes(msg)
 	case stepConfigureNode:
@@ -210,11 +237,15 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 		m.step = stepClusterName
 	case stepScanCIDR:
 		m.step = stepEndpoint
+	case stepManualNodeEntry:
+		m.step = stepScanCIDR
+		m.manualNodes = nil
 	case stepSelectNodes:
 		m.step = stepScanCIDR
 	case stepConfigureNode:
 		if m.currentNodeIdx > 0 {
 			m.currentNodeIdx--
+			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
 		} else {
 			m.step = stepSelectNodes
 		}
@@ -241,7 +272,6 @@ func (m Model) updateSelectPreset(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.result.Preset = m.presets[m.cursor]
 			m.step = stepClusterName
-			m.nameInput.Focus()
 			m.cursor = 0
 			return m, m.nameInput.Focus()
 		}
@@ -259,7 +289,6 @@ func (m Model) updateClusterName(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result.ClusterName = name
 		m.err = nil
 		m.step = stepEndpoint
-		m.endpointInput.Focus()
 		return m, m.endpointInput.Focus()
 	}
 
@@ -278,7 +307,6 @@ func (m Model) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result.Endpoint = endpoint
 		m.err = nil
 		m.step = stepScanCIDR
-		m.cidrInput.Focus()
 		return m, m.cidrInput.Focus()
 	}
 
@@ -288,22 +316,68 @@ func (m Model) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateScanCIDR(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "enter" {
-		cidr := m.cidrInput.Value()
-		if err := wizard.ValidateCIDR(cidr); err != nil {
-			m.err = err
-			return m, nil
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "enter":
+			cidr := m.cidrInput.Value()
+			if err := wizard.ValidateCIDR(cidr); err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.err = nil
+			m.step = stepScanning
+			return m, tea.Batch(
+				m.spinner.Tick,
+				scanNetworkCmd(m.scanner, cidr),
+			)
+		case "s":
+			m.err = nil
+			m.step = stepManualNodeEntry
+			m.manualNodes = nil
+			return m, m.manualIPInput.Focus()
 		}
-		m.err = nil
-		m.step = stepScanning
-		return m, tea.Batch(
-			m.spinner.Tick,
-			scanNetworkCmd(m.scanner, cidr),
-		)
 	}
 
 	var cmd tea.Cmd
 	m.cidrInput, cmd = m.cidrInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateManualNodeEntry(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "enter":
+			ip := m.manualIPInput.Value()
+			if ip == "" {
+				return m, nil
+			}
+			if err := wizard.ValidateIP(ip); err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.err = nil
+			m.manualNodes = append(m.manualNodes, wizard.NodeInfo{IP: ip})
+			m.manualIPInput.SetValue("")
+			return m, nil
+		case "d":
+			if len(m.manualNodes) == 0 {
+				m.err = fmt.Errorf("add at least one node")
+				return m, nil
+			}
+			m.err = nil
+			m.discoveredNodes = m.manualNodes
+			// Pre-select all manual nodes
+			m.selectedNodes = make([]int, len(m.manualNodes))
+			for i := range m.manualNodes {
+				m.selectedNodes[i] = i
+			}
+			m.step = stepSelectNodes
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.manualIPInput, cmd = m.manualIPInput.Update(msg)
 	return m, cmd
 }
 
@@ -327,9 +401,10 @@ func (m Model) updateSelectNodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.err = nil
 			m.currentNodeIdx = 0
+			m.configuredNodes = nil
 			m.step = stepConfigureNode
 			m.prepareNodeInputs()
-			return m, m.nodeInputs[0].Focus()
+			return m, m.nodeInputs[fieldRole].Focus()
 		}
 	}
 	return m, nil
@@ -351,18 +426,31 @@ func (m *Model) prepareNodeInputs() {
 	}
 	node := m.discoveredNodes[m.selectedNodes[m.currentNodeIdx]]
 
-	m.nodeInputs[0].SetValue(node.Hostname)
-	if len(node.Disks) > 0 {
-		m.nodeInputs[1].SetValue(node.Disks[0].DevPath)
+	// Default role: first node is controlplane, rest are workers
+	if m.currentNodeIdx == 0 {
+		m.nodeInputs[fieldRole].SetValue("controlplane")
 	} else {
-		m.nodeInputs[1].SetValue("")
+		m.nodeInputs[fieldRole].SetValue("worker")
+	}
+
+	m.nodeInputs[fieldHostname].SetValue(node.Hostname)
+	if len(node.Disks) > 0 {
+		m.nodeInputs[fieldDisk].SetValue(node.Disks[0].DevPath)
+	} else {
+		m.nodeInputs[fieldDisk].SetValue("")
 	}
 	if len(node.Interfaces) > 0 {
-		m.nodeInputs[2].SetValue(node.Interfaces[0].Name)
+		m.nodeInputs[fieldInterface].SetValue(node.Interfaces[0].Name)
 	} else {
-		m.nodeInputs[2].SetValue("")
+		m.nodeInputs[fieldInterface].SetValue("")
 	}
-	m.nodeInputs[3].SetValue("")
+	if len(node.Interfaces) > 0 && len(node.Interfaces[0].IPs) > 0 {
+		m.nodeInputs[fieldAddress].SetValue(node.Interfaces[0].IPs[0])
+	} else {
+		m.nodeInputs[fieldAddress].SetValue("")
+	}
+	m.nodeInputs[fieldGateway].SetValue("")
+	m.nodeInputs[fieldDNS].SetValue("8.8.8.8")
 	m.nodeInputFocus = 0
 }
 
@@ -370,23 +458,18 @@ func (m Model) updateConfigureNode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "tab":
-			m.nodeInputFocus = (m.nodeInputFocus + 1) % len(m.nodeInputs)
+			m.nodeInputFocus = (m.nodeInputFocus + 1) % nodeFieldCount
 			return m, m.nodeInputs[m.nodeInputFocus].Focus()
 		case "shift+tab":
-			m.nodeInputFocus = (m.nodeInputFocus - 1 + len(m.nodeInputs)) % len(m.nodeInputs)
+			m.nodeInputFocus = (m.nodeInputFocus - 1 + nodeFieldCount) % nodeFieldCount
 			return m, m.nodeInputs[m.nodeInputFocus].Focus()
 		case "enter":
-			role := "worker"
-			if m.currentNodeIdx == 0 {
-				role = "controlplane"
+			nc, err := m.validateAndBuildNodeConfig()
+			if err != nil {
+				m.err = err
+				return m, nil
 			}
-			nc := wizard.NodeConfig{
-				Hostname:  m.nodeInputs[0].Value(),
-				Role:      role,
-				DiskPath:  m.nodeInputs[1].Value(),
-				Interface: m.nodeInputs[2].Value(),
-				Addresses: m.nodeInputs[3].Value(),
-			}
+			m.err = nil
 			m.configuredNodes = append(m.configuredNodes, nc)
 			m.currentNodeIdx++
 
@@ -396,13 +479,64 @@ func (m Model) updateConfigureNode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.prepareNodeInputs()
-			return m, m.nodeInputs[0].Focus()
+			return m, m.nodeInputs[fieldRole].Focus()
 		}
 	}
 
 	var cmd tea.Cmd
 	m.nodeInputs[m.nodeInputFocus], cmd = m.nodeInputs[m.nodeInputFocus].Update(msg)
 	return m, cmd
+}
+
+func (m Model) validateAndBuildNodeConfig() (wizard.NodeConfig, error) {
+	role := m.nodeInputs[fieldRole].Value()
+	if err := wizard.ValidateNodeRole(role); err != nil {
+		return wizard.NodeConfig{}, err
+	}
+
+	hostname := m.nodeInputs[fieldHostname].Value()
+	if err := wizard.ValidateHostname(hostname); err != nil {
+		return wizard.NodeConfig{}, err
+	}
+
+	address := m.nodeInputs[fieldAddress].Value()
+	if address != "" {
+		if err := wizard.ValidateCIDR(address); err != nil {
+			return wizard.NodeConfig{}, fmt.Errorf("address: %w", err)
+		}
+	}
+
+	gateway := m.nodeInputs[fieldGateway].Value()
+	if gateway != "" {
+		if err := wizard.ValidateIP(gateway); err != nil {
+			return wizard.NodeConfig{}, fmt.Errorf("gateway: %w", err)
+		}
+	}
+
+	var dns []string
+	dnsStr := m.nodeInputs[fieldDNS].Value()
+	if dnsStr != "" {
+		for _, d := range strings.Split(dnsStr, ",") {
+			d = strings.TrimSpace(d)
+			if d == "" {
+				continue
+			}
+			if err := wizard.ValidateIP(d); err != nil {
+				return wizard.NodeConfig{}, fmt.Errorf("DNS %q: %w", d, err)
+			}
+			dns = append(dns, d)
+		}
+	}
+
+	return wizard.NodeConfig{
+		Hostname:  hostname,
+		Role:      role,
+		DiskPath:  m.nodeInputs[fieldDisk].Value(),
+		Interface: m.nodeInputs[fieldInterface].Value(),
+		Addresses: address,
+		Gateway:   gateway,
+		DNS:       dns,
+	}, nil
 }
 
 func (m Model) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
