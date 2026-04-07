@@ -557,10 +557,11 @@ func (m Model) validateAndBuildNodeConfig() (wizard.NodeConfig, error) {
 	}
 
 	address := m.nodeInputs[fieldAddress].Value()
-	if address != "" {
-		if err := wizard.ValidateCIDR(address); err != nil {
-			return wizard.NodeConfig{}, fmt.Errorf("address: %w", err)
-		}
+	if address == "" {
+		return wizard.NodeConfig{}, fmt.Errorf("address (CIDR) is required")
+	}
+	if err := wizard.ValidateCIDR(address); err != nil {
+		return wizard.NodeConfig{}, fmt.Errorf("address: %w", err)
 	}
 
 	gateway := m.nodeInputs[fieldGateway].Value()

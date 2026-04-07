@@ -272,7 +272,6 @@ var initCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("failed to generate key: %w", err)
 				}
-				keyFileExists = true
 				keyWasCreated = keyCreated
 			}
 			if err := age.EncryptSecretsFile(Config.RootDir); err != nil {
@@ -305,6 +304,8 @@ var initCmd = &cobra.Command{
 		}
 
 		if kubeconfigFileExists && !encryptedKubeconfigFileExists {
+			// Re-check key existence (may have been created by talosconfig encryption)
+			keyFileExists = fileExists(keyFile)
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
@@ -670,9 +671,12 @@ func GenerateProject(opts GenerateOptions) error {
 		}
 	}
 
-	// Apply values overrides if provided
+	// Apply values overrides if provided and values.yaml exists
+	valuesPath := filepath.Join(opts.RootDir, "values.yaml")
 	if len(opts.ValuesOverrides) > 0 {
-		if err := mergeValuesOverrides(filepath.Join(opts.RootDir, "values.yaml"), opts.ValuesOverrides); err != nil {
+		if _, statErr := os.Stat(valuesPath); os.IsNotExist(statErr) {
+			// values.yaml doesn't exist — skip overrides silently
+		} else if err := mergeValuesOverrides(valuesPath, opts.ValuesOverrides); err != nil {
 			return fmt.Errorf("failed to apply values overrides: %w", err)
 		}
 	}
@@ -704,12 +708,10 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 	}
 
 	for k, v := range overrides {
-		// Guard: skip nested map overrides to prevent accidentally dropping sibling keys.
+		// Guard: reject overrides that would replace a map (preventing accidental data loss).
 		if existing, ok := values[k]; ok {
 			if _, existingIsMap := existing.(map[string]interface{}); existingIsMap {
-				if _, overrideIsMap := v.(map[string]interface{}); overrideIsMap {
-					return fmt.Errorf("nested map override for key %q is not supported: use flat keys only", k)
-				}
+				return fmt.Errorf("cannot override map key %q with a flat value: use flat keys only", k)
 			}
 		}
 		values[k] = v

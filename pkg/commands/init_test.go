@@ -229,10 +229,10 @@ func TestMergeValuesOverrides_RejectsNestedMaps(t *testing.T) {
 
 	err := mergeValuesOverrides(valuesPath, overrides)
 	if err == nil {
-		t.Fatal("expected error for nested map override, got nil")
+		t.Fatal("expected error for map override, got nil")
 	}
-	if !strings.Contains(err.Error(), "nested map override") {
-		t.Errorf("expected 'nested map override' error, got: %v", err)
+	if !strings.Contains(err.Error(), "cannot override map key") {
+		t.Errorf("expected 'cannot override map key' error, got: %v", err)
 	}
 }
 
@@ -284,6 +284,25 @@ func TestGenerateProject_Idempotent(t *testing.T) {
 	secretsAfter := readFile(t, rootDir, "secrets.yaml")
 	if secretsBefore != secretsAfter {
 		t.Error("secrets.yaml was overwritten on idempotent re-run")
+	}
+}
+
+func TestMergeValuesOverrides_RejectsScalarOverMap(t *testing.T) {
+	tmpDir := t.TempDir()
+	valuesPath := filepath.Join(tmpDir, "values.yaml")
+
+	content := "network:\n  podSubnets:\n  - 10.244.0.0/16\n"
+	if err := os.WriteFile(valuesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	overrides := map[string]interface{}{
+		"network": "flat-value",
+	}
+
+	err := mergeValuesOverrides(valuesPath, overrides)
+	if err == nil {
+		t.Fatal("expected error when scalar replaces map, got nil")
 	}
 }
 
