@@ -53,6 +53,11 @@ func scanTCPPort(ctx context.Context, cidr string, port int, maxWorkers int) ([]
 	}
 
 	wg.Wait()
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	return results, nil
 }
 

@@ -21,8 +21,12 @@ func WriteNodeFiles(rootDir string, nodes []NodeConfig) error {
 	for _, node := range nodes {
 		// Sanitize: use only the base name to prevent path traversal
 		safeName := filepath.Base(node.Hostname)
-		if safeName == "." || safeName == ".." || safeName == "" {
+		if safeName == "." || safeName == ".." || safeName == "" || strings.ContainsAny(safeName, "/\\") {
 			return fmt.Errorf("invalid hostname for file creation: %q", node.Hostname)
+		}
+		// Validate as a proper hostname
+		if err := ValidateHostname(safeName); err != nil {
+			return fmt.Errorf("invalid hostname for file creation: %w", err)
 		}
 		filePath := filepath.Join(nodesDir, safeName+".yaml")
 
