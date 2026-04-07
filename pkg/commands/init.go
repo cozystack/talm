@@ -694,12 +694,13 @@ func init() {
 
 // GenerateOptions holds options for project generation.
 type GenerateOptions struct {
-	RootDir      string
-	Preset       string
-	ClusterName  string
-	TalosVersion string
-	Version      string // Chart version, e.g. "0.1.0"
-	Force        bool
+	RootDir         string
+	Preset          string
+	ClusterName     string
+	TalosVersion    string
+	Version         string // Chart version, e.g. "0.1.0"
+	Force           bool
+	ValuesOverrides map[string]interface{} // optional: merge into generated values.yaml
 }
 
 // GenerateProject creates a new talm project: secrets, talosconfig, preset files, .gitignore, and nodes directory.
@@ -803,8 +804,42 @@ func GenerateProject(opts GenerateOptions) error {
 		}
 	}
 
+	// Apply values overrides if provided
+	if len(opts.ValuesOverrides) > 0 {
+		if err := mergeValuesOverrides(filepath.Join(opts.RootDir, "values.yaml"), opts.ValuesOverrides); err != nil {
+			return fmt.Errorf("failed to apply values overrides: %w", err)
+		}
+	}
+
 	// Write .gitignore
 	return writeGitignoreForProject(opts.RootDir)
+}
+
+// mergeValuesOverrides reads an existing values.yaml, applies overrides, and writes it back.
+func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) error {
+	data, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return err
+	}
+
+	var values map[string]interface{}
+	if err := yaml.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	if values == nil {
+		values = make(map[string]interface{})
+	}
+
+	for k, v := range overrides {
+		values[k] = v
+	}
+
+	out, err := yaml.Marshal(values)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(valuesPath, out, 0o644)
 }
 
 // writeFileIfNotExists writes a file if it doesn't exist (or if force is true).

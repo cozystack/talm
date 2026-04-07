@@ -154,6 +154,53 @@ func TestGenerateProject_DefaultVersion(t *testing.T) {
 	assertFileContains(t, rootDir, "Chart.yaml", "0.1.0")
 }
 
+func TestGenerateProject_ValuesOverrides(t *testing.T) {
+	rootDir := t.TempDir()
+	opts := GenerateOptions{
+		RootDir:     rootDir,
+		Preset:      "generic",
+		ClusterName: "test",
+		Version:     "0.1.0",
+		ValuesOverrides: map[string]interface{}{
+			"endpoint": "https://10.0.0.1:6443",
+		},
+	}
+
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("GenerateProject failed: %v", err)
+	}
+
+	content := readFile(t, rootDir, "values.yaml")
+	if !strings.Contains(content, "https://10.0.0.1:6443") {
+		t.Errorf("values.yaml should contain overridden endpoint, got:\n%s", content)
+	}
+	// Original default endpoint should be replaced
+	if strings.Contains(content, "192.168.100.10") {
+		t.Error("values.yaml still contains default endpoint after override")
+	}
+}
+
+func TestGenerateProject_ValuesOverridesPreservesOtherFields(t *testing.T) {
+	rootDir := t.TempDir()
+	opts := GenerateOptions{
+		RootDir:     rootDir,
+		Preset:      "generic",
+		ClusterName: "test",
+		Version:     "0.1.0",
+		ValuesOverrides: map[string]interface{}{
+			"endpoint": "https://custom:6443",
+		},
+	}
+
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("GenerateProject failed: %v", err)
+	}
+
+	// podSubnets should still be present from preset defaults
+	assertFileContains(t, rootDir, "values.yaml", "podSubnets")
+	assertFileContains(t, rootDir, "values.yaml", "serviceSubnets")
+}
+
 // Test helpers
 
 func assertFileExists(t *testing.T, rootDir, relPath string) {
