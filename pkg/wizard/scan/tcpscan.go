@@ -39,7 +39,8 @@ func scanTCPPort(ctx context.Context, cidr string, port int, maxWorkers int) ([]
 			}
 
 			addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
-			conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+			dialer := net.Dialer{Timeout: dialTimeout}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
 			if err != nil {
 				return
 			}

@@ -784,8 +784,10 @@ func writeGitignoreForDir(rootDir string, kubeconfigName string) error {
 	gitignoreFile := filepath.Join(rootDir, ".gitignore")
 
 	var existingStr string
+	fileExisted := false
 	// If .gitignore exists, read it
 	if _, err := os.Stat(gitignoreFile); err == nil {
+		fileExisted = true
 		existingContent, err := os.ReadFile(gitignoreFile)
 		if err != nil {
 			return fmt.Errorf("failed to read existing .gitignore: %w", err)
@@ -827,13 +829,15 @@ func writeGitignoreForDir(rootDir string, kubeconfigName string) error {
 	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
-	err := os.WriteFile(gitignoreFile, []byte(existingStr), 0o644)
-	if _, statErr := os.Stat(gitignoreFile); statErr == nil {
+	if err := os.WriteFile(gitignoreFile, []byte(existingStr), 0o644); err != nil {
+		return err
+	}
+	if fileExisted {
 		fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
 	} else {
 		fmt.Fprintf(os.Stderr, "Created %s\n", gitignoreFile)
 	}
-	return err
+	return nil
 }
 
 func fileExists(file string) bool {
