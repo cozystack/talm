@@ -18,10 +18,9 @@ import (
 )
 
 const (
-	defaultTalosPort    = 50000
-	defaultTimeout      = 30 * time.Second
-	maxConcurrentJobs   = 10
-	nodeInfoTimeout     = 10 * time.Second
+	defaultTalosPort  = 50000
+	defaultTimeout    = 30 * time.Second
+	maxConcurrentJobs = 10
 )
 
 // TalosScanner discovers Talos nodes via TCP port scanning and collects
@@ -63,7 +62,11 @@ func (s *TalosScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.N
 func (s *TalosScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeInfo, error) {
 	node := wizard.NodeInfo{IP: ip}
 
-	infoCtx, cancel := context.WithTimeout(ctx, nodeInfoTimeout)
+	timeout := s.Timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	infoCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	c, err := client.New(infoCtx,
@@ -193,5 +196,10 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wiz
 	}
 
 	wg.Wait()
+
+	if len(nodes) == 0 && len(ips) > 0 {
+		return nil, fmt.Errorf("found %d host(s) with open port %d but none responded as Talos nodes", len(ips), s.Port)
+	}
+
 	return nodes, nil
 }

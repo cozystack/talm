@@ -163,3 +163,39 @@ func TestWriteNodeFiles_CreatesNodesDir(t *testing.T) {
 		t.Error("file should be created even when nodes/ dir doesn't exist")
 	}
 }
+
+func TestWriteNodeFiles_PathTraversal(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "../escape", Role: "worker", Addresses: "10.0.0.1/24"},
+	}
+
+	if err := WriteNodeFiles(rootDir, nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should create nodes/escape.yaml (base name only), NOT ../escape.yaml
+	escapedPath := filepath.Join(rootDir, "escape.yaml")
+	if _, err := os.Stat(escapedPath); err == nil {
+		t.Error("path traversal: file created outside nodes/ directory")
+	}
+
+	safePath := filepath.Join(rootDir, "nodes", "escape.yaml")
+	if _, err := os.Stat(safePath); os.IsNotExist(err) {
+		t.Error("expected file at nodes/escape.yaml (sanitized)")
+	}
+}
+
+func TestWriteNodeFiles_InvalidHostname(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "..", Role: "worker", Addresses: "10.0.0.1/24"},
+	}
+
+	err := WriteNodeFiles(rootDir, nodes)
+	if err == nil {
+		t.Error("expected error for '..' hostname")
+	}
+}

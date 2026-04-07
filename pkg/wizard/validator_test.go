@@ -48,8 +48,8 @@ func TestValidateHostname(t *testing.T) {
 		{"starts with dash", "-node", true},
 		{"ends with dash", "node-", true},
 		{"contains space", "my node", true},
-		{"too long", strings.Repeat("a", 254), true},
-		{"max valid length", strings.Repeat("a", 253), false},
+		{"too long", strings.Repeat("a", 64), true},
+		{"max valid length", strings.Repeat("a", 63), false},
 	}
 
 	for _, tt := range tests {
