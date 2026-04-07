@@ -3,6 +3,8 @@ package scan
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -174,7 +176,10 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wiz
 				return
 			}
 
-			node, _ := s.GetNodeInfo(ctx, ip)
+			node, err := s.GetNodeInfo(ctx, ip)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to collect info for %s: %v\n", ip, err)
+			}
 			if node.IP == "" {
 				node.IP = ip
 			}

@@ -58,7 +58,7 @@ func scanTCPPort(ctx context.Context, cidr string, port int, maxWorkers int) ([]
 // enumerateHosts expands a CIDR notation to a list of usable host IPs.
 // It skips the network and broadcast addresses for subnets larger than /31.
 func enumerateHosts(cidr string) ([]net.IP, error) {
-	ip, ipNet, err := net.ParseCIDR(cidr)
+	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func enumerateHosts(cidr string) ([]net.IP, error) {
 
 	// /32 — single host
 	if ones == 32 {
-		return []net.IP{ip.To4()}, nil
+		return []net.IP{ipNet.IP.To4()}, nil
 	}
 
 	// /31 — point-to-point, both addresses are usable (RFC 3021)

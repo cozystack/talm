@@ -50,14 +50,3 @@ func memoryFromResponse(resp *machineapi.MemoryResponse) uint64 {
 	return msg.Meminfo.Memtotal * 1024
 }
 
-// filterPhysicalInterfaces removes interfaces that have empty MAC addresses
-// (loopback, virtual interfaces without hardware).
-func filterPhysicalInterfaces(interfaces []wizard.NetInterface) []wizard.NetInterface {
-	var physical []wizard.NetInterface
-	for _, iface := range interfaces {
-		if iface.MAC != "" {
-			physical = append(physical, iface)
-		}
-	}
-	return physical
-}
