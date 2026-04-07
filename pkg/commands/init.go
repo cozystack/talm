@@ -686,7 +686,7 @@ func GenerateProject(opts GenerateOptions) error {
 }
 
 // mergeValuesOverrides reads an existing values.yaml, applies top-level key overrides, and writes it back.
-// This is a shallow merge: each override key replaces the entire value at that key.
+// This is a shallow merge: each override key REPLACES the entire value at that key, including lists.
 // Callers must ensure overrides only contain top-level keys (not nested structures).
 // Note: YAML comments and key ordering will not be preserved (marshal/unmarshal round-trip).
 func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) error {

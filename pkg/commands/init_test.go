@@ -236,6 +236,57 @@ func TestMergeValuesOverrides_RejectsNestedMaps(t *testing.T) {
 	}
 }
 
+func TestMergeValuesOverrides_ListReplacement(t *testing.T) {
+	tmpDir := t.TempDir()
+	valuesPath := filepath.Join(tmpDir, "values.yaml")
+
+	content := "podSubnets:\n- 10.244.0.0/16\n- 10.245.0.0/16\n"
+	if err := os.WriteFile(valuesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	overrides := map[string]interface{}{
+		"podSubnets": []string{"10.244.0.0/16"},
+	}
+
+	if err := mergeValuesOverrides(valuesPath, overrides); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(valuesPath)
+	// List should be replaced entirely (only 1 entry, not 2)
+	if strings.Contains(string(data), "10.245.0.0/16") {
+		t.Error("second subnet should have been replaced (shallow merge replaces entire list)")
+	}
+}
+
+func TestGenerateProject_Idempotent(t *testing.T) {
+	rootDir := t.TempDir()
+	opts := GenerateOptions{
+		RootDir:     rootDir,
+		Preset:      "generic",
+		ClusterName: "test",
+		Version:     "0.1.0",
+		Force:       false,
+	}
+
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("first GenerateProject failed: %v", err)
+	}
+
+	secretsBefore := readFile(t, rootDir, "secrets.yaml")
+
+	// Run again — should succeed and NOT overwrite existing files
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("second GenerateProject should be idempotent, got: %v", err)
+	}
+
+	secretsAfter := readFile(t, rootDir, "secrets.yaml")
+	if secretsBefore != secretsAfter {
+		t.Error("secrets.yaml was overwritten on idempotent re-run")
+	}
+}
+
 func TestMergeValuesOverrides_FlatKeysWork(t *testing.T) {
 	tmpDir := t.TempDir()
 	valuesPath := filepath.Join(tmpDir, "values.yaml")
