@@ -2,71 +2,53 @@ package scan
 
 import (
 	"context"
-	"fmt"
-	"os/exec"
+	"crypto/tls"
 	"sync"
 	"time"
 
+	"github.com/cosi-project/runtime/pkg/resource"
+	"github.com/cosi-project/runtime/pkg/resource/meta"
+	"gopkg.in/yaml.v3"
+
 	"github.com/cozystack/talm/pkg/wizard"
+	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
+	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 
 const (
-	defaultTalosPort  = 50000
-	defaultTimeout    = 30 * time.Second
-	maxConcurrentJobs = 10
+	defaultTalosPort    = 50000
+	defaultTimeout      = 30 * time.Second
+	maxConcurrentJobs   = 10
+	nodeInfoTimeout     = 10 * time.Second
 )
 
-// CommandRunner abstracts command execution for testability.
-type CommandRunner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-}
-
-// ExecRunner is the default CommandRunner that uses os/exec.
-type ExecRunner struct{}
-
-// Run executes a command and returns its combined output.
-func (r *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-// NmapScanner discovers Talos nodes using nmap and collects info via talosctl.
-type NmapScanner struct {
-	TalosPort int
-	Timeout   time.Duration
-	Exec      CommandRunner
+// TalosScanner discovers Talos nodes via TCP port scanning and collects
+// hardware info via the Talos gRPC API. No external binaries required.
+type TalosScanner struct {
+	Port    int
+	Timeout time.Duration
 }
 
 // New creates a scanner with default settings.
-func New() *NmapScanner {
-	return &NmapScanner{
-		TalosPort: defaultTalosPort,
-		Timeout:   defaultTimeout,
-		Exec:      &ExecRunner{},
+func New() *TalosScanner {
+	return &TalosScanner{
+		Port:    defaultTalosPort,
+		Timeout: defaultTimeout,
 	}
 }
 
-// ScanNetwork discovers Talos nodes in the given CIDR range by running nmap
-// and then querying each discovered node for hardware details.
-func (s *NmapScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.NodeInfo, error) {
-	scanCtx, cancel := context.WithTimeout(ctx, s.Timeout)
-	defer cancel()
-
-	port := s.TalosPort
+// ScanNetwork discovers Talos nodes in the given CIDR range by TCP-scanning
+// the Talos API port, then querying each discovered node for hardware details.
+func (s *TalosScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.NodeInfo, error) {
+	port := s.Port
 	if port == 0 {
 		port = defaultTalosPort
 	}
 
-	output, err := s.Exec.Run(scanCtx, "nmap",
-		"-p", fmt.Sprintf("%d", port),
-		"--open",
-		"-oG", "-",
-		cidr,
-	)
+	ips, err := scanTCPPort(ctx, cidr, port, maxConcurrentJobs)
 	if err != nil {
-		return nil, fmt.Errorf("nmap scan failed: %w", err)
+		return nil, err
 	}
-
-	ips := ParseNmapGrepOutput(string(output))
 	if len(ips) == 0 {
 		return nil, nil
 	}
@@ -74,42 +56,105 @@ func (s *NmapScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.No
 	return s.collectNodeInfo(ctx, ips)
 }
 
-// GetNodeInfo connects to a single Talos node and retrieves hardware information
-// by running talosctl commands to collect hostname, disks, and network interfaces.
-func (s *NmapScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeInfo, error) {
+// GetNodeInfo connects to a single Talos node via gRPC and retrieves
+// hostname, disks, memory, and network interface information.
+func (s *TalosScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeInfo, error) {
 	node := wizard.NodeInfo{IP: ip}
 
-	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	infoCtx, cancel := context.WithTimeout(ctx, nodeInfoTimeout)
 	defer cancel()
 
-	baseArgs := []string{"--nodes", ip, "--insecure", "get"}
+	c, err := client.New(infoCtx,
+		client.WithEndpoints(ip),
+		client.WithTLSConfig(&tls.Config{InsecureSkipVerify: true}), //nolint:gosec
+	)
+	if err != nil {
+		return node, err
+	}
+	defer func() { _ = c.Close() }()
 
-	// Collect hostname
-	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "hostname", "--output", "json")...); err == nil {
-		if hostname, err := ParseHostname(output); err == nil && hostname != "" {
-			node.Hostname = hostname
-		}
+	nodeCtx := client.WithNode(infoCtx, ip)
+
+	// Collect hostname from Version response
+	if versionResp, err := c.Version(nodeCtx); err == nil {
+		node.Hostname = hostnameFromVersion(versionResp)
 	}
 
 	// Collect disks
-	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "disks", "--output", "json")...); err == nil {
-		if disks, err := ParseDisks(output); err == nil {
-			node.Disks = disks
-		}
+	if disksResp, err := c.Disks(nodeCtx); err == nil {
+		node.Disks = disksFromResponse(disksResp)
 	}
 
-	// Collect network interfaces
-	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "links", "--output", "json")...); err == nil {
-		if links, err := ParseLinks(output); err == nil {
-			node.Interfaces = links
-		}
+	// Collect memory
+	if memResp, err := c.Memory(nodeCtx); err == nil {
+		node.RAMBytes = memoryFromResponse(memResp)
 	}
+
+	// Collect network interfaces via COSI resource API
+	node.Interfaces = s.collectLinks(nodeCtx, c)
 
 	return node, nil
 }
 
+// collectLinks retrieves network link resources via the COSI API and
+// returns physical interfaces only.
+func (s *TalosScanner) collectLinks(ctx context.Context, c *client.Client) []wizard.NetInterface {
+	var interfaces []wizard.NetInterface
+
+	callbackRD := func(_ *meta.ResourceDefinition) error { return nil }
+	callbackResource := func(_ context.Context, _ string, r resource.Resource, callErr error) error {
+		if callErr != nil {
+			return nil
+		}
+
+		yamlData, err := resource.MarshalYAML(r)
+		if err != nil {
+			return nil
+		}
+
+		resMap, ok := yamlData.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+
+		specRaw, ok := resMap["spec"]
+		if !ok {
+			return nil
+		}
+
+		specBytes, err := yaml.Marshal(specRaw)
+		if err != nil {
+			return nil
+		}
+
+		var specMap map[string]interface{}
+		if err := yaml.Unmarshal(specBytes, &specMap); err != nil {
+			return nil
+		}
+
+		name := r.Metadata().ID()
+		mac, _ := specMap["hardwareAddr"].(string)
+		busPath, _ := specMap["busPath"].(string)
+		kind, _ := specMap["kind"].(string)
+
+		// Only include physical interfaces: has busPath, not virtual (bond/vlan)
+		if busPath != "" && kind == "" {
+			interfaces = append(interfaces, wizard.NetInterface{
+				Name: name,
+				MAC:  mac,
+			})
+		}
+
+		return nil
+	}
+
+	_ = helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "links")
+
+	return interfaces
+}
+
 // collectNodeInfo queries multiple nodes concurrently with bounded parallelism.
-func (s *NmapScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wizard.NodeInfo, error) {
+func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wizard.NodeInfo, error) {
 	var (
 		mu    sync.Mutex
 		nodes []wizard.NodeInfo
@@ -129,9 +174,9 @@ func (s *NmapScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wiza
 				return
 			}
 
-			node, err := s.GetNodeInfo(ctx, ip)
-			if err != nil {
-				node = wizard.NodeInfo{IP: ip}
+			node, _ := s.GetNodeInfo(ctx, ip)
+			if node.IP == "" {
+				node.IP = ip
 			}
 
 			mu.Lock()
