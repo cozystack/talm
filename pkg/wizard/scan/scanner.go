@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,6 +202,11 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) ([]wiz
 	if len(nodes) == 0 && len(ips) > 0 {
 		return nil, fmt.Errorf("found %d host(s) with open port %d but none responded as Talos nodes", len(ips), s.Port)
 	}
+
+	// Sort by IP for deterministic ordering
+	slices.SortFunc(nodes, func(a, b wizard.NodeInfo) int {
+		return strings.Compare(a.IP, b.IP)
+	})
 
 	return nodes, nil
 }

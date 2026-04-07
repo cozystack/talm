@@ -113,6 +113,16 @@ func TestValidateEndpoint(t *testing.T) {
 	}
 }
 
+func TestValidateEndpoint_ErrorMentionsHTTPS(t *testing.T) {
+	err := ValidateEndpoint("192.168.0.1:6443")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "https://") {
+		t.Errorf("error should mention https://, got: %v", err)
+	}
+}
+
 func TestValidateIP(t *testing.T) {
 	tests := []struct {
 		name    string

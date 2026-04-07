@@ -90,7 +90,7 @@ func (m Model) viewScanCIDR() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Network to scan"))
 	b.WriteString("\n")
-	b.WriteString(subtitleStyle.Render("Enter CIDR range to discover Talos nodes, or press 's' to enter IPs manually"))
+	b.WriteString(subtitleStyle.Render("Enter CIDR range to discover Talos nodes, or press Ctrl+S to enter IPs manually"))
 	b.WriteString("\n\n")
 	b.WriteString(m.cidrInput.View())
 
@@ -98,7 +98,7 @@ func (m Model) viewScanCIDR() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\nenter scan | s skip scan (manual entry) | esc back"))
+	b.WriteString(helpStyle.Render("\nenter scan | ctrl+s skip scan (manual entry) | esc back"))
 	return b.String()
 }
 

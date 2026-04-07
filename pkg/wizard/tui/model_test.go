@@ -280,7 +280,7 @@ func TestSkipScanTransition(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 	m.step = stepScanCIDR
 
-	updated, _ := m.Update(keyMsg("s"))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	m = updated.(Model)
 
 	if m.Step() != stepManualNodeEntry {
@@ -450,7 +450,7 @@ func TestNodeConfigDefaultRole(t *testing.T) {
 	}
 }
 
-// Fix #1: stepDone must allow quitting
+// Verify the done step allows exiting the program
 
 func TestDoneStep_EnterQuits(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
@@ -472,7 +472,7 @@ func TestDoneStep_QKeyQuits(t *testing.T) {
 	}
 }
 
-// Fix #9: handleBack from configureNode restores previous node inputs
+// Verify back navigation restores previous node's data in the input fields
 
 func TestBackFromConfigureNode_RestoresInputs(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
@@ -502,6 +502,29 @@ func TestBackFromConfigureNode_RestoresInputs(t *testing.T) {
 	// After back, prepareNodeInputs should have restored first-node's hostname
 	if m.nodeInputs[fieldHostname].Value() != "first-node" {
 		t.Errorf("hostname = %q, want first-node", m.nodeInputs[fieldHostname].Value())
+	}
+}
+
+// Verify error recovery returns to the step that triggered the error
+
+func TestErrorBack_ReturnsToPreviousStep(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepGenerating
+
+	// Simulate generation error
+	updated, _ := m.Update(generateErrorMsg{err: fmt.Errorf("disk full")})
+	m = updated.(Model)
+
+	if m.Step() != stepError {
+		t.Fatalf("expected stepError, got %d", m.Step())
+	}
+
+	// Press Esc to go back
+	updated, _ = m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.Step() != stepGenerating {
+		t.Errorf("expected to return to stepGenerating, got %d", m.Step())
 	}
 }
 
