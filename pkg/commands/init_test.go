@@ -87,12 +87,12 @@ func TestGenerateProject_InvalidPreset(t *testing.T) {
 	}
 }
 
-func TestGenerateProject_NoOverwriteWithoutForce(t *testing.T) {
+func TestGenerateProject_SkipsExistingWithoutForce(t *testing.T) {
 	rootDir := t.TempDir()
 
-	// Create existing secrets.yaml
+	// Create existing secrets.yaml with known content
 	secretsFile := filepath.Join(rootDir, "secrets.yaml")
-	if err := os.WriteFile(secretsFile, []byte("existing"), 0o600); err != nil {
+	if err := os.WriteFile(secretsFile, []byte("existing-secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,16 +104,20 @@ func TestGenerateProject_NoOverwriteWithoutForce(t *testing.T) {
 		Force:       false,
 	}
 
-	err := GenerateProject(opts)
-	if err == nil {
-		t.Fatal("expected error when file exists without force, got nil")
+	// Should succeed, skipping existing files
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("GenerateProject should skip existing files, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("expected 'already exists' error, got: %v", err)
+
+	// Verify existing file was NOT overwritten
+	content := readFile(t, rootDir, "secrets.yaml")
+	if content != "existing-secret" {
+		t.Error("secrets.yaml was overwritten despite Force=false")
 	}
-	if strings.Contains(err.Error(), "--force") || strings.Contains(err.Error(), "use force") {
-		t.Error("error message should not reference --force flag")
-	}
+
+	// But new files should still be created
+	assertFileExists(t, rootDir, "Chart.yaml")
+	assertFileExists(t, rootDir, "talosconfig")
 }
 
 func TestGenerateProject_ForceOverwrite(t *testing.T) {
