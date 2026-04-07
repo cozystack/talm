@@ -8,6 +8,7 @@ import (
 )
 
 // mockRunner is a test double for CommandRunner.
+// It matches commands by substring pattern in the full command string.
 type mockRunner struct {
 	outputs map[string]mockResult
 }
@@ -33,10 +34,16 @@ Host: 10.0.0.1 ()	Ports: 50000/open/tcp//unknown///
 Host: 10.0.0.2 ()	Ports: 50000/open/tcp//unknown///
 # Nmap done`
 
+	hostnameJSON := `{"metadata":{"id":"hostname"},"spec":{"hostname":"node-01"}}` + "\n"
+	disksJSON := `{"metadata":{"id":"sda"},"spec":{"dev_path":"/dev/sda","model":"VBOX","size":53687091200}}` + "\n"
+	linksJSON := `{"metadata":{"id":"eth0"},"spec":{"hardwareAddr":"aa:bb:cc:dd:ee:01","busPath":"0000:00:03.0","kind":"","type":"ether"}}` + "\n"
+
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"nmap":     {output: []byte(nmapOutput), err: nil},
-			"talosctl": {output: []byte("node-info"), err: nil},
+			"nmap":     {output: []byte(nmapOutput)},
+			"hostname": {output: []byte(hostnameJSON)},
+			"disks":    {output: []byte(disksJSON)},
+			"links":    {output: []byte(linksJSON)},
 		},
 	}
 
@@ -66,7 +73,7 @@ Host: 10.0.0.2 ()	Ports: 50000/open/tcp//unknown///
 func TestScanNetwork_NoNodes(t *testing.T) {
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"nmap": {output: []byte("# Nmap done -- 0 hosts up"), err: nil},
+			"nmap": {output: []byte("# Nmap done -- 0 hosts up")},
 		},
 	}
 
@@ -84,7 +91,7 @@ func TestScanNetwork_NoNodes(t *testing.T) {
 func TestScanNetwork_NmapError(t *testing.T) {
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"nmap": {output: nil, err: fmt.Errorf("nmap not found")},
+			"nmap": {err: fmt.Errorf("nmap not found")},
 		},
 	}
 
@@ -104,8 +111,10 @@ func TestScanNetwork_NodeInfoErrorDoesNotFailScan(t *testing.T) {
 
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"nmap":     {output: []byte(nmapOutput), err: nil},
-			"talosctl": {output: nil, err: fmt.Errorf("connection refused")},
+			"nmap":     {output: []byte(nmapOutput)},
+			"hostname": {err: fmt.Errorf("connection refused")},
+			"disks":    {err: fmt.Errorf("connection refused")},
+			"links":    {err: fmt.Errorf("connection refused")},
 		},
 	}
 
@@ -124,10 +133,16 @@ func TestScanNetwork_NodeInfoErrorDoesNotFailScan(t *testing.T) {
 	}
 }
 
-func TestGetNodeInfo_Success(t *testing.T) {
+func TestGetNodeInfo_CollectsAllData(t *testing.T) {
+	hostnameJSON := `{"metadata":{"id":"hostname"},"spec":{"hostname":"talos-cp-1"}}` + "\n"
+	disksJSON := `{"metadata":{"id":"sda"},"spec":{"dev_path":"/dev/sda","model":"Samsung SSD","size":500107862016}}` + "\n"
+	linksJSON := `{"metadata":{"id":"eth0"},"spec":{"hardwareAddr":"aa:bb:cc:dd:ee:01","busPath":"0000:00:03.0","kind":"","type":"ether"}}` + "\n"
+
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"talosctl": {output: []byte("hostname-data"), err: nil},
+			"hostname": {output: []byte(hostnameJSON)},
+			"disks":    {output: []byte(disksJSON)},
+			"links":    {output: []byte(linksJSON)},
 		},
 	}
 
@@ -138,24 +153,40 @@ func TestGetNodeInfo_Success(t *testing.T) {
 		t.Fatalf("GetNodeInfo() error = %v", err)
 	}
 	if node.IP != "10.0.0.1" {
-		t.Errorf("expected IP 10.0.0.1, got %s", node.IP)
+		t.Errorf("IP = %q, want 10.0.0.1", node.IP)
+	}
+	if node.Hostname != "talos-cp-1" {
+		t.Errorf("Hostname = %q, want talos-cp-1", node.Hostname)
+	}
+	if len(node.Disks) != 1 || node.Disks[0].DevPath != "/dev/sda" {
+		t.Errorf("Disks = %+v, want 1 disk at /dev/sda", node.Disks)
+	}
+	if len(node.Interfaces) != 1 || node.Interfaces[0].Name != "eth0" {
+		t.Errorf("Interfaces = %+v, want 1 interface eth0", node.Interfaces)
 	}
 }
 
-func TestGetNodeInfo_Error(t *testing.T) {
+func TestGetNodeInfo_PartialFailure(t *testing.T) {
+	hostnameJSON := `{"metadata":{"id":"hostname"},"spec":{"hostname":"node-01"}}` + "\n"
+
 	runner := &mockRunner{
 		outputs: map[string]mockResult{
-			"talosctl": {output: nil, err: fmt.Errorf("timeout")},
+			"hostname": {output: []byte(hostnameJSON)},
+			"disks":    {err: fmt.Errorf("timeout")},
+			"links":    {err: fmt.Errorf("timeout")},
 		},
 	}
 
 	scanner := &NmapScanner{Exec: runner}
 
 	node, err := scanner.GetNodeInfo(context.Background(), "10.0.0.1")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if err != nil {
+		t.Fatalf("GetNodeInfo() should succeed with partial data: %v", err)
 	}
-	if node.IP != "10.0.0.1" {
-		t.Errorf("expected IP to be set even on error, got %s", node.IP)
+	if node.Hostname != "node-01" {
+		t.Errorf("Hostname = %q, want node-01", node.Hostname)
+	}
+	if len(node.Disks) != 0 {
+		t.Errorf("expected 0 disks on failure, got %d", len(node.Disks))
 	}
 }
