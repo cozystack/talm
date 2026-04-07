@@ -16,6 +16,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -56,7 +57,12 @@ var interactiveCmd = &cobra.Command{
 				return err
 			}
 
-			return wizard.WriteNodeFiles(Config.RootDir, result.Nodes)
+			if err := wizard.WriteNodeFiles(Config.RootDir, result.Nodes); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\nNote: Secrets are not encrypted. Run 'talm init --encrypt' to encrypt sensitive files.\n")
+			return nil
 		}
 
 		model := tui.New(scanner, presets, generateFn)

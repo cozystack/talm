@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 var clusterNameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -54,9 +55,13 @@ func ValidateCIDR(cidr string) error {
 }
 
 // ValidateEndpoint checks that endpoint is a valid https URL with a host and port.
+// Example: "https://192.168.0.1:6443"
 func ValidateEndpoint(endpoint string) error {
 	if endpoint == "" {
 		return fmt.Errorf("endpoint must not be empty")
+	}
+	if !strings.HasPrefix(endpoint, "https://") {
+		return fmt.Errorf("endpoint must start with https:// (e.g. https://192.168.0.1:6443)")
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {

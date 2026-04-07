@@ -248,13 +248,18 @@ var initCmd = &cobra.Command{
 		}
 
 		// Core project generation (shared with interactive wizard)
+		kubeconfigName := "kubeconfig"
+		if Config.GlobalOptions.Kubeconfig != "" {
+			kubeconfigName = filepath.Base(Config.GlobalOptions.Kubeconfig)
+		}
 		if err := GenerateProject(GenerateOptions{
-			RootDir:      Config.RootDir,
-			Preset:       initCmdFlags.preset,
-			ClusterName:  initCmdFlags.name,
-			TalosVersion: initCmdFlags.talosVersion,
-			Version:      Config.InitOptions.Version,
-			Force:        initCmdFlags.force,
+			RootDir:        Config.RootDir,
+			Preset:         initCmdFlags.preset,
+			ClusterName:    initCmdFlags.name,
+			TalosVersion:   initCmdFlags.talosVersion,
+			Version:        Config.InitOptions.Version,
+			Force:          initCmdFlags.force,
+			KubeconfigName: kubeconfigName,
 		}); err != nil {
 			return err
 		}
@@ -560,6 +565,7 @@ type GenerateOptions struct {
 	TalosVersion    string
 	Version         string // Chart version, e.g. "0.1.0"
 	Force           bool
+	KubeconfigName  string                // base filename for kubeconfig in .gitignore (default: "kubeconfig")
 	ValuesOverrides map[string]interface{} // optional: merge into generated values.yaml
 }
 
@@ -672,9 +678,9 @@ func GenerateProject(opts GenerateOptions) error {
 	}
 
 	// Write .gitignore
-	kubeconfigName := "kubeconfig"
-	if Config.GlobalOptions.Kubeconfig != "" {
-		kubeconfigName = filepath.Base(Config.GlobalOptions.Kubeconfig)
+	kubeconfigName := opts.KubeconfigName
+	if kubeconfigName == "" {
+		kubeconfigName = "kubeconfig"
 	}
 	return writeGitignoreForDir(opts.RootDir, kubeconfigName)
 }
@@ -682,6 +688,7 @@ func GenerateProject(opts GenerateOptions) error {
 // mergeValuesOverrides reads an existing values.yaml, applies top-level key overrides, and writes it back.
 // This is a shallow merge: each override key replaces the entire value at that key.
 // Callers must ensure overrides only contain top-level keys (not nested structures).
+// Note: YAML comments and key ordering will not be preserved (marshal/unmarshal round-trip).
 func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) error {
 	data, err := os.ReadFile(valuesPath)
 	if err != nil {
@@ -721,7 +728,7 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, error), perm os.FileMode) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("file %q already exists, use force to overwrite", path)
+			return fmt.Errorf("file %q already exists", path)
 		}
 	}
 
@@ -738,7 +745,7 @@ func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, err
 func writeToFile(path string, data []byte, force bool, perm os.FileMode) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("file %q already exists, use force to overwrite", path)
+			return fmt.Errorf("file %q already exists", path)
 		}
 	}
 

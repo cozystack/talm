@@ -111,6 +111,9 @@ func TestGenerateProject_NoOverwriteWithoutForce(t *testing.T) {
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("expected 'already exists' error, got: %v", err)
 	}
+	if strings.Contains(err.Error(), "--force") || strings.Contains(err.Error(), "use force") {
+		t.Error("error message should not reference --force flag")
+	}
 }
 
 func TestGenerateProject_ForceOverwrite(t *testing.T) {

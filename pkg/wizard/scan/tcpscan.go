@@ -84,10 +84,12 @@ func enumerateHosts(cidr string) ([]net.IP, error) {
 		return []net.IP{uint32ToIP(start), uint32ToIP(start + 1)}, nil
 	}
 
-	// For /30 and larger: skip network (first) and broadcast (last)
+	// For /30 and larger: enumerate usable hosts (skip network and broadcast addresses).
+	// totalHosts includes network + broadcast, so usable = totalHosts - 2.
+	// start = network + 1 (first usable), end = network + totalHosts - 2 (last usable).
 	totalHosts := uint32(1) << (32 - ones)
-	start := ipToUint32(ipNet.IP.To4()) + 1      // skip network address
-	end := start + totalHosts - 3                  // skip broadcast address (last = network + total - 1)
+	start := ipToUint32(ipNet.IP.To4()) + 1
+	end := start + totalHosts - 3 // -1 (inclusive range) -1 (skip broadcast) -1 (start already +1)
 
 	hosts := make([]net.IP, 0, end-start+1)
 	for i := start; i <= end; i++ {

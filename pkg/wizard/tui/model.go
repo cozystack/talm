@@ -90,6 +90,9 @@ type Model struct {
 	// Context for cancelling long-running operations
 	cancelScan context.CancelFunc
 
+	// Step before error occurred, for returning on Esc
+	prevStep step
+
 	// Terminal dimensions
 	width, height int
 }
@@ -182,6 +185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.discoveredNodes = msg.nodes
 		if len(msg.nodes) == 0 {
 			m.err = fmt.Errorf("no Talos nodes found in the specified network")
+			m.prevStep = stepScanCIDR
 			m.step = stepError
 			return m, nil
 		}
@@ -190,6 +194,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanErrorMsg:
 		m.err = msg.err
+		m.prevStep = m.step
 		m.step = stepError
 		return m, nil
 
@@ -199,6 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case generateErrorMsg:
 		m.err = msg.err
+		m.prevStep = m.step
 		m.step = stepError
 		return m, nil
 
@@ -261,8 +267,13 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 	case stepConfirm:
 		m.step = stepConfigureNode
 	case stepError:
-		m.step = stepSelectPreset
+		if m.prevStep != 0 {
+			m.step = m.prevStep
+		} else {
+			m.step = stepSelectPreset
+		}
 		m.err = nil
+		m.prevStep = 0
 	}
 	return m, nil
 }
@@ -341,7 +352,7 @@ func (m Model) updateScanCIDR(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.spinner.Tick,
 				scanNetworkCmd(ctx, m.scanner, cidr),
 			)
-		case "s":
+		case "ctrl+s":
 			m.err = nil
 			m.step = stepManualNodeEntry
 			m.manualNodes = nil
