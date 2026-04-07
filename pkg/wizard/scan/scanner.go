@@ -57,7 +57,7 @@ func (s *NmapScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.No
 	}
 
 	output, err := s.Exec.Run(scanCtx, "nmap",
-		"--port", fmt.Sprintf("%d", port),
+		"-p", fmt.Sprintf("%d", port),
 		"--open",
 		"-oG", "-",
 		cidr,
@@ -74,25 +74,35 @@ func (s *NmapScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.No
 	return s.collectNodeInfo(ctx, ips)
 }
 
-// GetNodeInfo connects to a single Talos node and retrieves hardware information.
-// Currently uses talosctl as a subprocess; future versions may use gRPC directly.
+// GetNodeInfo connects to a single Talos node and retrieves hardware information
+// by running talosctl commands to collect hostname, disks, and network interfaces.
 func (s *NmapScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeInfo, error) {
-	infoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	node := wizard.NodeInfo{IP: ip}
+
+	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	output, err := s.Exec.Run(infoCtx, "talosctl",
-		"--nodes", ip,
-		"--insecure",
-		"get", "systeminformation",
-		"--output", "jsonpath={.spec}",
-	)
-	if err != nil {
-		return wizard.NodeInfo{IP: ip}, fmt.Errorf("failed to get node info for %s: %w", ip, err)
+	baseArgs := []string{"--nodes", ip, "--insecure", "get"}
+
+	// Collect hostname
+	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "hostname", "--output", "json")...); err == nil {
+		if hostname, err := ParseHostname(output); err == nil && hostname != "" {
+			node.Hostname = hostname
+		}
 	}
 
-	node := wizard.NodeInfo{
-		IP:       ip,
-		Hostname: string(output),
+	// Collect disks
+	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "disks", "--output", "json")...); err == nil {
+		if disks, err := ParseDisks(output); err == nil {
+			node.Disks = disks
+		}
+	}
+
+	// Collect network interfaces
+	if output, err := s.Exec.Run(infoCtx, "talosctl", append(baseArgs, "links", "--output", "json")...); err == nil {
+		if links, err := ParseLinks(output); err == nil {
+			node.Interfaces = links
+		}
 	}
 
 	return node, nil
