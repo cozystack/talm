@@ -279,12 +279,15 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 			m.step = stepSelectNodes
 		}
 	case stepConfirm:
-		// Go back to the last configured node
+		// Go back to the last configured node — remove the last entry
+		// so the user can re-enter it without duplicates
+		if len(m.configuredNodes) > 0 {
+			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
+		}
 		if m.currentNodeIdx > 0 {
 			m.currentNodeIdx--
-			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
-			m.result.Nodes = nil
 		}
+		m.result.Nodes = nil
 		m.step = stepConfigureNode
 		m.prepareNodeInputs()
 	case stepError:
@@ -634,11 +637,11 @@ func (m Model) updateError(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func scanNetworkCmd(ctx context.Context, scanner wizard.Scanner, cidr string) tea.Cmd {
 	return func() tea.Msg {
-		nodes, err := scanner.ScanNetwork(ctx, cidr)
+		result, err := scanner.ScanNetworkFull(ctx, cidr)
 		if err != nil {
 			return scanErrorMsg{err: err}
 		}
-		return scanResultMsg{nodes: nodes, warnings: nil}
+		return scanResultMsg{nodes: result.Nodes, warnings: result.Warnings}
 	}
 }
 

@@ -19,6 +19,10 @@ func (m *mockScanner) ScanNetwork(_ context.Context, _ string) ([]wizard.NodeInf
 	return m.nodes, m.err
 }
 
+func (m *mockScanner) ScanNetworkFull(_ context.Context, _ string) (wizard.ScanResult, error) {
+	return wizard.ScanResult{Nodes: m.nodes}, m.err
+}
+
 func (m *mockScanner) GetNodeInfo(_ context.Context, ip string) (wizard.NodeInfo, error) {
 	for _, n := range m.nodes {
 		if n.IP == ip {
@@ -548,6 +552,49 @@ func TestBackFromConfirm_NoPanic(t *testing.T) {
 	}
 	if m.currentNodeIdx != 0 {
 		t.Errorf("currentNodeIdx = %d, want 0", m.currentNodeIdx)
+	}
+}
+
+// Verify back from confirm with single node doesn't create duplicates
+
+func TestBackFromConfirm_SingleNode_NoDuplicate(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1", Hostname: "cp-1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	// Configure the node
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/sda")
+	m.nodeInputs[fieldAddress].SetValue("10.0.0.1/24")
+	m.nodeInputs[fieldDNS].SetValue("8.8.8.8")
+
+	updated, _ := m.Update(enterMsg()) // -> confirm
+	m = updated.(Model)
+
+	if m.Step() != stepConfirm {
+		t.Fatalf("expected stepConfirm, got %d", m.Step())
+	}
+
+	// Go back
+	updated, _ = m.Update(escMsg())
+	m = updated.(Model)
+
+	// Re-enter the same node
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/sda")
+	m.nodeInputs[fieldAddress].SetValue("10.0.0.1/24")
+	m.nodeInputs[fieldDNS].SetValue("8.8.8.8")
+
+	updated, _ = m.Update(enterMsg()) // -> confirm again
+	m = updated.(Model)
+
+	if len(m.result.Nodes) != 1 {
+		t.Errorf("expected 1 node, got %d (duplicate created on back-forward)", len(m.result.Nodes))
 	}
 }
 

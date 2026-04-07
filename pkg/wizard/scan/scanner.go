@@ -1,10 +1,12 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -25,11 +27,6 @@ const (
 	maxConcurrentJobs = 10
 )
 
-// ScanResult holds the result of a network scan.
-type ScanResult struct {
-	Nodes    []wizard.NodeInfo
-	Warnings []string // warnings for nodes that failed gRPC info collection
-}
 
 // TalosScanner discovers Talos nodes via TCP port scanning and collects
 // hardware info via the Talos gRPC API. No external binaries required.
@@ -58,7 +55,7 @@ func (s *TalosScanner) ScanNetwork(ctx context.Context, cidr string) ([]wizard.N
 
 // ScanNetworkFull is like ScanNetwork but also returns warnings about
 // nodes that were discovered by TCP but failed gRPC info collection.
-func (s *TalosScanner) ScanNetworkFull(ctx context.Context, cidr string) (ScanResult, error) {
+func (s *TalosScanner) ScanNetworkFull(ctx context.Context, cidr string) (wizard.ScanResult, error) {
 	port := s.Port
 	if port == 0 {
 		port = defaultTalosPort
@@ -66,10 +63,10 @@ func (s *TalosScanner) ScanNetworkFull(ctx context.Context, cidr string) (ScanRe
 
 	ips, err := scanTCPPort(ctx, cidr, port, maxConcurrentJobs)
 	if err != nil {
-		return ScanResult{}, err
+		return wizard.ScanResult{}, err
 	}
 	if len(ips) == 0 {
-		return ScanResult{}, nil
+		return wizard.ScanResult{}, nil
 	}
 
 	return s.collectNodeInfo(ctx, ips)
@@ -171,14 +168,17 @@ func (s *TalosScanner) collectLinks(ctx context.Context, c *client.Client) []wiz
 		return nil
 	}
 
-	_ = helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "links")
+	if err := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "links"); err != nil {
+		// Log but don't fail — interfaces are supplementary info
+		fmt.Fprintf(os.Stderr, "Warning: failed to list network links: %v\n", err)
+	}
 
 	return interfaces
 }
 
 // collectNodeInfo queries multiple nodes concurrently with bounded parallelism.
 // Returns discovered nodes and warnings for nodes that failed gRPC info collection.
-func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) (ScanResult, error) {
+func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) (wizard.ScanResult, error) {
 	var (
 		mu       sync.Mutex
 		nodes    []wizard.NodeInfo
@@ -219,19 +219,19 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) (ScanR
 	wg.Wait()
 
 	if len(nodes) == 0 && len(ips) > 0 {
-		return ScanResult{Warnings: warnings},
+		return wizard.ScanResult{Warnings: warnings},
 			fmt.Errorf("found %d host(s) with open port %d but none responded as Talos nodes", len(ips), s.Port)
 	}
 
 	// Sort by IP numerically for deterministic ordering
 	slices.SortFunc(nodes, func(a, b wizard.NodeInfo) int {
-		ipA := net.ParseIP(a.IP)
-		ipB := net.ParseIP(b.IP)
+		ipA := net.ParseIP(a.IP).To4()
+		ipB := net.ParseIP(b.IP).To4()
 		if ipA != nil && ipB != nil {
-			return strings.Compare(ipA.String(), ipB.String())
+			return bytes.Compare(ipA, ipB)
 		}
 		return strings.Compare(a.IP, b.IP)
 	})
 
-	return ScanResult{Nodes: nodes, Warnings: warnings}, nil
+	return wizard.ScanResult{Nodes: nodes, Warnings: warnings}, nil
 }
