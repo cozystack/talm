@@ -113,6 +113,11 @@ func (s *TalosScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeI
 	// Collect network interfaces via COSI resource API
 	node.Interfaces = s.collectLinks(nodeCtx, c)
 
+	// If no useful data was collected, treat as failure
+	if node.Hostname == "" && len(node.Disks) == 0 && node.RAMBytes == 0 {
+		return node, fmt.Errorf("node %s: gRPC connected but returned no useful data", ip)
+	}
+
 	return node, nil
 }
 

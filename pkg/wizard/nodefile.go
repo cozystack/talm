@@ -18,6 +18,15 @@ func WriteNodeFiles(rootDir string, nodes []NodeConfig) error {
 		return fmt.Errorf("failed to create nodes directory: %w", err)
 	}
 
+	// Check for duplicate hostnames
+	seen := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if seen[node.Hostname] {
+			return fmt.Errorf("duplicate hostname: %q", node.Hostname)
+		}
+		seen[node.Hostname] = true
+	}
+
 	for _, node := range nodes {
 		// Sanitize: use only the base name to prevent path traversal
 		safeName := filepath.Base(node.Hostname)

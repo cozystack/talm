@@ -187,6 +187,20 @@ func TestWriteNodeFiles_PathTraversal(t *testing.T) {
 	}
 }
 
+func TestWriteNodeFiles_DuplicateHostnames(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "node-1", Role: "controlplane", Addresses: "10.0.0.1/24"},
+		{Hostname: "node-1", Role: "worker", Addresses: "10.0.0.2/24"},
+	}
+
+	err := WriteNodeFiles(rootDir, nodes)
+	if err == nil {
+		t.Error("expected error for duplicate hostnames")
+	}
+}
+
 func TestWriteNodeFiles_SlashHostname(t *testing.T) {
 	rootDir := t.TempDir()
 

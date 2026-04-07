@@ -435,6 +435,27 @@ func TestNodeConfigValidation_Success(t *testing.T) {
 	}
 }
 
+func TestNodeConfigValidation_EmptyAddress(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/sda")
+	m.nodeInputs[fieldAddress].SetValue("")
+
+	updated, _ := m.Update(enterMsg())
+	m = updated.(Model)
+
+	if m.err == nil {
+		t.Error("expected validation error for empty address")
+	}
+}
+
 func TestNodeConfigValidation_EmptyDisk(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 	m.step = stepConfigureNode
