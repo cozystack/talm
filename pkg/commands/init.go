@@ -692,6 +692,200 @@ func init() {
 	// Don't mark preset as required - it's validated in PreRunE based on --encrypt/--decrypt flags
 }
 
+// GenerateOptions holds options for project generation.
+type GenerateOptions struct {
+	RootDir      string
+	Preset       string
+	ClusterName  string
+	TalosVersion string
+	Version      string // Chart version, e.g. "0.1.0"
+	Force        bool
+}
+
+// GenerateProject creates a new talm project: secrets, talosconfig, preset files, .gitignore, and nodes directory.
+// It does not handle encryption — callers should handle that separately if needed.
+func GenerateProject(opts GenerateOptions) error {
+	var (
+		versionContract *config.VersionContract
+		err             error
+	)
+
+	if opts.TalosVersion != "" {
+		versionContract, err = config.ParseContractFromVersion(opts.TalosVersion)
+		if err != nil {
+			return fmt.Errorf("invalid talos-version: %w", err)
+		}
+	}
+
+	secretsBundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Now()), versionContract)
+	if err != nil {
+		return fmt.Errorf("failed to create secrets bundle: %w", err)
+	}
+
+	availablePresets, err := generated.AvailablePresets()
+	if err != nil {
+		return fmt.Errorf("failed to get available presets: %w", err)
+	}
+	if !isValidPreset(opts.Preset, availablePresets) {
+		return fmt.Errorf("invalid preset: %s. Valid presets are: %v", opts.Preset, availablePresets)
+	}
+
+	var genOptions []generate.Option
+	if versionContract != nil {
+		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
+	}
+	genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
+
+	// Write secrets.yaml
+	secretsFile := filepath.Join(opts.RootDir, "secrets.yaml")
+	if err := writeFileIfNotExists(secretsFile, opts.Force, func() ([]byte, error) {
+		return yaml.Marshal(secretsBundle)
+	}, 0o600); err != nil {
+		return err
+	}
+
+	// Generate and write talosconfig
+	talosconfigFile := filepath.Join(opts.RootDir, "talosconfig")
+	if err := writeFileIfNotExists(talosconfigFile, opts.Force, func() ([]byte, error) {
+		configBundle, err := gen.GenerateConfigBundle(genOptions, opts.ClusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
+		if err != nil {
+			return nil, err
+		}
+		configBundle.TalosConfig().Contexts[opts.ClusterName].Endpoints = []string{"127.0.0.1"}
+		return yaml.Marshal(configBundle.TalosConfig())
+	}, 0o600); err != nil {
+		return err
+	}
+
+	// Create nodes directory
+	nodesDir := filepath.Join(opts.RootDir, "nodes")
+	if err := os.MkdirAll(nodesDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create nodes directory: %w", err)
+	}
+
+	// Write preset and library chart files
+	presetFiles, err := generated.PresetFiles()
+	if err != nil {
+		return fmt.Errorf("failed to get preset files: %w", err)
+	}
+
+	version := opts.Version
+	if version == "" {
+		version = "0.1.0"
+	}
+
+	for path, content := range presetFiles {
+		parts := strings.SplitN(path, "/", 2)
+		chartName := parts[0]
+
+		if chartName == opts.Preset {
+			file := filepath.Join(opts.RootDir, filepath.Join(parts[1:]...))
+			if parts[len(parts)-1] == "Chart.yaml" {
+				err = writeToFile(file, []byte(fmt.Sprintf(content, opts.ClusterName, version)), opts.Force, 0o644)
+			} else {
+				err = writeToFile(file, []byte(content), opts.Force, 0o644)
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		if chartName == "talm" {
+			file := filepath.Join(opts.RootDir, filepath.Join("charts", path))
+			if parts[len(parts)-1] == "Chart.yaml" {
+				err = writeToFile(file, []byte(fmt.Sprintf(content, "talm", version)), opts.Force, 0o644)
+			} else {
+				err = writeToFile(file, []byte(content), opts.Force, 0o644)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Write .gitignore
+	return writeGitignoreForProject(opts.RootDir)
+}
+
+// writeFileIfNotExists writes a file if it doesn't exist (or if force is true).
+// The content is generated lazily via the contentFn callback.
+func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, error), perm os.FileMode) error {
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("file %q already exists, use force to overwrite", path)
+		}
+	}
+
+	data, err := contentFn()
+	if err != nil {
+		return err
+	}
+
+	return writeToFile(path, data, force, perm)
+}
+
+// writeToFile writes data to a file, creating parent directories as needed.
+func writeToFile(path string, data []byte, force bool, perm os.FileMode) error {
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("file %q already exists, use force to overwrite", path)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return fmt.Errorf("failed to write %s: %w", path, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Created %s\n", path)
+	return nil
+}
+
+// writeGitignoreForProject creates or updates .gitignore with required entries.
+func writeGitignoreForProject(rootDir string) error {
+	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key", "kubeconfig"}
+	gitignoreFile := filepath.Join(rootDir, ".gitignore")
+
+	var existingStr string
+	if data, err := os.ReadFile(gitignoreFile); err == nil {
+		existingStr = string(data)
+	} else {
+		existingStr = "# Sensitive files\n"
+	}
+
+	needsUpdate := false
+	for _, entry := range requiredEntries {
+		lines := strings.Split(existingStr, "\n")
+		found := false
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == entry || strings.HasPrefix(line, entry+" ") || strings.HasPrefix(line, entry+"#") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if !strings.HasSuffix(existingStr, "\n") {
+				existingStr += "\n"
+			}
+			existingStr += entry + "\n"
+			needsUpdate = true
+		}
+	}
+
+	if !needsUpdate {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(gitignoreFile), os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	return os.WriteFile(gitignoreFile, []byte(existingStr), 0o644)
+}
+
 func isValidPreset(preset string, availablePresets []string) bool {
 	return slices.Contains(availablePresets, preset)
 }
