@@ -40,13 +40,20 @@ var interactiveCmd = &cobra.Command{
 
 		scanner := scan.New()
 		generateFn := func(result wizard.WizardResult) error {
-			return GenerateProject(GenerateOptions{
-				RootDir:     Config.RootDir,
-				Preset:      result.Preset,
-				ClusterName: result.ClusterName,
-				Force:       false,
-				Version:     Config.InitOptions.Version,
-			})
+			overrides := buildValuesOverrides(result)
+
+			if err := GenerateProject(GenerateOptions{
+				RootDir:         Config.RootDir,
+				Preset:          result.Preset,
+				ClusterName:     result.ClusterName,
+				Force:           false,
+				Version:         Config.InitOptions.Version,
+				ValuesOverrides: overrides,
+			}); err != nil {
+				return err
+			}
+
+			return wizard.WriteNodeFiles(Config.RootDir, result.Nodes)
 		}
 
 		model := tui.New(scanner, presets, generateFn)
@@ -63,6 +70,36 @@ var interactiveCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// buildValuesOverrides creates a map of values.yaml overrides from wizard results.
+func buildValuesOverrides(result wizard.WizardResult) map[string]interface{} {
+	overrides := map[string]interface{}{
+		"endpoint": result.Endpoint,
+	}
+
+	if result.PodSubnets != "" {
+		overrides["podSubnets"] = []string{result.PodSubnets}
+	}
+	if result.ServiceSubnets != "" {
+		overrides["serviceSubnets"] = []string{result.ServiceSubnets}
+	}
+	if result.AdvertisedSubnets != "" {
+		overrides["advertisedSubnets"] = []string{result.AdvertisedSubnets}
+	}
+
+	// Cozystack-specific
+	if result.ClusterDomain != "" {
+		overrides["clusterDomain"] = result.ClusterDomain
+	}
+	if result.FloatingIP != "" {
+		overrides["floatingIP"] = result.FloatingIP
+	}
+	if result.Image != "" {
+		overrides["image"] = result.Image
+	}
+
+	return overrides
 }
 
 func init() {

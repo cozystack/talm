@@ -20,6 +20,8 @@ func (m Model) View() string {
 		return m.viewScanCIDR()
 	case stepScanning:
 		return m.viewScanning()
+	case stepManualNodeEntry:
+		return m.viewManualNodeEntry()
 	case stepSelectNodes:
 		return m.viewSelectNodes()
 	case stepConfigureNode:
@@ -52,7 +54,7 @@ func (m Model) viewSelectPreset() string {
 		b.WriteString(cursor + style.Render(preset) + "\n")
 	}
 
-	b.WriteString(helpStyle.Render("\n↑/↓ navigate • enter select • ctrl+c quit"))
+	b.WriteString(helpStyle.Render("\nup/down navigate | enter select | ctrl+c quit"))
 	return b.String()
 }
 
@@ -66,7 +68,7 @@ func (m Model) viewClusterName() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\nenter confirm • esc back"))
+	b.WriteString(helpStyle.Render("\nenter confirm | esc back"))
 	return b.String()
 }
 
@@ -80,7 +82,7 @@ func (m Model) viewEndpoint() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\nenter confirm • esc back"))
+	b.WriteString(helpStyle.Render("\nenter confirm | esc back"))
 	return b.String()
 }
 
@@ -88,7 +90,7 @@ func (m Model) viewScanCIDR() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Network to scan"))
 	b.WriteString("\n")
-	b.WriteString(subtitleStyle.Render("Enter CIDR range to discover Talos nodes"))
+	b.WriteString(subtitleStyle.Render("Enter CIDR range to discover Talos nodes, or press 's' to enter IPs manually"))
 	b.WriteString("\n\n")
 	b.WriteString(m.cidrInput.View())
 
@@ -96,13 +98,38 @@ func (m Model) viewScanCIDR() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\nenter scan • esc back"))
+	b.WriteString(helpStyle.Render("\nenter scan | s skip scan (manual entry) | esc back"))
 	return b.String()
 }
 
 func (m Model) viewScanning() string {
 	return titleStyle.Render("Scanning network...") + "\n\n" +
 		m.spinner.View() + " Discovering Talos nodes...\n"
+}
+
+func (m Model) viewManualNodeEntry() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Manual node entry"))
+	b.WriteString("\n")
+	b.WriteString(subtitleStyle.Render("Enter node IP addresses one by one"))
+	b.WriteString("\n\n")
+
+	if len(m.manualNodes) > 0 {
+		b.WriteString("Added nodes:\n")
+		for _, n := range m.manualNodes {
+			b.WriteString("  " + successStyle.Render(n.IP) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(m.manualIPInput.View())
+
+	if m.err != nil {
+		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
+	}
+
+	b.WriteString(helpStyle.Render("\nenter add node | d done | esc back"))
+	return b.String()
 }
 
 func (m Model) viewSelectNodes() string {
@@ -131,6 +158,9 @@ func (m Model) viewSelectNodes() string {
 		if node.RAMBytes > 0 {
 			info += " " + humanize.IBytes(node.RAMBytes) + " RAM"
 		}
+		if len(node.Disks) > 0 {
+			info += " " + node.Disks[0].Model
+		}
 
 		fmt.Fprintf(&b, "%s%s %s\n", cursor, selected, info)
 	}
@@ -139,7 +169,7 @@ func (m Model) viewSelectNodes() string {
 		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
 	}
 
-	b.WriteString(helpStyle.Render("\n↑/↓ navigate • space toggle • enter confirm • esc back"))
+	b.WriteString(helpStyle.Render("\nup/down navigate | space toggle | enter confirm | esc back"))
 	return b.String()
 }
 
@@ -151,7 +181,15 @@ func (m Model) viewConfigureNode() string {
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Configure node %d/%d", m.currentNodeIdx+1, len(m.selectedNodes))))
 	fmt.Fprintf(&b, "\nIP: %s\n\n", node.IP)
 
-	labels := []string{"Hostname:", "Install disk:", "Interface:", "Address (CIDR):"}
+	labels := []string{
+		"Role:",
+		"Hostname:",
+		"Install disk:",
+		"Interface:",
+		"Address (CIDR):",
+		"Gateway:",
+		"DNS (comma-sep):",
+	}
 	for i, label := range labels {
 		style := blurredStyle
 		if i == m.nodeInputFocus {
@@ -160,7 +198,11 @@ func (m Model) viewConfigureNode() string {
 		b.WriteString(style.Render(label) + " " + m.nodeInputs[i].View() + "\n")
 	}
 
-	b.WriteString(helpStyle.Render("\ntab next field • enter confirm • esc back"))
+	if m.err != nil {
+		b.WriteString("\n" + errorStyle.Render(m.err.Error()))
+	}
+
+	b.WriteString(helpStyle.Render("\ntab next field | enter confirm | esc back"))
 	return b.String()
 }
 
@@ -168,17 +210,19 @@ func (m Model) viewConfirm() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Confirm configuration"))
 	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "Preset:  %s\n", m.result.Preset)
-	fmt.Fprintf(&b, "Cluster: %s\n", m.result.ClusterName)
+	fmt.Fprintf(&b, "Preset:   %s\n", m.result.Preset)
+	fmt.Fprintf(&b, "Cluster:  %s\n", m.result.ClusterName)
 	fmt.Fprintf(&b, "Endpoint: %s\n", m.result.Endpoint)
-	fmt.Fprintf(&b, "Nodes:   %d\n\n", len(m.result.Nodes))
+	fmt.Fprintf(&b, "Nodes:    %d\n\n", len(m.result.Nodes))
 
 	for _, node := range m.result.Nodes {
-		fmt.Fprintf(&b, "  %s (%s) - %s on %s\n",
-			node.Hostname, node.Role, node.Addresses, node.DiskPath)
+		fmt.Fprintf(&b, "  %s [%s] %s disk=%s iface=%s gw=%s dns=%s\n",
+			node.Hostname, node.Role, node.Addresses,
+			node.DiskPath, node.Interface, node.Gateway,
+			strings.Join(node.DNS, ","))
 	}
 
-	b.WriteString(helpStyle.Render("\ny/enter generate • n restart • esc back"))
+	b.WriteString(helpStyle.Render("\ny/enter generate | n restart | esc back"))
 	return b.String()
 }
 
@@ -190,7 +234,9 @@ func (m Model) viewGenerating() string {
 func (m Model) viewDone() string {
 	return successStyle.Render("Configuration generated successfully!") + "\n\n" +
 		"Files created in the current directory.\n" +
-		"Run 'talm template' to render node configs, then 'talm apply' to apply them.\n"
+		"Next steps:\n" +
+		"  1. talm template --file nodes/<hostname>.yaml  (render machine configs)\n" +
+		"  2. talm apply --file nodes/<hostname>.yaml      (apply to nodes)\n"
 }
 
 func (m Model) viewError() string {
@@ -200,6 +246,6 @@ func (m Model) viewError() string {
 	if m.err != nil {
 		b.WriteString(m.err.Error())
 	}
-	b.WriteString(helpStyle.Render("\nr retry • enter/q quit"))
+	b.WriteString(helpStyle.Render("\nr retry | enter/q quit"))
 	return b.String()
 }
