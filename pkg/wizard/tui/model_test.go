@@ -477,6 +477,21 @@ func TestNodeConfigDefaultRole(t *testing.T) {
 	}
 }
 
+// Verify stale scan results are ignored after cancellation
+
+func TestStaleScanResult_Ignored(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepScanCIDR // already back from scanning
+
+	// Deliver a stale scan result — should be ignored
+	updated, _ := m.Update(scanResultMsg{nodes: []wizard.NodeInfo{{IP: "10.0.0.1"}}})
+	m = updated.(Model)
+
+	if m.Step() != stepScanCIDR {
+		t.Errorf("stale scan result should not change step, got %d", m.Step())
+	}
+}
+
 // Verify the done step allows exiting the program
 
 func TestDoneStep_EnterQuits(t *testing.T) {

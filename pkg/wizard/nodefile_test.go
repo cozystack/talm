@@ -187,6 +187,19 @@ func TestWriteNodeFiles_PathTraversal(t *testing.T) {
 	}
 }
 
+func TestWriteNodeFiles_SlashHostname(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "/", Role: "worker", Addresses: "10.0.0.1/24"},
+	}
+
+	err := WriteNodeFiles(rootDir, nodes)
+	if err == nil {
+		t.Error("expected error for '/' hostname")
+	}
+}
+
 func TestWriteNodeFiles_InvalidHostname(t *testing.T) {
 	rootDir := t.TempDir()
 
