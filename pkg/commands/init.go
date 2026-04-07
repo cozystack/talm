@@ -590,6 +590,10 @@ func GenerateProject(opts GenerateOptions) error {
 		return fmt.Errorf("failed to create secrets bundle: %w", err)
 	}
 
+	if opts.ClusterName == "" {
+		return fmt.Errorf("cluster name must not be empty")
+	}
+
 	availablePresets, err := generated.AvailablePresets()
 	if err != nil {
 		return fmt.Errorf("failed to get available presets: %w", err)
@@ -708,10 +712,14 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 	}
 
 	for k, v := range overrides {
-		// Guard: reject overrides that would replace a map (preventing accidental data loss).
+		// Reject map-valued overrides entirely to prevent nested structure issues
+		if _, isMap := v.(map[string]interface{}); isMap {
+			return fmt.Errorf("map-valued override for key %q is not supported: use flat keys only", k)
+		}
+		// Reject overrides that would replace an existing map key
 		if existing, ok := values[k]; ok {
 			if _, existingIsMap := existing.(map[string]interface{}); existingIsMap {
-				return fmt.Errorf("cannot override map key %q with a flat value: use flat keys only", k)
+				return fmt.Errorf("cannot override map key %q: use flat keys only", k)
 			}
 		}
 		values[k] = v

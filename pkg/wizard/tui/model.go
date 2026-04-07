@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -376,7 +377,7 @@ func (m Model) updateScanCIDR(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.err = nil
 			m.step = stepScanning
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			m.cancelScan = cancel
 			return m, tea.Batch(
 				m.spinner.Tick,

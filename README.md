@@ -65,7 +65,7 @@ Or use the non-interactive command:
 ```bash
 mkdir newcluster
 cd newcluster
-talm init -p cozystack -N myawesomecluster
+talm init --preset cozystack --name myawesomecluster
 ```
 
 Boot Talos Linux node, let's say it has address `1.2.3.4`

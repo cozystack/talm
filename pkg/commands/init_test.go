@@ -120,6 +120,43 @@ func TestGenerateProject_SkipsExistingWithoutForce(t *testing.T) {
 	assertFileExists(t, rootDir, "talosconfig")
 }
 
+func TestGenerateProject_EmptyClusterName(t *testing.T) {
+	rootDir := t.TempDir()
+	opts := GenerateOptions{
+		RootDir:     rootDir,
+		Preset:      "generic",
+		ClusterName: "",
+		Version:     "0.1.0",
+	}
+
+	err := GenerateProject(opts)
+	if err == nil {
+		t.Fatal("expected error for empty cluster name")
+	}
+	if !strings.Contains(err.Error(), "cluster name") {
+		t.Errorf("expected cluster name error, got: %v", err)
+	}
+}
+
+func TestMergeValuesOverrides_RejectsMapValuedOverrideForNewKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	valuesPath := filepath.Join(tmpDir, "values.yaml")
+
+	content := "endpoint: \"https://old:6443\"\n"
+	if err := os.WriteFile(valuesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	overrides := map[string]interface{}{
+		"newNestedKey": map[string]interface{}{"nested": "value"},
+	}
+
+	err := mergeValuesOverrides(valuesPath, overrides)
+	if err == nil {
+		t.Fatal("expected error for map-valued override, got nil")
+	}
+}
+
 func TestGenerateProject_ForceOverwrite(t *testing.T) {
 	rootDir := t.TempDir()
 
@@ -231,8 +268,8 @@ func TestMergeValuesOverrides_RejectsNestedMaps(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for map override, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot override map key") {
-		t.Errorf("expected 'cannot override map key' error, got: %v", err)
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("expected 'not supported' error, got: %v", err)
 	}
 }
 
