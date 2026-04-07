@@ -450,6 +450,61 @@ func TestNodeConfigDefaultRole(t *testing.T) {
 	}
 }
 
+// Fix #1: stepDone must allow quitting
+
+func TestDoneStep_EnterQuits(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepDone
+
+	_, cmd := m.Update(enterMsg())
+	if cmd == nil {
+		t.Fatal("expected tea.Quit cmd on enter at stepDone, got nil")
+	}
+}
+
+func TestDoneStep_QKeyQuits(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepDone
+
+	_, cmd := m.Update(keyMsg("q"))
+	if cmd == nil {
+		t.Fatal("expected tea.Quit cmd on 'q' at stepDone, got nil")
+	}
+}
+
+// Fix #9: handleBack from configureNode restores previous node inputs
+
+func TestBackFromConfigureNode_RestoresInputs(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{
+		{IP: "10.0.0.1", Hostname: "first-node"},
+		{IP: "10.0.0.2", Hostname: "second-node"},
+	}
+	m.selectedNodes = []int{0, 1}
+
+	// Configure first node
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+	m.nodeInputs[fieldHostname].SetValue("first-node")
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.configuredNodes = append(m.configuredNodes, wizard.NodeConfig{Hostname: "first-node"})
+	m.currentNodeIdx = 1
+	m.prepareNodeInputs()
+
+	// Now go back
+	updated, _ := m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.currentNodeIdx != 0 {
+		t.Errorf("currentNodeIdx = %d, want 0", m.currentNodeIdx)
+	}
+	// After back, prepareNodeInputs should have restored first-node's hostname
+	if m.nodeInputs[fieldHostname].Value() != "first-node" {
+		t.Errorf("hostname = %q, want first-node", m.nodeInputs[fieldHostname].Value())
+	}
+}
+
 // View rendering tests
 
 func TestViewRendersWithoutPanic(t *testing.T) {

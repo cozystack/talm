@@ -79,8 +79,15 @@ func TestScanTCPPort_NoOpenPort(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// Use a port that's very unlikely to be open
-	ips, err := scanTCPPort(ctx, "127.0.0.1/32", 19999, 1)
+	// Bind a port then close it immediately to guarantee it's unused
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	ips, err := scanTCPPort(ctx, "127.0.0.1/32", closedPort, 1)
 	if err != nil {
 		t.Fatalf("scanTCPPort() error = %v", err)
 	}

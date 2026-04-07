@@ -27,6 +27,8 @@ import (
 )
 
 // interactiveCmd starts terminal TUI for interactive configuration.
+// Registered as a root-level command (not under init) to avoid flag conflicts
+// with the existing init command's --encrypt/--decrypt/--update flag validation.
 var interactiveCmd = &cobra.Command{
 	Use:   "interactive",
 	Short: "Start interactive TUI wizard for cluster initialization",
@@ -46,6 +48,7 @@ var interactiveCmd = &cobra.Command{
 				RootDir:         Config.RootDir,
 				Preset:          result.Preset,
 				ClusterName:     result.ClusterName,
+				TalosVersion:    Config.TemplateOptions.TalosVersion,
 				Force:           false,
 				Version:         Config.InitOptions.Version,
 				ValuesOverrides: overrides,
@@ -74,8 +77,10 @@ var interactiveCmd = &cobra.Command{
 
 // buildValuesOverrides creates a map of values.yaml overrides from wizard results.
 func buildValuesOverrides(result wizard.WizardResult) map[string]interface{} {
-	overrides := map[string]interface{}{
-		"endpoint": result.Endpoint,
+	overrides := map[string]interface{}{}
+
+	if result.Endpoint != "" {
+		overrides["endpoint"] = result.Endpoint
 	}
 
 	if result.PodSubnets != "" {

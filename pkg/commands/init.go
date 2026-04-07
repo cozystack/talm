@@ -811,11 +811,18 @@ func GenerateProject(opts GenerateOptions) error {
 		}
 	}
 
-	// Write .gitignore
-	return writeGitignoreForProject(opts.RootDir)
+	// Write .gitignore — temporarily set Config.RootDir for writeGitignoreFile
+	// which uses it to locate the .gitignore file.
+	origRootDir := Config.RootDir
+	Config.RootDir = opts.RootDir
+	err = writeGitignoreFile()
+	Config.RootDir = origRootDir
+	return err
 }
 
-// mergeValuesOverrides reads an existing values.yaml, applies overrides, and writes it back.
+// mergeValuesOverrides reads an existing values.yaml, applies top-level key overrides, and writes it back.
+// This is a shallow merge: each override key replaces the entire value at that key.
+// Callers must ensure overrides only contain top-level keys (not nested structures).
 func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) error {
 	data, err := os.ReadFile(valuesPath)
 	if err != nil {
@@ -831,6 +838,14 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 	}
 
 	for k, v := range overrides {
+		// Guard: skip nested map overrides to prevent accidentally dropping sibling keys.
+		if existing, ok := values[k]; ok {
+			if _, existingIsMap := existing.(map[string]interface{}); existingIsMap {
+				if _, overrideIsMap := v.(map[string]interface{}); overrideIsMap {
+					return fmt.Errorf("nested map override for key %q is not supported: use flat keys only", k)
+				}
+			}
+		}
 		values[k] = v
 	}
 
@@ -842,8 +857,8 @@ func mergeValuesOverrides(valuesPath string, overrides map[string]interface{}) e
 	return os.WriteFile(valuesPath, out, 0o644)
 }
 
-// writeFileIfNotExists writes a file if it doesn't exist (or if force is true).
-// The content is generated lazily via the contentFn callback.
+// writeFileIfNotExists generates content lazily and writes it via writeToFile.
+// The existence check is handled by writeToFile.
 func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, error), perm os.FileMode) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
@@ -856,7 +871,8 @@ func writeFileIfNotExists(path string, force bool, contentFn func() ([]byte, err
 		return err
 	}
 
-	return writeToFile(path, data, force, perm)
+	// force=true here because we already checked above
+	return writeToFile(path, data, true, perm)
 }
 
 // writeToFile writes data to a file, creating parent directories as needed.
@@ -877,48 +893,6 @@ func writeToFile(path string, data []byte, force bool, perm os.FileMode) error {
 
 	fmt.Fprintf(os.Stderr, "Created %s\n", path)
 	return nil
-}
-
-// writeGitignoreForProject creates or updates .gitignore with required entries.
-func writeGitignoreForProject(rootDir string) error {
-	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key", "kubeconfig"}
-	gitignoreFile := filepath.Join(rootDir, ".gitignore")
-
-	var existingStr string
-	if data, err := os.ReadFile(gitignoreFile); err == nil {
-		existingStr = string(data)
-	} else {
-		existingStr = "# Sensitive files\n"
-	}
-
-	needsUpdate := false
-	for _, entry := range requiredEntries {
-		lines := strings.Split(existingStr, "\n")
-		found := false
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == entry || strings.HasPrefix(line, entry+" ") || strings.HasPrefix(line, entry+"#") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			if !strings.HasSuffix(existingStr, "\n") {
-				existingStr += "\n"
-			}
-			existingStr += entry + "\n"
-			needsUpdate = true
-		}
-	}
-
-	if !needsUpdate {
-		return nil
-	}
-
-	if err := os.MkdirAll(filepath.Dir(gitignoreFile), os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-	return os.WriteFile(gitignoreFile, []byte(existingStr), 0o644)
 }
 
 func isValidPreset(preset string, availablePresets []string) bool {

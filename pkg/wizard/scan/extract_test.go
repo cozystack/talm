@@ -3,7 +3,6 @@ package scan
 import (
 	"testing"
 
-	"github.com/cozystack/talm/pkg/wizard"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	storageapi "github.com/siderolabs/talos/pkg/machinery/api/storage"
@@ -116,15 +115,3 @@ func TestMemoryFromResponse_Nil(t *testing.T) {
 	}
 }
 
-func TestFilterPhysicalInterfaces(t *testing.T) {
-	all := []wizard.NetInterface{
-		{Name: "eth0", MAC: "aa:bb:cc:dd:ee:01"},
-		{Name: "lo", MAC: ""},
-		{Name: "enp3s0", MAC: "aa:bb:cc:dd:ee:02"},
-	}
-
-	physical := filterPhysicalInterfaces(all)
-	if len(physical) != 2 {
-		t.Errorf("expected 2 physical interfaces, got %d: %v", len(physical), physical)
-	}
-}

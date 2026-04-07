@@ -54,6 +54,4 @@ type WizardResult struct {
 	ClusterDomain string
 	FloatingIP    string
 	Image         string
-	OIDCIssuerURL string
-	NrHugepages   int
 }

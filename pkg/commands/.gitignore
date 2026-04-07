@@ -1,0 +1,5 @@
+# Sensitive files
+secrets.yaml
+talosconfig
+talm.key
+kubeconfig

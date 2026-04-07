@@ -222,6 +222,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfigureNode(msg)
 	case stepConfirm:
 		return m.updateConfirm(msg)
+	case stepDone:
+		return m.updateDone(msg)
 	case stepError:
 		return m.updateError(msg)
 	}
@@ -246,6 +248,7 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 		if m.currentNodeIdx > 0 {
 			m.currentNodeIdx--
 			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
+			m.prepareNodeInputs()
 		} else {
 			m.step = stepSelectNodes
 		}
@@ -553,6 +556,16 @@ func (m Model) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.configuredNodes = nil
 			m.selectedNodes = nil
 			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "enter", "q":
+			return m, tea.Quit
 		}
 	}
 	return m, nil
