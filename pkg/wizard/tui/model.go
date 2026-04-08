@@ -190,6 +190,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.step != stepScanning {
 			return m, nil // stale result from cancelled scan
 		}
+		if m.cancelScan != nil {
+			m.cancelScan()
+			m.cancelScan = nil
+		}
 		m.discoveredNodes = msg.nodes
 		m.scanWarnings = msg.warnings
 		if len(msg.nodes) == 0 {
@@ -205,6 +209,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanErrorMsg:
 		if m.step != stepScanning {
 			return m, nil // stale error from cancelled scan
+		}
+		if m.cancelScan != nil {
+			m.cancelScan()
+			m.cancelScan = nil
 		}
 		m.err = msg.err
 		prev := m.step
