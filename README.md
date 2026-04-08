@@ -52,11 +52,20 @@ curl -sSL https://github.com/cozystack/talm/raw/refs/heads/main/hack/install.sh 
 
 ## Getting Started
 
-Create new project
+Create new project using the interactive wizard:
+
 ```bash
 mkdir newcluster
 cd newcluster
-talm init -p cozystack -N myawesomecluster
+talm interactive
+```
+
+Or use the non-interactive command:
+
+```bash
+mkdir newcluster
+cd newcluster
+talm init --preset cozystack --name myawesomecluster
 ```
 
 Boot Talos Linux node, let's say it has address `1.2.3.4`
