@@ -36,8 +36,8 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	if !opts.Full {
 		t.Error("expected Full=true for template rendering path")
 	}
-	if !opts.Offline {
-		t.Error("expected Offline=true for template rendering path")
+	if opts.Offline {
+		t.Error("expected Offline=false for online template rendering path")
 	}
 	if opts.Root != "/project" {
 		t.Errorf("expected Root=/project, got %s", opts.Root)

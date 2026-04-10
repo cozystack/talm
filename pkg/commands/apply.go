@@ -112,14 +112,33 @@ func apply(args []string) error {
 		// Resolve secrets.yaml path relative to project root if not absolute
 		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
 
-		var result []byte
 		if len(modelineTemplates) > 0 {
-			// Template rendering path: render templates via Helm engine to produce full config
+			// Template rendering path: connect to the node first, render templates
+			// online (so lookup() functions resolve real discovery data), then apply.
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
-			result, err = engine.Render(ctx, nil, opts)
-			if err != nil {
-				return fmt.Errorf("template rendering error: %w", err)
-			}
+
+			err = withApplyClient(func(ctx context.Context, c *client.Client) error {
+				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
+
+				result, err := engine.Render(ctx, c, opts)
+				if err != nil {
+					return fmt.Errorf("template rendering error: %w", err)
+				}
+
+				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+					Data:           result,
+					Mode:           applyCmdFlags.Mode.Mode,
+					DryRun:         applyCmdFlags.dryRun,
+					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+				})
+				if err != nil {
+					return fmt.Errorf("error applying new configuration: %s", err)
+				}
+
+				helpers.PrintApplyResults(resp)
+
+				return nil
+			})
 		} else {
 			// Direct patch path: apply config file as patch against empty bundle
 			opts := buildApplyPatchOptions(withSecretsPath)
@@ -129,46 +148,29 @@ func apply(args []string) error {
 				return fmt.Errorf("full config processing error: %w", err)
 			}
 
-			result, err = engine.SerializeConfiguration(configBundle, machineType)
+			result, err := engine.SerializeConfiguration(configBundle, machineType)
 			if err != nil {
 				return fmt.Errorf("error serializing configuration: %w", err)
 			}
-		}
 
-		withClient := func(f func(ctx context.Context, c *client.Client) error) error {
-			if applyCmdFlags.insecure {
-				// Maintenance mode connects directly to the node IP without talosconfig;
-				// node context injection is not needed — the maintenance client handles
-				// node targeting internally via GlobalArgs.Nodes.
-				return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
-			}
+			err = withApplyClient(func(ctx context.Context, c *client.Client) error {
+				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
-			wrappedF := wrapWithNodeContext(f)
+				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+					Data:           result,
+					Mode:           applyCmdFlags.Mode.Mode,
+					DryRun:         applyCmdFlags.dryRun,
+					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+				})
+				if err != nil {
+					return fmt.Errorf("error applying new configuration: %s", err)
+				}
 
-			if GlobalArgs.SkipVerify {
-				return WithClientSkipVerify(wrappedF)
-			}
+				helpers.PrintApplyResults(resp)
 
-			return WithClientNoNodes(wrappedF)
-		}
-
-		err = withClient(func(ctx context.Context, c *client.Client) error {
-			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
-
-			resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
-				Data:           result,
-				Mode:           applyCmdFlags.Mode.Mode,
-				DryRun:         applyCmdFlags.dryRun,
-				TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+				return nil
 			})
-			if err != nil {
-				return fmt.Errorf("error applying new configuration: %s", err)
-			}
-
-			helpers.PrintApplyResults(resp)
-
-			return nil
-		})
+		}
 		if err != nil {
 			return err
 		}
@@ -184,19 +186,38 @@ func apply(args []string) error {
 	return nil
 }
 
+// withApplyClient creates a Talos client appropriate for the current apply mode
+// and invokes the given action with it.
+func withApplyClient(f func(ctx context.Context, c *client.Client) error) error {
+	if applyCmdFlags.insecure {
+		// Maintenance mode connects directly to the node IP without talosconfig;
+		// node context injection is not needed — the maintenance client handles
+		// node targeting internally via GlobalArgs.Nodes.
+		return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
+	}
+
+	wrappedF := wrapWithNodeContext(f)
+
+	if GlobalArgs.SkipVerify {
+		return WithClientSkipVerify(wrappedF)
+	}
+
+	return WithClientNoNodes(wrappedF)
+}
+
 // buildApplyRenderOptions constructs engine.Options for the template rendering path.
-// Offline is set to true because at this point we don't have a Talos client for
-// Helm lookup functions. Templates that use lookup() should be rendered via
-// 'talm template' which supports online mode.
+// Offline is false because templates need a live Talos client for lookup() functions
+// (e.g., discovering interface names, addresses, routes). The caller creates the
+// client and passes it to engine.Render together with these options.
 func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
 	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 	return engine.Options{
+		Insecure:          applyCmdFlags.insecure,
 		TalosVersion:      applyCmdFlags.talosVersion,
 		WithSecrets:       withSecretsPath,
 		KubernetesVersion: applyCmdFlags.kubernetesVersion,
 		Debug:             applyCmdFlags.debug,
 		Full:              true,
-		Offline:           true,
 		Root:              Config.RootDir,
 		TemplateFiles:     resolvedTemplates,
 	}
