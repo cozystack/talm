@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -414,7 +415,7 @@ var initCmd = &cobra.Command{
 			if chartName == initCmdFlags.preset {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
 				if parts[len(parts)-1] == "Chart.yaml" {
-					err = writeToDestination([]byte(fmt.Sprintf(content, clusterName, Config.InitOptions.Version)), file, 0o644)
+					err = writeToDestination(fmt.Appendf(nil, content, clusterName, Config.InitOptions.Version), file, 0o644)
 				} else {
 					err = writeToDestination([]byte(content), file, 0o644)
 				}
@@ -426,7 +427,7 @@ var initCmd = &cobra.Command{
 			if chartName == "talm" {
 				file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
 				if parts[len(parts)-1] == "Chart.yaml" {
-					err = writeToDestination([]byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version)), file, 0o644)
+					err = writeToDestination(fmt.Appendf(nil, content, "talm", Config.InitOptions.Version), file, 0o644)
 				} else {
 					err = writeToDestination([]byte(content), file, 0o644)
 				}
@@ -622,7 +623,7 @@ func updateTalmLibraryChart() error {
 			file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
 			var fileContent []byte
 			if parts[len(parts)-1] == "Chart.yaml" {
-				fileContent = []byte(fmt.Sprintf(content, "talm", Config.InitOptions.Version))
+				fileContent = fmt.Appendf(nil, content, "talm", Config.InitOptions.Version)
 			} else {
 				fileContent = []byte(content)
 			}
@@ -661,7 +662,7 @@ func updateTalmLibraryChart() error {
 					if err := yaml.Unmarshal(existingData, &existingChart); err != nil {
 						return fmt.Errorf("failed to parse existing Chart.yaml: %w", err)
 					}
-					fileContent = []byte(fmt.Sprintf(content, existingChart.Name, Config.InitOptions.Version))
+					fileContent = fmt.Appendf(nil, content, existingChart.Name, Config.InitOptions.Version)
 				} else {
 					fileContent = []byte(content)
 				}
@@ -692,12 +693,7 @@ func init() {
 }
 
 func isValidPreset(preset string, availablePresets []string) bool {
-	for _, validPreset := range availablePresets {
-		if preset == validPreset {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(availablePresets, preset)
 }
 
 func validateFileExists(file string) error {

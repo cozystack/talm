@@ -29,18 +29,18 @@ import (
 )
 
 const (
-	keyFileName           = "talm.key"
-	encryptedSecretsFile  = "secrets.encrypted.yaml"
-	plainSecretsFile      = "secrets.yaml"
-	ageEncryptionPrefix   = "ENC[AGE,data:"
-	ageEncryptionSuffix   = "]"
+	keyFileName          = "talm.key"
+	encryptedSecretsFile = "secrets.encrypted.yaml"
+	plainSecretsFile     = "secrets.yaml"
+	ageEncryptionPrefix  = "ENC[AGE,data:"
+	ageEncryptionSuffix  = "]"
 )
 
 // GenerateKey generates a new age identity and saves it to talm.key file in age keygen format
 // Returns true if a new key was created (not loaded from existing file)
 func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
-	
+
 	// Check if key already exists
 	if _, err := os.Stat(keyFile); err == nil {
 		// Key exists, load it
@@ -50,7 +50,7 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 		}
 		return identity, false, nil
 	}
-	
+
 	// Generate new key
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
@@ -58,13 +58,13 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	}
 
 	publicKey := identity.Recipient().String()
-	
+
 	// Format key file in age keygen format
 	now := time.Now()
 	keyData := fmt.Sprintf("# created: %s\n", now.Format(time.RFC3339))
 	keyData += fmt.Sprintf("# public key: %s\n", publicKey)
 	keyData += identity.String() + "\n"
-	
+
 	if err := os.WriteFile(keyFile, []byte(keyData), 0o600); err != nil {
 		return nil, false, fmt.Errorf("failed to write key file: %w", err)
 	}
@@ -125,11 +125,11 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 	}
 
 	// Find the public key line (starts with # public key:)
-	lines := strings.Split(string(keyData), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(keyData), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# public key: ") {
-			return strings.TrimPrefix(line, "# public key: "), nil
+		if after, ok := strings.CutPrefix(line, "# public key: "); ok {
+			return after, nil
 		}
 	}
 
@@ -171,13 +171,13 @@ func EncryptSecretsFile(rootDir string) error {
 	}
 
 	// Parse YAML
-	var secrets map[string]interface{}
+	var secrets map[string]any
 	if err := yaml.Unmarshal(secretsData, &secrets); err != nil {
 		return fmt.Errorf("failed to parse secrets YAML: %w", err)
 	}
 
 	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
-	var encryptedSecrets map[string]interface{}
+	var encryptedSecrets map[string]any
 	if _, err := os.Stat(encryptedFile); err == nil {
 		encryptedData, err := os.ReadFile(encryptedFile)
 		if err == nil {
@@ -187,14 +187,14 @@ func EncryptSecretsFile(rootDir string) error {
 				if err != nil {
 					return fmt.Errorf("failed to merge and encrypt: %w", err)
 				}
-				encryptedSecrets = merged.(map[string]interface{})
+				encryptedSecrets = merged.(map[string]any)
 			} else {
 				// If parsing fails, encrypt everything
 				encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
 				if err != nil {
 					return fmt.Errorf("failed to encrypt secrets: %w", err)
 				}
-				encryptedSecrets = encrypted.(map[string]interface{})
+				encryptedSecrets = encrypted.(map[string]any)
 			}
 		} else {
 			// If reading fails, encrypt everything
@@ -202,7 +202,7 @@ func EncryptSecretsFile(rootDir string) error {
 			if err != nil {
 				return fmt.Errorf("failed to encrypt secrets: %w", err)
 			}
-			encryptedSecrets = encrypted.(map[string]interface{})
+			encryptedSecrets = encrypted.(map[string]any)
 		}
 	} else {
 		// No encrypted file exists, encrypt everything
@@ -210,7 +210,7 @@ func EncryptSecretsFile(rootDir string) error {
 		if err != nil {
 			return fmt.Errorf("failed to encrypt secrets: %w", err)
 		}
-		encryptedSecrets = encrypted.(map[string]interface{})
+		encryptedSecrets = encrypted.(map[string]any)
 	}
 
 	// Marshal encrypted YAML
@@ -245,7 +245,7 @@ func DecryptSecretsFile(rootDir string) error {
 	}
 
 	// Parse YAML
-	var encryptedSecrets map[string]interface{}
+	var encryptedSecrets map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
 		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
 	}
@@ -271,10 +271,10 @@ func DecryptSecretsFile(rootDir string) error {
 }
 
 // encryptYAMLValues recursively encrypts string values in YAML structure
-func encryptYAMLValues(data interface{}, recipient *age.X25519Recipient) (interface{}, error) {
+func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 	switch v := data.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{})
+	case map[string]any:
+		result := make(map[string]any)
 		for key, value := range v {
 			encryptedValue, err := encryptYAMLValues(value, recipient)
 			if err != nil {
@@ -283,8 +283,8 @@ func encryptYAMLValues(data interface{}, recipient *age.X25519Recipient) (interf
 			result[key] = encryptedValue
 		}
 		return result, nil
-	case []interface{}:
-		result := make([]interface{}, len(v))
+	case []any:
+		result := make([]any, len(v))
 		for i, item := range v {
 			encryptedItem, err := encryptYAMLValues(item, recipient)
 			if err != nil {
@@ -306,10 +306,10 @@ func encryptYAMLValues(data interface{}, recipient *age.X25519Recipient) (interf
 }
 
 // decryptYAMLValues recursively decrypts string values in YAML structure
-func decryptYAMLValues(data interface{}, identity *age.X25519Identity) (interface{}, error) {
+func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 	switch v := data.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{})
+	case map[string]any:
+		result := make(map[string]any)
 		for key, value := range v {
 			decryptedValue, err := decryptYAMLValues(value, identity)
 			if err != nil {
@@ -318,8 +318,8 @@ func decryptYAMLValues(data interface{}, identity *age.X25519Identity) (interfac
 			result[key] = decryptedValue
 		}
 		return result, nil
-	case []interface{}:
-		result := make([]interface{}, len(v))
+	case []any:
+		result := make([]any, len(v))
 		for i, item := range v {
 			decryptedItem, err := decryptYAMLValues(item, identity)
 			if err != nil {
@@ -358,16 +358,16 @@ func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (st
 
 // mergeAndEncryptYAMLValues merges plain and encrypted YAML, encrypting only changed values
 // This ensures idempotency: unchanged values keep their encrypted form
-func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X25519Identity) (interface{}, error) {
+func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identity) (any, error) {
 	switch plainVal := plain.(type) {
-	case map[string]interface{}:
-		encryptedMap, ok := encrypted.(map[string]interface{})
+	case map[string]any:
+		encryptedMap, ok := encrypted.(map[string]any)
 		if !ok {
 			// Type mismatch, encrypt everything
 			return encryptYAMLValues(plain, identity.Recipient())
 		}
-		
-		result := make(map[string]interface{})
+
+		result := make(map[string]any)
 		// Copy all keys from plain (to handle new keys)
 		for key, plainValue := range plainVal {
 			if encryptedValue, exists := encryptedMap[key]; exists {
@@ -387,15 +387,15 @@ func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X2551
 			}
 		}
 		return result, nil
-		
-	case []interface{}:
-		encryptedSlice, ok := encrypted.([]interface{})
+
+	case []any:
+		encryptedSlice, ok := encrypted.([]any)
 		if !ok || len(plainVal) != len(encryptedSlice) {
 			// Type or length mismatch, encrypt everything
 			return encryptYAMLValues(plain, identity.Recipient())
 		}
-		
-		result := make([]interface{}, len(plainVal))
+
+		result := make([]any, len(plainVal))
 		for i, plainItem := range plainVal {
 			merged, err := mergeAndEncryptYAMLValues(plainItem, encryptedSlice[i], identity)
 			if err != nil {
@@ -404,14 +404,14 @@ func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X2551
 			result[i] = merged
 		}
 		return result, nil
-		
+
 	case string:
 		encryptedStr, ok := encrypted.(string)
 		if !ok {
 			// Type mismatch, encrypt
 			return encryptYAMLValues(plain, identity.Recipient())
 		}
-		
+
 		// Check if encrypted value is already encrypted
 		if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
 			// Decrypt existing value to compare
@@ -423,7 +423,7 @@ func mergeAndEncryptYAMLValues(plain, encrypted interface{}, identity *age.X2551
 		}
 		// Encrypt the new value (if decryption fails, values differ, or both are plain)
 		return encryptYAMLValues(plain, identity.Recipient())
-		
+
 	default:
 		// For other types, compare directly
 		if plain == encrypted {
@@ -495,7 +495,7 @@ func RotateKeys(rootDir string) error {
 		return fmt.Errorf("failed to read encrypted file: %w", err)
 	}
 
-	var encryptedSecrets map[string]interface{}
+	var encryptedSecrets map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
 		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
 	}
@@ -560,13 +560,13 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	}
 
 	// Parse YAML
-	var yamlData map[string]interface{}
+	var yamlData map[string]any
 	if err := yaml.Unmarshal(plainData, &yamlData); err != nil {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
 	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
-	var encryptedYAML map[string]interface{}
+	var encryptedYAML map[string]any
 	if _, err := os.Stat(encryptedFilePath); err == nil {
 		encryptedData, err := os.ReadFile(encryptedFilePath)
 		if err == nil {
@@ -576,14 +576,14 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 				if err != nil {
 					return fmt.Errorf("failed to merge and encrypt: %w", err)
 				}
-				encryptedYAML = merged.(map[string]interface{})
+				encryptedYAML = merged.(map[string]any)
 			} else {
 				// If parsing fails, encrypt everything
 				encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
 				if err != nil {
 					return fmt.Errorf("failed to encrypt YAML values: %w", err)
 				}
-				encryptedYAML = encrypted.(map[string]interface{})
+				encryptedYAML = encrypted.(map[string]any)
 			}
 		} else {
 			// If reading fails, encrypt everything
@@ -591,7 +591,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 			if err != nil {
 				return fmt.Errorf("failed to encrypt YAML values: %w", err)
 			}
-			encryptedYAML = encrypted.(map[string]interface{})
+			encryptedYAML = encrypted.(map[string]any)
 		}
 	} else {
 		// No encrypted file exists, encrypt everything
@@ -599,7 +599,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		if err != nil {
 			return fmt.Errorf("failed to encrypt YAML values: %w", err)
 		}
-		encryptedYAML = encrypted.(map[string]interface{})
+		encryptedYAML = encrypted.(map[string]any)
 	}
 
 	// Marshal encrypted YAML
@@ -634,7 +634,7 @@ func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 	}
 
 	// Parse YAML
-	var encryptedYAML map[string]interface{}
+	var encryptedYAML map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err != nil {
 		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
 	}
@@ -658,4 +658,3 @@ func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 
 	return nil
 }
-

@@ -20,10 +20,10 @@ func ParseModeline(line string) (*Config, error) {
 	config := &Config{}
 	trimLine := strings.TrimSpace(line)
 	prefix := "# talm: "
-	if strings.HasPrefix(trimLine, prefix) {
-		content := strings.TrimPrefix(trimLine, prefix)
-		parts := strings.Split(content, ", ")
-		for _, part := range parts {
+	if after, ok := strings.CutPrefix(trimLine, prefix); ok {
+		content := after
+		parts := strings.SplitSeq(content, ", ")
+		for part := range parts {
 			keyVal := strings.SplitN(strings.TrimSpace(part), "=", 2)
 			if len(keyVal) != 2 {
 				return nil, fmt.Errorf("invalid format of modeline part: %s", part)
