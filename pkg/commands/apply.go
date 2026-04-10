@@ -132,7 +132,7 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %s", err)
+					return fmt.Errorf("error applying new configuration: %w", err)
 				}
 
 				helpers.PrintApplyResults(resp)
@@ -153,7 +153,7 @@ func apply(args []string) error {
 				return fmt.Errorf("error serializing configuration: %w", err)
 			}
 
-			err = withApplyClient(func(ctx context.Context, c *client.Client) error {
+			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
 				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
@@ -163,13 +163,15 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %s", err)
+					return fmt.Errorf("error applying new configuration: %w", err)
 				}
 
 				helpers.PrintApplyResults(resp)
 
 				return nil
-			})
+			}); err != nil {
+				return err
+			}
 		}
 		if err != nil {
 			return err
