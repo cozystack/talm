@@ -131,10 +131,10 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 				return err
 			}
 		}
-		
+
 		// Ensure talosconfig path is set to project root if not explicitly set via flag
 		EnsureTalosconfigPath(cmd)
-		
+
 		// Sync GlobalArgs to talosctl commands
 		taloscommands.GlobalArgs = GlobalArgs
 
@@ -185,7 +185,7 @@ func init() {
 		"config":       true, // talm manages config differently
 		"patch":        true, // not needed in talm
 		"upgrade-k8s":  true, // not needed in talm
-		"talosconfig": true, // talm has its own talosconfig command
+		"talosconfig":  true, // talm has its own talosconfig command
 	}
 
 	// Import and wrap each command from talosctl
@@ -283,8 +283,8 @@ func addToGitignore(entry string) error {
 		content = string(existingContent)
 
 		// Check if entry already exists
-		lines := strings.Split(content, "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(content, "\n")
+		for line := range lines {
 			line = strings.TrimSpace(line)
 			if line == entry || strings.HasPrefix(line, entry+"/") {
 				return nil // Already exists

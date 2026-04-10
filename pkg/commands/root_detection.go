@@ -53,8 +53,8 @@ func parseFlagFromArgs(args []string, shortFlag, longFlag string) []string {
 func parseCommaSeparatedValues(value string) []string {
 	var values []string
 	if strings.Contains(value, ",") {
-		parts := strings.Split(value, ",")
-		for _, part := range parts {
+		parts := strings.SplitSeq(value, ",")
+		for part := range parts {
 			if trimmed := strings.TrimSpace(part); trimmed != "" {
 				values = append(values, trimmed)
 			}
@@ -314,4 +314,3 @@ func findYAMLFiles(dir string) ([]string, error) {
 	})
 	return yamlFiles, err
 }
-

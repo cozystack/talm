@@ -84,7 +84,7 @@ machine:
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	rootValues := map[string]interface{}{
+	rootValues := map[string]any{
 		"Values": chrt.Values,
 	}
 
@@ -93,8 +93,8 @@ machine:
 		defer func() { helmEngine.LookupFunc = origLookup }()
 
 		// Default no-op: returns empty map (same as offline mode)
-		helmEngine.LookupFunc = func(string, string, string) (map[string]interface{}, error) {
-			return map[string]interface{}{}, nil
+		helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+			return map[string]any{}, nil
 		}
 
 		eng := helmEngine.Engine{}
@@ -118,14 +118,14 @@ machine:
 		defer func() { helmEngine.LookupFunc = origLookup }()
 
 		// Simulate online mode: return route data with a real interface name.
-		helmEngine.LookupFunc = func(resource, namespace, name string) (map[string]interface{}, error) {
+		helmEngine.LookupFunc = func(resource, namespace, name string) (map[string]any, error) {
 			if resource == "routes" && name == "" {
-				return map[string]interface{}{
+				return map[string]any{
 					"apiVersion": "v1",
 					"kind":       "List",
-					"items": []interface{}{
-						map[string]interface{}{
-							"spec": map[string]interface{}{
+					"items": []any{
+						map[string]any{
+							"spec": map[string]any{
 								"dst":         "",
 								"gateway":     "192.168.1.1",
 								"outLinkName": "eth0",
@@ -135,7 +135,7 @@ machine:
 					},
 				}, nil
 			}
-			return map[string]interface{}{}, nil
+			return map[string]any{}, nil
 		}
 
 		eng := helmEngine.Engine{}
@@ -160,8 +160,8 @@ func TestRenderOfflineSkipsLookupFunc(t *testing.T) {
 	defer func() { helmEngine.LookupFunc = origLookup }()
 
 	// Set a sentinel LookupFunc
-	helmEngine.LookupFunc = func(string, string, string) (map[string]interface{}, error) {
-		return map[string]interface{}{"sentinel": true}, nil
+	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+		return map[string]any{"sentinel": true}, nil
 	}
 
 	// Offline=true should leave the sentinel intact

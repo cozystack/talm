@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,7 +84,7 @@ func init() {
 	for _, cmd := range commands.Commands {
 		rootCmd.AddCommand(cmd)
 	}
-	
+
 	// Add PersistentPreRunE to handle root detection and config loading
 	originalPersistentPreRunE := rootCmd.PersistentPreRunE
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
@@ -91,7 +92,7 @@ func init() {
 		if err := commands.DetectAndSetRoot(cmd, args); err != nil {
 			return err
 		}
-		
+
 		// Load config after root detection (skip for init and completion commands)
 		if !isCommandOrParent(cmd, skipConfigCommands...) {
 			configFile := filepath.Join(commands.Config.RootDir, "Chart.yaml")
@@ -99,7 +100,7 @@ func init() {
 				return fmt.Errorf("error loading configuration: %w", err)
 			}
 		}
-		
+
 		// Ensure talosconfig path is set to project root if not explicitly set via flag
 		// This is needed for all commands that use talosctl client (template, apply, etc.)
 		if !cmd.PersistentFlags().Changed("talosconfig") {
@@ -121,7 +122,7 @@ func init() {
 				commands.GlobalArgs.Talosconfig = talosconfigPath
 			}
 		}
-		
+
 		if originalPersistentPreRunE != nil {
 			return originalPersistentPreRunE(cmd, args)
 		}
@@ -130,6 +131,9 @@ func init() {
 }
 
 func initConfig() {
+	if len(os.Args) < 2 {
+		return
+	}
 	cmdName := os.Args[1]
 	cmd, _, err := rootCmd.Find([]string{cmdName})
 	if err != nil || cmd == nil {
@@ -138,7 +142,7 @@ func initConfig() {
 	if cmd.HasParent() && cmd.Parent() != rootCmd {
 		cmd = cmd.Parent()
 	}
-	
+
 	if strings.HasPrefix(cmd.Use, "init") {
 		if strings.HasPrefix(Version, "v") {
 			commands.Config.InitOptions.Version = strings.TrimPrefix(Version, `v`)
@@ -151,10 +155,8 @@ func initConfig() {
 // isCommandOrParent checks if the command or any of its parents matches one of the given names.
 func isCommandOrParent(cmd *cobra.Command, names ...string) bool {
 	for c := cmd; c != nil; c = c.Parent() {
-		for _, name := range names {
-			if c.Name() == name {
-				return true
-			}
+		if slices.Contains(names, c.Name()) {
+			return true
 		}
 	}
 	return false
