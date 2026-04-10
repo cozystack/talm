@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,7 +23,6 @@ import (
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
-	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/strvals"
 
@@ -231,8 +231,9 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		return nil, err
 	}
 
-	rootValues := map[string]interface{}{
-		"Values": mergeMaps(chrt.Values, values),
+	rootValues := map[string]any{
+		"Values":       mergeMaps(chrt.Values, values),
+		"TalosVersion": opts.TalosVersion,
 	}
 
 	eng := helmEngine.Engine{}
@@ -256,7 +257,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		configPatches = append(configPatches, configPatch)
 	}
 
-	finalConfig, err := applyPatchesAndRenderConfig(ctx, opts, configPatches, chrt)
+	finalConfig, err := applyPatchesAndRenderConfig(opts, configPatches)
 	if err != nil {
 		// TODO
 		return nil, err
@@ -267,13 +268,13 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 // Imported from Helm
 // https://github.com/helm/helm/blob/c6beb169d26751efd8131a5d65abe75c81a334fb/pkg/cli/values/options.go#L44
-func loadValues(opts Options) (map[string]interface{}, error) {
+func loadValues(opts Options) (map[string]any, error) {
 	// Base map to hold the merged values
-	base := make(map[string]interface{})
+	base := make(map[string]any)
 
 	// Load values from files specified with -f or --values
 	for _, filePath := range opts.ValueFiles {
-		currentMap := make(map[string]interface{})
+		currentMap := make(map[string]any)
 		bytes, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read values file %s: %w", filePath, err)
@@ -286,7 +287,7 @@ func loadValues(opts Options) (map[string]interface{}, error) {
 
 	// Parse and merge values from --set-json
 	for _, value := range opts.JsonValues {
-		currentMap := make(map[string]interface{})
+		currentMap := make(map[string]any)
 		if err := json.Unmarshal([]byte(value), &currentMap); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal JSON value '%s': %w", value, err)
 		}
@@ -330,15 +331,13 @@ func loadValues(opts Options) (map[string]interface{}, error) {
 
 // Imported from Helm
 // https://github.com/helm/helm/blob/c6beb169d26751efd8131a5d65abe75c81a334fb/pkg/cli/values/options.go#L108
-func mergeMaps(a, b map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{}, len(a))
-	for k, v := range a {
-		out[k] = v
-	}
+func mergeMaps(a, b map[string]any) map[string]any {
+	out := make(map[string]any, len(a))
+	maps.Copy(out, a)
 	for k, v := range b {
-		if vm, ok := v.(map[string]interface{}); ok {
+		if vm, ok := v.(map[string]any); ok {
 			if bv, ok := out[k]; ok {
-				if bvm, ok := bv.(map[string]interface{}); ok {
+				if bvm, ok := bv.(map[string]any); ok {
 					out[k] = mergeMaps(bvm, vm)
 					continue
 				}
@@ -352,7 +351,7 @@ func mergeMaps(a, b map[string]interface{}) map[string]interface{} {
 // isTalosConfigPatch checks if a YAML document is a Talos config patch.
 // Returns (isTalosPatch, parseError) - parseError is non-nil if YAML is invalid.
 func isTalosConfigPatch(doc string) (bool, error) {
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
 		return false, err
 	}
@@ -392,7 +391,7 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 	return talosPatches, extraDocs, nil
 }
 
-func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatches []string, chrt *chart.Chart) ([]byte, error) {
+func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
 	if err != nil {
@@ -485,18 +484,18 @@ func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatche
 		}
 
 		// Overwrite some fields to preserve them for diff
-		var config map[string]interface{}
+		var config map[string]any
 		if err := yaml.Unmarshal(configOrigin, &config); err != nil {
 			return nil, err
 		}
-		if machine, ok := config["machine"].(map[string]interface{}); ok {
+		if machine, ok := config["machine"].(map[string]any); ok {
 			machine["type"] = "unknown"
 		}
-		if cluster, ok := config["cluster"].(map[string]interface{}); ok {
+		if cluster, ok := config["cluster"].(map[string]any); ok {
 			cluster["clusterName"] = ""
-			controlPlane, ok := cluster["controlPlane"].(map[string]interface{})
+			controlPlane, ok := cluster["controlPlane"].(map[string]any)
 			if !ok {
-				controlPlane = map[string]interface{}{}
+				controlPlane = map[string]any{}
 				cluster["controlPlane"] = controlPlane
 			}
 			controlPlane["endpoint"] = ""
@@ -566,12 +565,12 @@ func readUnexportedField(field reflect.Value) any {
 }
 
 // builds resource with metadata, spec and stringSpec fields
-func extractResourceData(r resource.Resource) (map[string]interface{}, error) {
-	res := make(map[string]interface{})
+func extractResourceData(r resource.Resource) (map[string]any, error) {
+	res := make(map[string]any)
 
 	// Extract metadata directly from resource methods
 	md := r.Metadata()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"namespace": string(md.Namespace()),
 		"type":      string(md.Type()),
 		"id":        string(md.ID()),
@@ -604,11 +603,11 @@ func extractResourceData(r resource.Resource) (map[string]interface{}, error) {
 	return res, nil
 }
 
-func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]interface{}, error) {
-	return func(kind string, namespace string, id string) (map[string]interface{}, error) {
+func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]any, error) {
+	return func(kind string, namespace string, id string) (map[string]any, error) {
 		var multiErr *multierror.Error
 
-		var resources []map[string]interface{}
+		var resources []map[string]any
 
 		callbackResource := func(parentCtx context.Context, hostname string, r resource.Resource, callError error) error {
 			if callError != nil {
@@ -638,23 +637,23 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
 		if helperErr != nil {
-			return map[string]interface{}{}, helperErr
+			return map[string]any{}, helperErr
 		}
 		if err := multiErr.ErrorOrNil(); err != nil {
-			return map[string]interface{}{}, err
+			return map[string]any{}, err
 		}
 		if len(resources) == 0 {
-			return map[string]interface{}{}, nil
+			return map[string]any{}, nil
 		}
 		if id != "" && len(resources) == 1 {
 			return resources[0], nil
 		}
 		// Return items as a slice for proper range iteration in templates
-		items := make([]interface{}, len(resources))
+		items := make([]any, len(resources))
 		for i, res := range resources {
 			items[i] = res
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"apiVersion": "v1",
 			"kind":       "List",
 			"items":      items,
