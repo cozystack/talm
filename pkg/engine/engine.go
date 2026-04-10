@@ -23,7 +23,6 @@ import (
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
-	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/strvals"
 
@@ -233,7 +232,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	}
 
 	rootValues := map[string]any{
-		"Values": mergeMaps(chrt.Values, values),
+		"Values":       mergeMaps(chrt.Values, values),
+		"TalosVersion": opts.TalosVersion,
 	}
 
 	eng := helmEngine.Engine{}
@@ -257,7 +257,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		configPatches = append(configPatches, configPatch)
 	}
 
-	finalConfig, err := applyPatchesAndRenderConfig(ctx, opts, configPatches, chrt)
+	finalConfig, err := applyPatchesAndRenderConfig(opts, configPatches)
 	if err != nil {
 		// TODO
 		return nil, err
@@ -391,7 +391,7 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 	return talosPatches, extraDocs, nil
 }
 
-func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatches []string, chrt *chart.Chart) ([]byte, error) {
+func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
 	if err != nil {

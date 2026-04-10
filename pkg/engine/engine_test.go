@@ -49,6 +49,41 @@ func TestIsTalosConfigPatch(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "HostnameConfig",
+			doc:      "apiVersion: v1alpha1\nkind: HostnameConfig\nhostname: worker-1",
+			expected: false,
+		},
+		{
+			name:     "LinkConfig",
+			doc:      "apiVersion: v1alpha1\nkind: LinkConfig\nname: enp0s3\naddresses:\n  - address: 192.168.1.100/24",
+			expected: false,
+		},
+		{
+			name:     "BondConfig",
+			doc:      "apiVersion: v1alpha1\nkind: BondConfig\nname: bond0\nlinks:\n  - eth0\n  - eth1\nbondMode: 802.3ad",
+			expected: false,
+		},
+		{
+			name:     "VLANConfig",
+			doc:      "apiVersion: v1alpha1\nkind: VLANConfig\nname: bond0.100\nvlanID: 100\nparent: bond0",
+			expected: false,
+		},
+		{
+			name:     "ResolverConfig",
+			doc:      "apiVersion: v1alpha1\nkind: ResolverConfig\nnameservers:\n  - address: 8.8.8.8",
+			expected: false,
+		},
+		{
+			name:     "RegistryMirrorConfig",
+			doc:      "apiVersion: v1alpha1\nkind: RegistryMirrorConfig\nname: docker.io\nendpoints:\n  - url: https://mirror.gcr.io",
+			expected: false,
+		},
+		{
+			name:     "Layer2VIPConfig",
+			doc:      "apiVersion: v1alpha1\nkind: Layer2VIPConfig\nname: 192.168.100.10\nlink: bond0",
+			expected: false,
+		},
+		{
 			name:     "empty document",
 			doc:      "",
 			expected: false,
@@ -127,6 +162,24 @@ func TestExtractExtraDocuments(t *testing.T) {
 		{
 			name:      "CRLF line endings",
 			patches:   []string{"machine:\r\n  type: worker\r\n---\r\napiVersion: v1alpha1\r\nkind: UserVolumeConfig"},
+			wantTalos: 1,
+			wantExtra: 1,
+		},
+		{
+			name:      "v1.12 multi-doc: talos patch + network and registry documents",
+			patches:   []string{"machine:\n  type: worker\ncluster:\n  name: test\n---\napiVersion: v1alpha1\nkind: HostnameConfig\nhostname: worker-1\n---\napiVersion: v1alpha1\nkind: LinkConfig\nname: enp0s3\naddresses:\n  - address: 192.168.1.100/24\n---\napiVersion: v1alpha1\nkind: RegistryMirrorConfig\nname: docker.io\nendpoints:\n  - url: https://mirror.gcr.io"},
+			wantTalos: 1,
+			wantExtra: 3,
+		},
+		{
+			name:      "v1.12 multi-doc: talos patch + bond, vlan, vip documents",
+			patches:   []string{"machine:\n  type: controlplane\ncluster:\n  name: prod\n---\napiVersion: v1alpha1\nkind: BondConfig\nname: bond0\nlinks:\n  - eth0\n  - eth1\nbondMode: 802.3ad\n---\napiVersion: v1alpha1\nkind: VLANConfig\nname: bond0.100\nvlanID: 100\nparent: bond0\n---\napiVersion: v1alpha1\nkind: Layer2VIPConfig\nname: 192.168.100.10\nlink: bond0"},
+			wantTalos: 1,
+			wantExtra: 3,
+		},
+		{
+			name:      "v1.12 multi-doc: talos patch + resolver config",
+			patches:   []string{"machine:\n  type: worker\n---\napiVersion: v1alpha1\nkind: ResolverConfig\nnameservers:\n  - address: 8.8.8.8\n  - address: 8.8.4.4"},
 			wantTalos: 1,
 			wantExtra: 1,
 		},
