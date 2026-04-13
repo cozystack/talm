@@ -2,13 +2,14 @@ package wizard
 
 // NodeInfo holds hardware and network information about a discovered Talos node.
 type NodeInfo struct {
-	IP         string
-	Hostname   string
-	MAC        string
-	CPU        string // human-readable, e.g. "Intel Xeon E-2236 (12 threads)"
-	RAMBytes   uint64
-	Disks      []Disk
-	Interfaces []NetInterface
+	IP             string
+	Hostname       string
+	MAC            string
+	CPU            string // human-readable, e.g. "Intel Xeon E-2236 (12 threads)"
+	RAMBytes       uint64
+	Disks          []Disk
+	Interfaces     []NetInterface
+	DefaultGateway string // default route next-hop discovered via COSI, if any
 }
 
 // Disk represents a block device on a node.
@@ -35,6 +36,10 @@ type NodeConfig struct {
 	Gateway   string
 	DNS       []string
 	VIP       string // optional, controlplane only
+	// ManagementIP — IP reachable from the host running talm (may differ from
+	// the node's own address on DNAT setups). Empty → fall back to the IP
+	// extracted from Addresses.
+	ManagementIP string
 }
 
 // WizardResult holds all collected data from the wizard flow,

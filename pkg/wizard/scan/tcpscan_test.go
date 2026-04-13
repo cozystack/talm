@@ -2,7 +2,10 @@ package scan
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -79,13 +82,10 @@ func TestScanTCPPort_NoOpenPort(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// Bind a port then close it immediately to guarantee it's unused
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	closedPort, err := pickClosedPort(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	closedPort := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
 
 	ips, err := scanTCPPort(ctx, "127.0.0.1/32", closedPort, 1)
 	if err != nil {
@@ -95,6 +95,28 @@ func TestScanTCPPort_NoOpenPort(t *testing.T) {
 	if len(ips) != 0 {
 		t.Errorf("scanTCPPort() = %v, want empty", ips)
 	}
+}
+
+// §11 — pickClosedPort returns a port that is *confirmed* to refuse connections.
+// Picks ephemeral ports, closes them, probes with net.Dial to make sure no one
+// raced in. Retries on collision.
+func pickClosedPort(t *testing.T) (int, error) {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, err
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		_ = l.Close()
+
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+		if err != nil {
+			return port, nil // port refused — good
+		}
+		_ = conn.Close()
+	}
+	return 0, fmt.Errorf("could not find a closed ephemeral port after 10 tries")
 }
 
 func TestScanTCPPort_MultipleHosts(t *testing.T) {
@@ -133,5 +155,49 @@ func TestEnumerateHosts_AcceptsSlash16(t *testing.T) {
 	}
 	if len(hosts) != 65534 {
 		t.Errorf("expected 65534 hosts, got %d", len(hosts))
+	}
+}
+
+// §10 — goroutine count must stay bounded by maxWorkers + small overhead,
+// regardless of host count. Current goroutine-per-host implementation will
+// spike to 1022 (for /22) and fail this test.
+func TestScanTCPPort_BoundedGoroutines(t *testing.T) {
+	baseGoroutines := runtime.NumGoroutine()
+
+	// Use a sink listener so dials succeed/fail cleanly.
+	// We don't care about results — only about runtime goroutine count.
+	var peak atomic.Int64
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				cur := int64(runtime.NumGoroutine())
+				if cur > peak.Load() {
+					peak.Store(cur)
+				}
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	// /22 = 1022 hosts. With goroutine-per-host, peak goroutines will spike
+	// far above maxWorkers.
+	maxWorkers := 10
+	_, _ = scanTCPPort(ctx, "127.0.0.0/22", 59999, maxWorkers)
+
+	// Allow: base + maxWorkers (dial workers) + small overhead (ticker, test runtime).
+	budget := int64(baseGoroutines) + int64(maxWorkers) + 10
+	if peak.Load() > budget {
+		t.Errorf("goroutine peak %d exceeds budget %d (base=%d, maxWorkers=%d) — worker pool not bounded",
+			peak.Load(), budget, baseGoroutines, maxWorkers)
 	}
 }

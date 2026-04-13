@@ -50,3 +50,41 @@ func memoryFromResponse(resp *machineapi.MemoryResponse) uint64 {
 	return msg.Meminfo.Memtotal * 1024
 }
 
+// linkFromSpec builds a NetInterface from the spec map of a network.LinkStatus
+// resource. Returns nil for non-physical links (bonds, vlans, links without
+// a PCI/USB bus path). Pure helper — no gRPC.
+func linkFromSpec(name string, spec map[string]interface{}) *wizard.NetInterface {
+	busPath, _ := spec["busPath"].(string)
+	kind, _ := spec["kind"].(string)
+	if busPath == "" || kind != "" {
+		return nil
+	}
+	mac, _ := spec["hardwareAddr"].(string)
+	return &wizard.NetInterface{
+		Name: name,
+		MAC:  mac,
+	}
+}
+
+// addressFromSpec extracts the CIDR address and its link name from the spec of
+// a network.AddressStatus resource. Returns empty strings for non-static or
+// malformed addresses.
+func addressFromSpec(spec map[string]interface{}) (linkName, cidr string) {
+	linkName, _ = spec["linkName"].(string)
+	cidr, _ = spec["address"].(string)
+	return linkName, cidr
+}
+
+// defaultGatewayFromSpec extracts the next-hop gateway IP from the spec of a
+// network.RouteStatus resource when it describes a default route. Returns an
+// empty string otherwise.
+func defaultGatewayFromSpec(spec map[string]interface{}) string {
+	dest, _ := spec["destination"].(string)
+	// Default route: destination empty or "0.0.0.0/0" / "::/0".
+	if dest != "" && dest != "0.0.0.0/0" && dest != "::/0" {
+		return ""
+	}
+	gw, _ := spec["gateway"].(string)
+	return gw
+}
+

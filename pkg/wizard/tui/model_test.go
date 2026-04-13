@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -676,6 +677,203 @@ func TestErrorBack_ReturnsToPreviousStep(t *testing.T) {
 
 	if m.Step() != stepGenerating {
 		t.Errorf("expected to return to stepGenerating, got %d", m.Step())
+	}
+}
+
+// §14 — viewDone must tell user how to exit
+
+func TestViewDone_ShowsExitHint(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepDone
+	out := m.View()
+	if !strings.Contains(strings.ToLower(out), "enter") || !strings.Contains(strings.ToLower(out), "q") {
+		t.Errorf("viewDone should mention Enter and q keys to exit, got:\n%s", out)
+	}
+}
+
+// §12 — rescan must reset selectedNodes/cursor/scanWarnings
+
+func TestRescanResetsSelectedCursorWarnings(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepScanning
+	m.selectedNodes = []int{5, 7, 9}
+	m.cursor = 4
+	m.scanWarnings = []string{"old warning"}
+
+	updated, _ := m.Update(scanResultMsg{nodes: []wizard.NodeInfo{{IP: "10.0.0.1"}}, warnings: nil})
+	m = updated.(Model)
+
+	if len(m.selectedNodes) != 0 {
+		t.Errorf("selectedNodes should be reset on rescan, got %v", m.selectedNodes)
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor should be reset on rescan, got %d", m.cursor)
+	}
+	if len(m.scanWarnings) != 0 {
+		t.Errorf("scanWarnings should be replaced on rescan, got %v", m.scanWarnings)
+	}
+}
+
+// §12 — scanErrorMsg should capture the step *before* stepScanning so Esc returns to CIDR input
+
+func TestScanError_PrevStepIsNotScanning(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	// Simulate the real flow: user entered CIDR, pressed enter → stepScanning
+	m.step = stepScanning
+
+	updated, _ := m.Update(scanErrorMsg{err: fmt.Errorf("boom")})
+	m = updated.(Model)
+
+	if m.Step() != stepError {
+		t.Fatalf("expected stepError, got %d", m.Step())
+	}
+	if m.prevStep == nil {
+		t.Fatal("prevStep must be set")
+	}
+	if *m.prevStep == stepScanning {
+		t.Errorf("prevStep must not be stepScanning (Esc would land on inert spinner), got stepScanning")
+	}
+	if *m.prevStep != stepScanCIDR {
+		t.Errorf("prevStep should be stepScanCIDR, got %d", *m.prevStep)
+	}
+}
+
+// §12 — generateErrorMsg should capture stepConfirm, not stepGenerating
+
+func TestGenerateError_PrevStepIsConfirm(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepGenerating
+
+	updated, _ := m.Update(generateErrorMsg{err: fmt.Errorf("fail")})
+	m = updated.(Model)
+
+	if m.prevStep == nil || *m.prevStep == stepGenerating {
+		t.Errorf("prevStep must not be stepGenerating (inert spinner), got %v", m.prevStep)
+	}
+	if m.prevStep != nil && *m.prevStep != stepConfirm {
+		t.Errorf("prevStep should be stepConfirm, got %d", *m.prevStep)
+	}
+}
+
+// §13 — back-navigation from stepConfirm must preserve edits of the last node
+
+func TestBack_PreservesLastNodeEdits(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1", Hostname: "cp-1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	// Simulate user typing — custom DNS that differs from default
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/nvme0n1")
+	m.nodeInputs[fieldInterface].SetValue("eth1")
+	m.nodeInputs[fieldAddress].SetValue("10.0.0.1/24")
+	m.nodeInputs[fieldGateway].SetValue("10.0.0.254")
+	m.nodeInputs[fieldDNS].SetValue("1.1.1.1,9.9.9.9")
+
+	updated, _ := m.Update(enterMsg()) // → stepConfirm
+	m = updated.(Model)
+	if m.Step() != stepConfirm {
+		t.Fatalf("expected stepConfirm after enter, got %d", m.Step())
+	}
+
+	// Go back — user wants to tweak something
+	updated, _ = m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.Step() != stepConfigureNode {
+		t.Fatalf("expected stepConfigureNode after back, got %d", m.Step())
+	}
+	// Inputs must still carry the user's edits (they are editing, not re-entering)
+	if got := m.nodeInputs[fieldDNS].Value(); got != "1.1.1.1,9.9.9.9" {
+		t.Errorf("DNS should be preserved, got %q", got)
+	}
+	if got := m.nodeInputs[fieldGateway].Value(); got != "10.0.0.254" {
+		t.Errorf("Gateway should be preserved, got %q", got)
+	}
+	if got := m.nodeInputs[fieldDisk].Value(); got != "/dev/nvme0n1" {
+		t.Errorf("Disk should be preserved, got %q", got)
+	}
+}
+
+// §13 — back from configure node (second→first) must preserve first node's edits
+
+func TestBack_BetweenNodes_PreservesFirstEdits(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{
+		{IP: "10.0.0.1", Hostname: "cp-1"},
+		{IP: "10.0.0.2", Hostname: "cp-2"},
+	}
+	m.selectedNodes = []int{0, 1}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+
+	m.nodeInputs[fieldRole].SetValue("controlplane")
+	m.nodeInputs[fieldHostname].SetValue("cp-1")
+	m.nodeInputs[fieldDisk].SetValue("/dev/nvme0n1")
+	m.nodeInputs[fieldAddress].SetValue("10.0.0.1/24")
+	m.nodeInputs[fieldDNS].SetValue("1.1.1.1")
+
+	updated, _ := m.Update(enterMsg()) // advance to node 2
+	m = updated.(Model)
+	if m.currentNodeIdx != 1 {
+		t.Fatalf("expected currentNodeIdx=1, got %d", m.currentNodeIdx)
+	}
+
+	// Go back to node 1
+	updated, _ = m.Update(escMsg())
+	m = updated.(Model)
+
+	if m.currentNodeIdx != 0 {
+		t.Fatalf("currentNodeIdx = %d, want 0", m.currentNodeIdx)
+	}
+	if got := m.nodeInputs[fieldDisk].Value(); got != "/dev/nvme0n1" {
+		t.Errorf("first node disk should be preserved, got %q", got)
+	}
+	if got := m.nodeInputs[fieldDNS].Value(); got != "1.1.1.1" {
+		t.Errorf("first node DNS should be preserved, got %q", got)
+	}
+}
+
+// §3 — DNS field should not be auto-prefilled with 8.8.8.8
+
+func TestPrepareNodeInputs_DNSNotPrefilled(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+
+	m.prepareNodeInputs()
+
+	if got := m.nodeInputs[fieldDNS].Value(); got != "" {
+		t.Errorf("DNS should not be prefilled, got %q", got)
+	}
+}
+
+// §3 — role field should be a toggle (space switches between controlplane/worker)
+
+func TestConfigureNode_RoleToggleWithSpace(t *testing.T) {
+	m := New(&mockScanner{}, []string{"generic"}, nil)
+	m.step = stepConfigureNode
+	m.discoveredNodes = []wizard.NodeInfo{{IP: "10.0.0.1"}}
+	m.selectedNodes = []int{0}
+	m.currentNodeIdx = 0
+	m.prepareNodeInputs()
+	m.nodeInputFocus = fieldRole
+
+	initialRole := m.nodeInputs[fieldRole].Value()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(Model)
+
+	if got := m.nodeInputs[fieldRole].Value(); got == initialRole {
+		t.Errorf("space on role field should toggle; still %q", got)
+	}
+	if got := m.nodeInputs[fieldRole].Value(); got != "controlplane" && got != "worker" {
+		t.Errorf("role toggle produced invalid value %q", got)
 	}
 }
 

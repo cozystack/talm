@@ -115,3 +115,75 @@ func TestMemoryFromResponse_Nil(t *testing.T) {
 	}
 }
 
+// §9 — linkFromSpec must parse spec via direct type assertion (no YAML round-trip)
+
+func TestLinkFromSpec_PhysicalInterface(t *testing.T) {
+	spec := map[string]interface{}{
+		"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+		"busPath":      "0000:00:1f.6",
+		// "kind" absent → physical
+	}
+
+	iface := linkFromSpec("eth0", spec)
+	if iface == nil {
+		t.Fatal("expected NetInterface, got nil")
+	}
+	if iface.Name != "eth0" {
+		t.Errorf("Name = %q, want eth0", iface.Name)
+	}
+	if iface.MAC != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("MAC = %q", iface.MAC)
+	}
+}
+
+func TestLinkFromSpec_SkipsVirtual(t *testing.T) {
+	// Bond: no busPath
+	if linkFromSpec("bond0", map[string]interface{}{"hardwareAddr": "xx"}) != nil {
+		t.Error("bond (no busPath) should be skipped")
+	}
+	// VLAN: has kind
+	if linkFromSpec("eth0.10", map[string]interface{}{"busPath": "x", "kind": "vlan"}) != nil {
+		t.Error("vlan (kind!=\"\") should be skipped")
+	}
+}
+
+// §2 — addressFromSpec extracts linkName + CIDR for matching to interface
+
+func TestAddressFromSpec(t *testing.T) {
+	link, cidr := addressFromSpec(map[string]interface{}{
+		"linkName": "eth0",
+		"address":  "10.0.0.5/24",
+	})
+	if link != "eth0" || cidr != "10.0.0.5/24" {
+		t.Errorf("got (%q, %q), want (eth0, 10.0.0.5/24)", link, cidr)
+	}
+}
+
+// §2 — defaultGatewayFromSpec returns gateway only for default route
+
+func TestDefaultGatewayFromSpec_DefaultRoute(t *testing.T) {
+	gw := defaultGatewayFromSpec(map[string]interface{}{
+		"destination": "0.0.0.0/0",
+		"gateway":     "10.0.0.1",
+	})
+	if gw != "10.0.0.1" {
+		t.Errorf("default route gateway = %q, want 10.0.0.1", gw)
+	}
+
+	// Empty destination also means default route in COSI output
+	gw = defaultGatewayFromSpec(map[string]interface{}{"gateway": "10.0.0.2"})
+	if gw != "10.0.0.2" {
+		t.Errorf("empty-destination gateway = %q, want 10.0.0.2", gw)
+	}
+}
+
+func TestDefaultGatewayFromSpec_NonDefault(t *testing.T) {
+	gw := defaultGatewayFromSpec(map[string]interface{}{
+		"destination": "192.168.1.0/24",
+		"gateway":     "10.0.0.1",
+	})
+	if gw != "" {
+		t.Errorf("non-default route should return empty, got %q", gw)
+	}
+}
+

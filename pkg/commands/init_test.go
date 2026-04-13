@@ -138,6 +138,64 @@ func TestGenerateProject_EmptyClusterName(t *testing.T) {
 	}
 }
 
+// §6 — GenerateProject must reject names that would fail wizard validation
+// (uppercase, dots, leading/trailing hyphens, etc.), so both entry points
+// share the same rules.
+
+func TestGenerateProject_RejectsInvalidClusterName(t *testing.T) {
+	invalid := []string{
+		"MyCluster",       // uppercase
+		"my.cluster",      // dot
+		"-cluster",        // leading hyphen
+		"cluster-",        // trailing hyphen
+		"my_cluster",      // underscore
+		strings.Repeat("a", 64), // too long
+	}
+	for _, name := range invalid {
+		t.Run(name, func(t *testing.T) {
+			rootDir := t.TempDir()
+			opts := GenerateOptions{
+				RootDir:     rootDir,
+				Preset:      "generic",
+				ClusterName: name,
+				Version:     "0.1.0",
+			}
+			if err := GenerateProject(opts); err == nil {
+				t.Errorf("expected error for cluster name %q, got nil", name)
+			}
+		})
+	}
+}
+
+// §5 — endpoint specified via GenerateOptions must end up in the generated
+// talosconfig instead of the hardcoded placeholder.
+
+func TestGenerateProject_UsesProvidedEndpoint(t *testing.T) {
+	rootDir := t.TempDir()
+	opts := GenerateOptions{
+		RootDir:     rootDir,
+		Preset:      "generic",
+		ClusterName: "test-cluster",
+		Version:     "0.1.0",
+		Endpoint:    "https://203.0.113.10:6443",
+	}
+
+	if err := GenerateProject(opts); err != nil {
+		t.Fatalf("GenerateProject failed: %v", err)
+	}
+
+	data := readFile(t, rootDir, "talosconfig")
+	if !strings.Contains(data, "203.0.113.10") {
+		t.Errorf("talosconfig should reference provided endpoint host, got:\n%s", data)
+	}
+	if strings.Contains(data, "192.168.0.1") {
+		t.Errorf("talosconfig still contains hardcoded placeholder 192.168.0.1:\n%s", data)
+	}
+	if strings.Contains(data, "127.0.0.1") {
+		t.Errorf("talosconfig endpoints should use provided host, not 127.0.0.1:\n%s", data)
+	}
+}
+
 func TestMergeValuesOverrides_RejectsMapValuedOverrideForNewKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	valuesPath := filepath.Join(tmpDir, "values.yaml")

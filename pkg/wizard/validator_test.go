@@ -101,6 +101,7 @@ func TestValidateEndpoint(t *testing.T) {
 		{"http scheme", "http://192.168.0.1:6443", true},
 		{"no port", "https://192.168.0.1", true},
 		{"garbage", "not-a-url", true},
+		{"hostname-only port", "https://:6443", true},
 	}
 
 	for _, tt := range tests {

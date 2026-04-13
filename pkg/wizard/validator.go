@@ -67,6 +67,11 @@ func ValidateEndpoint(endpoint string) error {
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("invalid endpoint URL: %s", endpoint)
 	}
+	// url.Parse("https://:6443") yields Host=":6443" but Hostname()="".
+	// Reject explicitly so endpoints always carry a usable host/IP.
+	if u.Hostname() == "" {
+		return fmt.Errorf("endpoint must include a valid hostname or IP: %s", endpoint)
+	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("endpoint must use https scheme, got %q", u.Scheme)
 	}

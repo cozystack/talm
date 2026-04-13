@@ -226,3 +226,69 @@ func TestWriteNodeFiles_InvalidHostname(t *testing.T) {
 		t.Error("expected error for '..' hostname")
 	}
 }
+
+// §8 — two hostnames that sanitize to the same safe name must be rejected
+
+func TestWriteNodeFiles_NormalizedCollision(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "cp-1", Role: "controlplane", Addresses: "10.0.0.1/24"},
+		{Hostname: "../cp-1", Role: "worker", Addresses: "10.0.0.2/24"},
+	}
+
+	err := WriteNodeFiles(rootDir, nodes)
+	if err == nil {
+		t.Error("expected error for hostnames that collide after sanitization")
+	}
+}
+
+// §8 — unknown role must return an error, not silently fall back to worker
+
+func TestWriteNodeFiles_UnknownRole(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{Hostname: "master-1", Role: "master", Addresses: "10.0.0.1/24"},
+	}
+
+	err := WriteNodeFiles(rootDir, nodes)
+	if err == nil {
+		t.Error("expected error for unknown role 'master', got nil (silent worker fallback)")
+	}
+}
+
+// §4 — when ManagementIP differs from node IP, modeline must carry both
+// (nodes = node IP extracted from Addresses; endpoints = ManagementIP)
+
+func TestWriteNodeFiles_ManagementIPDistinctFromNodeIP(t *testing.T) {
+	rootDir := t.TempDir()
+
+	nodes := []NodeConfig{
+		{
+			Hostname:     "cp-1",
+			Role:         "controlplane",
+			Addresses:    "10.0.0.1/24",
+			ManagementIP: "203.0.113.5",
+		},
+	}
+
+	if err := WriteNodeFiles(rootDir, nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(rootDir, "nodes", "cp-1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+
+	// nodes field must reference the internal address
+	if !strings.Contains(content, `"10.0.0.1"`) {
+		t.Errorf("modeline should contain node IP 10.0.0.1, got:\n%s", content)
+	}
+	// endpoints field must reference the management IP
+	if !strings.Contains(content, `"203.0.113.5"`) {
+		t.Errorf("modeline should contain management IP 203.0.113.5, got:\n%s", content)
+	}
+}

@@ -244,7 +244,8 @@ func (m Model) viewDone() string {
 		"Files created in the current directory.\n" +
 		"Next steps:\n" +
 		"  1. talm template --file nodes/<hostname>.yaml  (render machine configs)\n" +
-		"  2. talm apply --file nodes/<hostname>.yaml      (apply to nodes)\n"
+		"  2. talm apply --file nodes/<hostname>.yaml      (apply to nodes)\n" +
+		helpStyle.Render("\nPress enter or q to exit")
 }
 
 func (m Model) viewError() string {

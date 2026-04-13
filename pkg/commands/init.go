@@ -567,8 +567,9 @@ type GenerateOptions struct {
 	TalosVersion    string
 	Version         string // Chart version, e.g. "0.1.0"
 	Force           bool
-	KubeconfigName  string                // base filename for kubeconfig in .gitignore (default: "kubeconfig")
+	KubeconfigName  string                 // base filename for kubeconfig in .gitignore (default: "kubeconfig")
 	ValuesOverrides map[string]interface{} // optional: merge into generated values.yaml
+	Endpoint        string                 // optional: API server endpoint (e.g. "https://203.0.113.1:6443"). Defaults to placeholder.
 }
 
 // GenerateProject creates a new talm project: secrets, talosconfig, preset files, .gitignore, and nodes directory.
