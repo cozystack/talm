@@ -17,9 +17,11 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/cozystack/talm/pkg/generated"
 	"github.com/cozystack/talm/pkg/wizard"
@@ -42,30 +44,48 @@ var interactiveCmd = &cobra.Command{
 		}
 
 		scanner := scan.New()
+		existing, isExisting := detectExistingProject(Config.RootDir)
+
+		var projectGenerated bool
 		generateFn := func(result wizard.WizardResult) error {
 			overrides := buildValuesOverrides(result)
 
-			if err := GenerateProject(GenerateOptions{
-				RootDir:         Config.RootDir,
-				Preset:          result.Preset,
-				ClusterName:     result.ClusterName,
-				TalosVersion:    Config.TemplateOptions.TalosVersion,
-				Force:           false,
-				Version:         Config.InitOptions.Version,
-				ValuesOverrides: overrides,
-			}); err != nil {
-				return err
+			// Skip full project scaffolding when the project is already
+			// initialized — only (re)write node stubs and values overrides.
+			if !isExisting {
+				if err := GenerateProject(GenerateOptions{
+					RootDir:         Config.RootDir,
+					Preset:          result.Preset,
+					ClusterName:     result.ClusterName,
+					TalosVersion:    Config.TemplateOptions.TalosVersion,
+					Force:           false,
+					Version:         Config.InitOptions.Version,
+					ValuesOverrides: overrides,
+					Endpoint:        result.Endpoint,
+				}); err != nil {
+					return err
+				}
+			} else {
+				valuesPath := filepath.Join(Config.RootDir, "values.yaml")
+				if err := mergeValuesOverrides(valuesPath, overrides); err != nil {
+					return err
+				}
 			}
 
 			if err := wizard.WriteNodeFiles(Config.RootDir, result.Nodes); err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "\nNote: Secrets are not encrypted. Run 'talm init --encrypt' to encrypt sensitive files.\n")
+			projectGenerated = true
 			return nil
 		}
 
-		model := tui.New(scanner, presets, generateFn)
+		var model tui.Model
+		if isExisting {
+			model = tui.NewForExistingProject(scanner, existing, generateFn)
+		} else {
+			model = tui.New(scanner, presets, generateFn)
+		}
 		p := tea.NewProgram(model, tea.WithAltScreen())
 
 		finalModel, err := p.Run()
@@ -77,8 +97,53 @@ var interactiveCmd = &cobra.Command{
 			return m.Err()
 		}
 
+		// p.Run() has returned — alternate screen is torn down and the main
+		// terminal buffer is restored. Emit the encryption warning here so
+		// users actually see it.
+		if projectGenerated {
+			fmt.Fprintln(os.Stderr, "\nNote: Secrets are not encrypted. Run 'talm init --encrypt' to encrypt sensitive files.")
+		}
+
 		return nil
 	},
+}
+
+// detectExistingProject returns the pre-populated wizard result (preset +
+// cluster name) when rootDir already looks like an initialized talm project.
+// Allows the wizard to skip steps the user has already answered.
+func detectExistingProject(rootDir string) (wizard.WizardResult, bool) {
+	secretsExist := fileExists(filepath.Join(rootDir, "secrets.yaml")) ||
+		fileExists(filepath.Join(rootDir, "secrets.yaml.encrypted"))
+	chartYaml := filepath.Join(rootDir, "Chart.yaml")
+	if !secretsExist || !fileExists(chartYaml) {
+		return wizard.WizardResult{}, false
+	}
+
+	data, err := os.ReadFile(chartYaml)
+	if err != nil {
+		return wizard.WizardResult{}, false
+	}
+	var parsed struct {
+		Name         string `yaml:"name"`
+		Dependencies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"dependencies"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return wizard.WizardResult{}, false
+	}
+
+	var preset string
+	for _, dep := range parsed.Dependencies {
+		if dep.Name != "talm" {
+			preset = dep.Name
+			break
+		}
+	}
+	if parsed.Name == "" || preset == "" {
+		return wizard.WizardResult{}, false
+	}
+	return wizard.WizardResult{Preset: preset, ClusterName: parsed.Name}, true
 }
 
 // buildValuesOverrides creates a map of values.yaml overrides from wizard results.

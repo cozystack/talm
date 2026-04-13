@@ -657,13 +657,13 @@ func TestEscFromScanning(t *testing.T) {
 	}
 }
 
-// Verify error recovery returns to the step that triggered the error
+// Esc from stepError must land on a user-actionable step, not on the
+// spinner the generation was running from.
 
-func TestErrorBack_ReturnsToPreviousStep(t *testing.T) {
+func TestErrorBack_ReturnsToConfirm(t *testing.T) {
 	m := New(&mockScanner{}, []string{"generic"}, nil)
 	m.step = stepGenerating
 
-	// Simulate generation error
 	updated, _ := m.Update(generateErrorMsg{err: fmt.Errorf("disk full")})
 	m = updated.(Model)
 
@@ -671,12 +671,11 @@ func TestErrorBack_ReturnsToPreviousStep(t *testing.T) {
 		t.Fatalf("expected stepError, got %d", m.Step())
 	}
 
-	// Press Esc to go back
 	updated, _ = m.Update(escMsg())
 	m = updated.(Model)
 
-	if m.Step() != stepGenerating {
-		t.Errorf("expected to return to stepGenerating, got %d", m.Step())
+	if m.Step() != stepConfirm {
+		t.Errorf("expected Esc to return to stepConfirm (actionable), got %d", m.Step())
 	}
 }
 
@@ -874,6 +873,27 @@ func TestConfigureNode_RoleToggleWithSpace(t *testing.T) {
 	}
 	if got := m.nodeInputs[fieldRole].Value(); got != "controlplane" && got != "worker" {
 		t.Errorf("role toggle produced invalid value %q", got)
+	}
+}
+
+// §1 — when launched on an already-initialized project the wizard skips
+// the preset/cluster-name collection and jumps straight to endpoint input.
+// preset/name come from the on-disk Chart.yaml via the caller.
+
+func TestNewForExistingProject_SkipsPresetAndName(t *testing.T) {
+	m := NewForExistingProject(&mockScanner{}, wizard.WizardResult{
+		Preset:      "generic",
+		ClusterName: "existing",
+	}, nil)
+
+	if m.Step() != stepEndpoint {
+		t.Errorf("existing-project wizard should start at stepEndpoint, got %d", m.Step())
+	}
+	if m.result.Preset != "generic" {
+		t.Errorf("preset should be pre-set, got %q", m.result.Preset)
+	}
+	if m.result.ClusterName != "existing" {
+		t.Errorf("cluster name should be pre-set, got %q", m.result.ClusterName)
 	}
 }
 

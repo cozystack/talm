@@ -17,6 +17,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/generated"
+	"github.com/cozystack/talm/pkg/wizard"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -592,8 +594,10 @@ func GenerateProject(opts GenerateOptions) error {
 		return fmt.Errorf("failed to create secrets bundle: %w", err)
 	}
 
-	if opts.ClusterName == "" {
-		return fmt.Errorf("cluster name must not be empty")
+	// Apply the same DNS-label rules the interactive wizard enforces so both
+	// entry points produce consistent, valid clusters.
+	if err := wizard.ValidateClusterName(opts.ClusterName); err != nil {
+		return err
 	}
 
 	availablePresets, err := generated.AvailablePresets()
@@ -621,11 +625,22 @@ func GenerateProject(opts GenerateOptions) error {
 	// Generate and write talosconfig
 	talosconfigFile := filepath.Join(opts.RootDir, "talosconfig")
 	if err := writeFileIfNotExists(talosconfigFile, opts.Force, func() ([]byte, error) {
-		configBundle, err := gen.GenerateConfigBundle(genOptions, opts.ClusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
+		endpoint := opts.Endpoint
+		if endpoint == "" {
+			endpoint = "https://192.168.0.1:6443"
+		}
+		configBundle, err := gen.GenerateConfigBundle(genOptions, opts.ClusterName, endpoint, "", []string{}, []string{}, []string{})
 		if err != nil {
 			return nil, err
 		}
-		configBundle.TalosConfig().Contexts[opts.ClusterName].Endpoints = []string{"127.0.0.1"}
+		// Default Endpoints is the loopback-only 127.0.0.1 — replace with the
+		// actual host from the user-provided endpoint so talosconfig points
+		// at the cluster out of the box.
+		endpointHost := "127.0.0.1"
+		if u, err := url.Parse(endpoint); err == nil && u.Hostname() != "" {
+			endpointHost = u.Hostname()
+		}
+		configBundle.TalosConfig().Contexts[opts.ClusterName].Endpoints = []string{endpointHost}
 		return yaml.Marshal(configBundle.TalosConfig())
 	}, 0o600); err != nil {
 		return err

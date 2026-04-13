@@ -13,45 +13,57 @@ const dialTimeout = 2 * time.Second
 
 // scanTCPPort scans all hosts in the given CIDR for an open TCP port.
 // Returns a list of IPs that accepted the connection.
+//
+// Uses a fixed worker pool of maxWorkers goroutines reading from a jobs
+// channel — goroutine count stays bounded regardless of the input range.
+// A goroutine-per-host approach would spike to thousands for /16 inputs.
 func scanTCPPort(ctx context.Context, cidr string, port int, maxWorkers int) ([]string, error) {
 	hosts, err := enumerateHosts(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enumerate hosts: %w", err)
 	}
+	if maxWorkers < 1 {
+		return nil, fmt.Errorf("maxWorkers must be >= 1, got %d", maxWorkers)
+	}
 
 	var (
 		mu      sync.Mutex
 		results []string
-		sem     = make(chan struct{}, maxWorkers)
+		jobs    = make(chan string)
 		wg      sync.WaitGroup
 	)
 
-	for _, host := range hosts {
-		wg.Add(1)
-		go func(ip string) {
-			defer wg.Done()
-
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
-
+	worker := func() {
+		defer wg.Done()
+		dialer := net.Dialer{Timeout: dialTimeout}
+		for ip := range jobs {
 			addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
-			dialer := net.Dialer{Timeout: dialTimeout}
 			conn, err := dialer.DialContext(ctx, "tcp", addr)
 			if err != nil {
-				return
+				continue
 			}
 			_ = conn.Close()
 
 			mu.Lock()
 			results = append(results, ip)
 			mu.Unlock()
-		}(host.String())
+		}
 	}
 
+	for range maxWorkers {
+		wg.Add(1)
+		go worker()
+	}
+
+feed:
+	for _, host := range hosts {
+		select {
+		case jobs <- host.String():
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(jobs)
 	wg.Wait()
 
 	if ctx.Err() != nil {

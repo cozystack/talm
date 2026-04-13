@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/resource/meta"
-	"gopkg.in/yaml.v3"
 
 	"github.com/cozystack/talm/pkg/wizard"
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
@@ -75,7 +73,16 @@ func (s *TalosScanner) ScanNetworkFull(ctx context.Context, cidr string) (wizard
 // GetNodeInfo connects to a single Talos node via gRPC and retrieves
 // hostname, disks, memory, and network interface information.
 func (s *TalosScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeInfo, error) {
+	node, _, err := s.getNodeInfoWithWarnings(ctx, ip)
+	return node, err
+}
+
+// getNodeInfoWithWarnings is like GetNodeInfo but additionally returns non-fatal
+// warnings (e.g. failed link listing) so the caller can surface them through
+// the UI instead of the terminal while Bubble Tea owns the screen.
+func (s *TalosScanner) getNodeInfoWithWarnings(ctx context.Context, ip string) (wizard.NodeInfo, []string, error) {
 	node := wizard.NodeInfo{IP: ip}
+	var warnings []string
 
 	timeout := s.Timeout
 	if timeout == 0 {
@@ -89,96 +96,154 @@ func (s *TalosScanner) GetNodeInfo(ctx context.Context, ip string) (wizard.NodeI
 		client.WithTLSConfig(&tls.Config{InsecureSkipVerify: true}), //nolint:gosec
 	)
 	if err != nil {
-		return node, err
+		return node, warnings, err
 	}
 	defer func() { _ = c.Close() }()
 
 	nodeCtx := client.WithNode(infoCtx, ip)
 
-	// Collect hostname from Version response
 	if versionResp, err := c.Version(nodeCtx); err == nil {
 		node.Hostname = hostnameFromVersion(versionResp)
 	}
-
-	// Collect disks
 	if disksResp, err := c.Disks(nodeCtx); err == nil {
 		node.Disks = disksFromResponse(disksResp)
 	}
-
-	// Collect memory
 	if memResp, err := c.Memory(nodeCtx); err == nil {
 		node.RAMBytes = memoryFromResponse(memResp)
 	}
 
-	// Collect network interfaces via COSI resource API
-	node.Interfaces = s.collectLinks(nodeCtx, c)
+	ifaces, linkWarn := s.collectLinks(nodeCtx, c)
+	warnings = append(warnings, linkWarn...)
 
-	// If no useful data was collected, treat as failure
+	addrs, addrWarn := s.collectAddresses(nodeCtx, c)
+	warnings = append(warnings, addrWarn...)
+	// Merge addresses into interfaces by link name.
+	for i := range ifaces {
+		if ips, ok := addrs[ifaces[i].Name]; ok {
+			ifaces[i].IPs = ips
+		}
+	}
+	node.Interfaces = ifaces
+
+	gateway, routeWarn := s.collectDefaultGateway(nodeCtx, c)
+	warnings = append(warnings, routeWarn...)
+	node.DefaultGateway = gateway
+
 	if node.Hostname == "" && len(node.Disks) == 0 && node.RAMBytes == 0 {
-		return node, fmt.Errorf("node %s: gRPC connected but returned no useful data", ip)
+		return node, warnings, fmt.Errorf("node %s: gRPC connected but returned no useful data", ip)
 	}
 
-	return node, nil
+	return node, warnings, nil
 }
 
 // collectLinks retrieves network link resources via the COSI API and
-// returns physical interfaces only.
-func (s *TalosScanner) collectLinks(ctx context.Context, c *client.Client) []wizard.NetInterface {
-	var interfaces []wizard.NetInterface
+// returns physical interfaces only. Non-fatal errors are returned as warnings
+// so the wizard can surface them through the TUI instead of the terminal.
+func (s *TalosScanner) collectLinks(ctx context.Context, c *client.Client) ([]wizard.NetInterface, []string) {
+	var (
+		interfaces []wizard.NetInterface
+		warnings   []string
+	)
 
 	callbackRD := func(_ *meta.ResourceDefinition) error { return nil }
 	callbackResource := func(_ context.Context, _ string, r resource.Resource, callErr error) error {
 		if callErr != nil {
 			return nil
 		}
-
-		yamlData, err := resource.MarshalYAML(r)
-		if err != nil {
+		spec := specMapFromResource(r)
+		if spec == nil {
 			return nil
 		}
-
-		resMap, ok := yamlData.(map[string]interface{})
-		if !ok {
-			return nil
+		if iface := linkFromSpec(r.Metadata().ID(), spec); iface != nil {
+			interfaces = append(interfaces, *iface)
 		}
-
-		specRaw, ok := resMap["spec"]
-		if !ok {
-			return nil
-		}
-
-		specBytes, err := yaml.Marshal(specRaw)
-		if err != nil {
-			return nil
-		}
-
-		var specMap map[string]interface{}
-		if err := yaml.Unmarshal(specBytes, &specMap); err != nil {
-			return nil
-		}
-
-		name := r.Metadata().ID()
-		mac, _ := specMap["hardwareAddr"].(string)
-		busPath, _ := specMap["busPath"].(string)
-		kind, _ := specMap["kind"].(string)
-
-		// Only include physical interfaces: has busPath, not virtual (bond/vlan)
-		if busPath != "" && kind == "" {
-			interfaces = append(interfaces, wizard.NetInterface{
-				Name: name,
-				MAC:  mac,
-			})
-		}
-
 		return nil
 	}
 
 	if err := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "links"); err != nil {
-		// Log but don't fail — interfaces are supplementary info
-		fmt.Fprintf(os.Stderr, "Warning: failed to list network links: %v\n", err)
+		warnings = append(warnings, fmt.Sprintf("failed to list network links: %v", err))
 	}
 
-	return interfaces
+	return interfaces, warnings
+}
+
+// collectAddresses returns a map of link name → [CIDR addresses] discovered
+// via network.AddressStatus resources.
+func (s *TalosScanner) collectAddresses(ctx context.Context, c *client.Client) (map[string][]string, []string) {
+	result := map[string][]string{}
+	var warnings []string
+
+	callbackRD := func(_ *meta.ResourceDefinition) error { return nil }
+	callbackResource := func(_ context.Context, _ string, r resource.Resource, callErr error) error {
+		if callErr != nil {
+			return nil
+		}
+		spec := specMapFromResource(r)
+		if spec == nil {
+			return nil
+		}
+		link, cidr := addressFromSpec(spec)
+		if link == "" || cidr == "" {
+			return nil
+		}
+		result[link] = append(result[link], cidr)
+		return nil
+	}
+
+	if err := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "addressstatuses"); err != nil {
+		warnings = append(warnings, fmt.Sprintf("failed to list addresses: %v", err))
+	}
+
+	return result, warnings
+}
+
+// collectDefaultGateway returns the next-hop IP of the first default route
+// found on the node, or an empty string if there isn't one.
+func (s *TalosScanner) collectDefaultGateway(ctx context.Context, c *client.Client) (string, []string) {
+	var (
+		gateway  string
+		warnings []string
+	)
+
+	callbackRD := func(_ *meta.ResourceDefinition) error { return nil }
+	callbackResource := func(_ context.Context, _ string, r resource.Resource, callErr error) error {
+		if callErr != nil || gateway != "" {
+			return nil
+		}
+		spec := specMapFromResource(r)
+		if spec == nil {
+			return nil
+		}
+		if gw := defaultGatewayFromSpec(spec); gw != "" {
+			gateway = gw
+		}
+		return nil
+	}
+
+	if err := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, "network", "routestatuses"); err != nil {
+		warnings = append(warnings, fmt.Sprintf("failed to list routes: %v", err))
+	}
+
+	return gateway, warnings
+}
+
+// specMapFromResource extracts the spec map of a COSI resource using a direct
+// type assertion on the value produced by resource.MarshalYAML. Avoids the
+// YAML round-trip the original implementation used.
+func specMapFromResource(r resource.Resource) map[string]interface{} {
+	yamlData, err := resource.MarshalYAML(r)
+	if err != nil {
+		return nil
+	}
+	resMap, ok := yamlData.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	spec, ok := resMap["spec"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return spec
 }
 
 // collectNodeInfo queries multiple nodes concurrently with bounded parallelism.
@@ -204,10 +269,13 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) (wizar
 				return
 			}
 
-			node, err := s.GetNodeInfo(ctx, ip)
+			node, nodeWarn, err := s.getNodeInfoWithWarnings(ctx, ip)
 			if err != nil {
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("%s: %v", ip, err))
+				for _, w := range nodeWarn {
+					warnings = append(warnings, fmt.Sprintf("%s: %s", ip, w))
+				}
 				mu.Unlock()
 				return
 			}
@@ -217,6 +285,9 @@ func (s *TalosScanner) collectNodeInfo(ctx context.Context, ips []string) (wizar
 
 			mu.Lock()
 			nodes = append(nodes, node)
+			for _, w := range nodeWarn {
+				warnings = append(warnings, fmt.Sprintf("%s: %s", ip, w))
+			}
 			mu.Unlock()
 		}(ip)
 	}

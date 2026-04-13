@@ -33,14 +33,15 @@ const (
 
 // Node configuration field indices.
 const (
-	fieldRole      = 0
-	fieldHostname  = 1
-	fieldDisk      = 2
-	fieldInterface = 3
-	fieldAddress   = 4
-	fieldGateway   = 5
-	fieldDNS       = 6
-	nodeFieldCount = 7
+	fieldRole         = 0
+	fieldHostname     = 1
+	fieldDisk         = 2
+	fieldInterface    = 3
+	fieldAddress      = 4
+	fieldGateway      = 5
+	fieldDNS          = 6
+	fieldManagementIP = 7 // optional, for DNAT / split-horizon setups
+	nodeFieldCount    = 8
 )
 
 // Message types for async operations.
@@ -131,6 +132,7 @@ func New(scanner wizard.Scanner, presets []string, generateFn GenerateFunc) Mode
 	nodeInputs[fieldAddress].Placeholder = "192.168.1.10/24"
 	nodeInputs[fieldGateway].Placeholder = "192.168.1.1"
 	nodeInputs[fieldDNS].Placeholder = "8.8.8.8,1.1.1.1"
+	nodeInputs[fieldManagementIP].Placeholder = "(optional) reachable IP, default = node address"
 
 	return Model{
 		step:    stepSelectPreset,
@@ -145,6 +147,18 @@ func New(scanner wizard.Scanner, presets []string, generateFn GenerateFunc) Mode
 		nodeInputs:    nodeInputs,
 		generateFn:    generateFn,
 	}
+}
+
+// NewForExistingProject creates a wizard model for a project that is already
+// initialized (secrets.yaml + Chart.yaml exist). Preset and cluster name are
+// taken from the on-disk state rather than asked again, so the wizard can be
+// used to just add or reconfigure nodes on top of an existing project.
+func NewForExistingProject(scanner wizard.Scanner, existing wizard.WizardResult, generateFn GenerateFunc) Model {
+	m := New(scanner, []string{existing.Preset}, generateFn)
+	m.result.Preset = existing.Preset
+	m.result.ClusterName = existing.ClusterName
+	m.step = stepEndpoint
+	return m
 }
 
 // Init implements tea.Model.
@@ -194,8 +208,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelScan()
 			m.cancelScan = nil
 		}
+		// Start fresh: a rescan must not inherit selection/cursor/warnings
+		// from the previous discovery, otherwise stale indexes can survive
+		// into the configure flow and preselect the wrong hosts.
 		m.discoveredNodes = msg.nodes
 		m.scanWarnings = msg.warnings
+		m.selectedNodes = nil
+		m.cursor = 0
 		if len(msg.nodes) == 0 {
 			m.err = fmt.Errorf("no Talos nodes found in the specified network")
 			prev := stepScanCIDR
@@ -214,8 +233,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelScan()
 			m.cancelScan = nil
 		}
+		// prevStep must point at the user-facing step that triggered the
+		// scan (stepScanCIDR), not at stepScanning — otherwise Esc from
+		// stepError would land on an inert spinner with no command running.
 		m.err = msg.err
-		prev := m.step
+		prev := stepScanCIDR
 		m.prevStep = &prev
 		m.step = stepError
 		return m, nil
@@ -225,8 +247,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case generateErrorMsg:
+		// Same reasoning as scanErrorMsg: Esc from stepError must return to
+		// stepConfirm where the user can retry, not to the stepGenerating
+		// spinner (no back-path out of there).
 		m.err = msg.err
-		prev := m.step
+		prev := stepConfirm
 		m.prevStep = &prev
 		m.step = stepError
 		return m, nil
@@ -287,24 +312,25 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 		m.step = stepScanCIDR
 	case stepConfigureNode:
 		if m.currentNodeIdx > 0 {
+			// Keep the already-saved previous config: when the user returns
+			// here they're editing, not re-entering. Rehydrate inputs from
+			// the stored NodeConfig so edits (disk, iface, gw, DNS) survive.
 			m.currentNodeIdx--
-			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
-			m.prepareNodeInputs()
+			m.restoreNodeInputs(m.currentNodeIdx)
 		} else {
 			m.step = stepSelectNodes
 		}
 	case stepConfirm:
-		// Go back to the last configured node — remove the last entry
-		// so the user can re-enter it without duplicates
-		if len(m.configuredNodes) > 0 {
-			m.configuredNodes = m.configuredNodes[:len(m.configuredNodes)-1]
-		}
-		if m.currentNodeIdx > 0 {
-			m.currentNodeIdx--
-		}
+		// Return to the last configured node for editing. Keep the saved
+		// entry — the user may just want to tweak one field, not retype
+		// everything. m.result.Nodes is cleared so confirm-page state is
+		// recomputed on re-entry.
 		m.result.Nodes = nil
 		m.step = stepConfigureNode
-		m.prepareNodeInputs()
+		if m.currentNodeIdx >= len(m.selectedNodes) {
+			m.currentNodeIdx = len(m.selectedNodes) - 1
+		}
+		m.restoreNodeInputs(m.currentNodeIdx)
 	case stepError:
 		if m.prevStep != nil {
 			m.step = *m.prevStep
@@ -510,13 +536,48 @@ func (m *Model) prepareNodeInputs() {
 	} else {
 		m.nodeInputs[fieldAddress].SetValue("")
 	}
-	m.nodeInputs[fieldGateway].SetValue("")
-	m.nodeInputs[fieldDNS].SetValue("8.8.8.8")
+	m.nodeInputs[fieldGateway].SetValue(node.DefaultGateway)
+	// DNS starts empty — no preconceived default, user must choose.
+	m.nodeInputs[fieldDNS].SetValue("")
+	m.nodeInputs[fieldManagementIP].SetValue("")
+	m.nodeInputFocus = 0
+}
+
+// restoreNodeInputs rehydrates the per-node inputs from a saved NodeConfig —
+// used when the user backs into a node they already configured.
+func (m *Model) restoreNodeInputs(idx int) {
+	if idx < 0 || idx >= len(m.configuredNodes) {
+		m.prepareNodeInputs()
+		return
+	}
+	nc := m.configuredNodes[idx]
+	m.nodeInputs[fieldRole].SetValue(nc.Role)
+	m.nodeInputs[fieldHostname].SetValue(nc.Hostname)
+	m.nodeInputs[fieldDisk].SetValue(nc.DiskPath)
+	m.nodeInputs[fieldInterface].SetValue(nc.Interface)
+	m.nodeInputs[fieldAddress].SetValue(nc.Addresses)
+	m.nodeInputs[fieldGateway].SetValue(nc.Gateway)
+	m.nodeInputs[fieldDNS].SetValue(strings.Join(nc.DNS, ","))
+	m.nodeInputs[fieldManagementIP].SetValue(nc.ManagementIP)
 	m.nodeInputFocus = 0
 }
 
 func (m Model) updateConfigureNode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Role field is a toggle, not a text input — space/left/right flip
+		// between the only two valid values instead of letting the user
+		// type a free-form string and then fail validation.
+		if m.nodeInputFocus == fieldRole {
+			switch keyMsg.String() {
+			case " ", "left", "right", "h", "l":
+				if m.nodeInputs[fieldRole].Value() == "controlplane" {
+					m.nodeInputs[fieldRole].SetValue("worker")
+				} else {
+					m.nodeInputs[fieldRole].SetValue("controlplane")
+				}
+				return m, nil
+			}
+		}
 		switch keyMsg.String() {
 		case "tab":
 			m.nodeInputFocus = (m.nodeInputFocus + 1) % nodeFieldCount
@@ -531,7 +592,13 @@ func (m Model) updateConfigureNode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.err = nil
-			m.configuredNodes = append(m.configuredNodes, nc)
+			// Update the existing slot when editing, append when adding a
+			// fresh node. Prevents duplicates after back-navigation.
+			if m.currentNodeIdx < len(m.configuredNodes) {
+				m.configuredNodes[m.currentNodeIdx] = nc
+			} else {
+				m.configuredNodes = append(m.configuredNodes, nc)
+			}
 			m.currentNodeIdx++
 
 			if m.currentNodeIdx >= len(m.selectedNodes) {
@@ -539,7 +606,13 @@ func (m Model) updateConfigureNode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.step = stepConfirm
 				return m, nil
 			}
-			m.prepareNodeInputs()
+			// Rehydrate from saved config if this node was already visited,
+			// otherwise start from discovery defaults.
+			if m.currentNodeIdx < len(m.configuredNodes) {
+				m.restoreNodeInputs(m.currentNodeIdx)
+			} else {
+				m.prepareNodeInputs()
+			}
 			return m, m.nodeInputs[fieldRole].Focus()
 		}
 	}
@@ -595,14 +668,22 @@ func (m Model) validateAndBuildNodeConfig() (wizard.NodeConfig, error) {
 		}
 	}
 
+	managementIP := strings.TrimSpace(m.nodeInputs[fieldManagementIP].Value())
+	if managementIP != "" {
+		if err := wizard.ValidateIP(managementIP); err != nil {
+			return wizard.NodeConfig{}, fmt.Errorf("management IP: %w", err)
+		}
+	}
+
 	return wizard.NodeConfig{
-		Hostname:  hostname,
-		Role:      role,
-		DiskPath:  diskPath,
-		Interface: m.nodeInputs[fieldInterface].Value(),
-		Addresses: address,
-		Gateway:   gateway,
-		DNS:       dns,
+		Hostname:     hostname,
+		Role:         role,
+		DiskPath:     diskPath,
+		Interface:    m.nodeInputs[fieldInterface].Value(),
+		Addresses:    address,
+		Gateway:      gateway,
+		DNS:          dns,
+		ManagementIP: managementIP,
 	}, nil
 }
 

@@ -197,6 +197,7 @@ func (m Model) viewConfigureNode() string {
 		"Address (CIDR):",
 		"Gateway:",
 		"DNS (comma-sep):",
+		"Management IP:",
 	}
 	for i, label := range labels {
 		style := blurredStyle
@@ -221,13 +222,24 @@ func (m Model) viewConfirm() string {
 	fmt.Fprintf(&b, "Preset:   %s\n", m.result.Preset)
 	fmt.Fprintf(&b, "Cluster:  %s\n", m.result.ClusterName)
 	fmt.Fprintf(&b, "Endpoint: %s\n", m.result.Endpoint)
-	fmt.Fprintf(&b, "Nodes:    %d\n\n", len(m.result.Nodes))
+	fmt.Fprintf(&b, "Nodes:    %d\n", len(m.result.Nodes))
 
-	for _, node := range m.result.Nodes {
-		fmt.Fprintf(&b, "  %s [%s] %s disk=%s iface=%s gw=%s dns=%s\n",
-			node.Hostname, node.Role, node.Addresses,
-			node.DiskPath, node.Interface, node.Gateway,
-			strings.Join(node.DNS, ","))
+	for i, node := range m.result.Nodes {
+		fmt.Fprintf(&b, "\n  %d. %s  [%s]\n", i+1, node.Hostname, node.Role)
+		fmt.Fprintf(&b, "     address:  %s\n", node.Addresses)
+		if node.Gateway != "" {
+			fmt.Fprintf(&b, "     gateway:  %s\n", node.Gateway)
+		}
+		fmt.Fprintf(&b, "     disk:     %s\n", node.DiskPath)
+		if node.Interface != "" {
+			fmt.Fprintf(&b, "     iface:    %s\n", node.Interface)
+		}
+		if len(node.DNS) > 0 {
+			fmt.Fprintf(&b, "     DNS:      %s\n", strings.Join(node.DNS, ", "))
+		}
+		if node.ManagementIP != "" {
+			fmt.Fprintf(&b, "     mgmt IP:  %s\n", node.ManagementIP)
+		}
 	}
 
 	b.WriteString(helpStyle.Render("\ny/enter generate | n restart | esc back"))

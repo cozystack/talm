@@ -18,39 +18,46 @@ func WriteNodeFiles(rootDir string, nodes []NodeConfig) error {
 		return fmt.Errorf("failed to create nodes directory: %w", err)
 	}
 
-	// Check for duplicate hostnames
+	// Validate + dedup by the *sanitized* filename so inputs like "cp-1" and
+	// "../cp-1" can't collide silently.
 	seen := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
-		if seen[node.Hostname] {
-			return fmt.Errorf("duplicate hostname: %q", node.Hostname)
-		}
-		seen[node.Hostname] = true
-	}
-
-	for _, node := range nodes {
-		// Sanitize: use only the base name to prevent path traversal
 		safeName := filepath.Base(node.Hostname)
 		if safeName == "." || safeName == ".." || safeName == "" || strings.ContainsAny(safeName, "/\\") {
 			return fmt.Errorf("invalid hostname for file creation: %q", node.Hostname)
 		}
-		// Validate as a proper hostname
 		if err := ValidateHostname(safeName); err != nil {
 			return fmt.Errorf("invalid hostname for file creation: %w", err)
 		}
+		if seen[safeName] {
+			return fmt.Errorf("duplicate hostname after sanitization: %q", safeName)
+		}
+		seen[safeName] = true
+	}
+
+	for _, node := range nodes {
+		safeName := filepath.Base(node.Hostname)
 		filePath := filepath.Join(nodesDir, safeName+".yaml")
 
-		// Skip if file already exists
 		if _, err := os.Stat(filePath); err == nil {
 			fmt.Fprintf(os.Stderr, "Skipping %s (already exists)\n", filePath)
 			continue
 		}
 
-		ip := extractIP(node.Addresses)
-		templateFile := templateForRole(node.Role)
+		nodeIP := extractIP(node.Addresses)
+		managementIP := node.ManagementIP
+		if managementIP == "" {
+			managementIP = nodeIP
+		}
+
+		templateFile, err := templateForRole(node.Role)
+		if err != nil {
+			return err
+		}
 
 		ml, err := modeline.GenerateModeline(
-			[]string{ip},
-			[]string{ip},
+			[]string{nodeIP},
+			[]string{managementIP},
 			[]string{templateFile},
 		)
 		if err != nil {
@@ -76,13 +83,15 @@ func extractIP(address string) string {
 }
 
 // templateForRole returns the template file path for the given node role.
-func templateForRole(role string) string {
+// Unknown roles return an error rather than silently falling back to worker —
+// that would mask typos like "master" as correctly-generated artifacts.
+func templateForRole(role string) (string, error) {
 	switch role {
 	case "controlplane":
-		return "templates/controlplane.yaml"
+		return "templates/controlplane.yaml", nil
 	case "worker":
-		return "templates/worker.yaml"
+		return "templates/worker.yaml", nil
 	default:
-		return "templates/worker.yaml"
+		return "", fmt.Errorf("unsupported node role: %q (expected %q or %q)", role, "controlplane", "worker")
 	}
 }
