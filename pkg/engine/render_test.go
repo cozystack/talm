@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"context"
 	"maps"
 	"os"
 	"path"
@@ -232,6 +233,11 @@ func TestMultiDocCozystack_ControlPlane(t *testing.T) {
 	assertContains(t, output, "kind: RegistryMirrorConfig")
 	assertContains(t, output, "https://mirror.gcr.io")
 
+	// Multi-doc: Layer2VIPConfig emitted for controlplane when floatingIP is
+	// set in values (cozystack default: 192.168.100.10).
+	assertContains(t, output, "kind: Layer2VIPConfig")
+	assertContains(t, output, "192.168.100.10")
+
 	// Multi-doc: network interface document present (LinkConfig or BondConfig)
 	hasLinkConfig := strings.Contains(output, "kind: LinkConfig")
 	hasBondConfig := strings.Contains(output, "kind: BondConfig")
@@ -297,6 +303,8 @@ func TestMultiDocCozystack_TwoComponentVersion(t *testing.T) {
 
 func TestLegacyCozystack_NrHugepages(t *testing.T) {
 	// Test nr_hugepages is rendered correctly in legacy format
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
 	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
@@ -324,6 +332,8 @@ func TestLegacyCozystack_NrHugepages(t *testing.T) {
 
 func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 	// Test nr_hugepages is rendered correctly (non-zero value)
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
 	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
@@ -571,4 +581,386 @@ func TestRenderOfflineSkipsLookupFunc(t *testing.T) {
 	// We can't call full Render without a chart/client, but the logic is:
 	//   if !opts.Offline { helmEngine.LookupFunc = newLookupFunction(ctx, c) }
 	// This is tested implicitly by the online_lookup_populates_interface subtest.
+}
+
+// bondTopologyLookup returns a LookupFunc emulating a bonded interface with
+// two physical slaves and a default route pointing through it. Used by
+// BondConfig rendering tests.
+func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
+	bondLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":  "bond",
+			"index": 10,
+			"bondMaster": map[string]any{
+				"mode":           "802.3ad",
+				"xmitHashPolicy": "layer3+4",
+				"lacpRate":       "fast",
+				"miimon":         100,
+			},
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"busPath":      "pci-0000:00:1f.6",
+		},
+	}
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "bond0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{bondLink, eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "bond0",
+					"address":  "192.168.1.100/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.1.100/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8", "1.1.1.1"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "bond0" {
+				return bondLink, nil
+			}
+			if id == "" {
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// vlanOnBondTopologyLookup returns a LookupFunc emulating a VLAN interface
+// stacked on top of a bond. Used by VLANConfig rendering tests.
+func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, error) {
+	bondLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":  "bond",
+			"index": 10,
+			"bondMaster": map[string]any{
+				"mode": "802.3ad",
+			},
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"busPath":      "pci-0000:00:1f.6",
+		},
+	}
+	vlanLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0.100"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     42,
+			"linkIndex": 10,
+			"vlan":      map[string]any{"vlanID": 100},
+		},
+	}
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.0.0.1",
+					"outLinkName": "bond0.100",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{bondLink, vlanLink, eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "bond0.100",
+					"address":  "10.0.0.50/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"10.0.0.50/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "bond0":
+				return bondLink, nil
+			case "bond0.100":
+				return vlanLink, nil
+			case "":
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+func TestMultiDocCozystack_BondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = bondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "name: bond0")
+	assertContains(t, result, "- eth0")
+	assertContains(t, result, "- eth1")
+	assertContains(t, result, "bondMode: 802.3ad")
+	assertContains(t, result, "xmitHashPolicy: layer3+4")
+	assertContains(t, result, "lacpRate: fast")
+	assertContains(t, result, "address: 192.168.1.100/24")
+	assertContains(t, result, "gateway: 192.168.1.1")
+	assertNotContains(t, result, "kind: LinkConfig")
+	assertNotContains(t, result, "kind: VLANConfig")
+}
+
+func TestMultiDocCozystack_VlanOnBondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = vlanOnBondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "kind: VLANConfig")
+	assertContains(t, result, "name: bond0.100")
+	assertContains(t, result, "vlanID: 100")
+	assertContains(t, result, "parent: bond0")
+	assertContains(t, result, "address: 10.0.0.50/24")
+	assertContains(t, result, "gateway: 10.0.0.1")
+	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+func TestMultiDocGeneric_BondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = bondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["generic/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "name: bond0")
+	assertContains(t, result, "bondMode: 802.3ad")
+	assertContains(t, result, "- eth0")
+	assertContains(t, result, "- eth1")
+	assertNotContains(t, result, "kind: LinkConfig")
+	assertNotContains(t, result, "kind: VLANConfig")
+}
+
+func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = vlanOnBondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["generic/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "kind: VLANConfig")
+	assertContains(t, result, "vlanID: 100")
+	assertContains(t, result, "parent: bond0")
+	assertContains(t, result, "address: 10.0.0.50/24")
+	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+// TestRenderInvalidTalosVersion verifies that malformed TalosVersion values
+// surface a user-friendly error before template rendering, instead of the
+// opaque "error calling semverCompare: invalid semantic version" that escapes
+// from deep inside the Helm engine.
+func TestRenderInvalidTalosVersion(t *testing.T) {
+	chartRoot := createTestChart(t, "dummy", "config.yaml", "machine:\n  type: worker\n")
+
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{"plain word", "latest"},
+		{"garbage", "foobar"},
+		{"v-prefixed garbage", "vlatest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{
+				Offline:       true,
+				Root:          chartRoot,
+				TalosVersion:  tt.version,
+				TemplateFiles: []string{"templates/config.yaml"},
+			}
+			_, err := Render(context.Background(), nil, opts)
+			if err == nil {
+				t.Fatalf("Render(%q) expected error, got nil", tt.version)
+			}
+			if !strings.Contains(err.Error(), "invalid talos-version") {
+				t.Errorf("Render(%q) error = %q, want prefix 'invalid talos-version'", tt.version, err.Error())
+			}
+		})
+	}
 }
