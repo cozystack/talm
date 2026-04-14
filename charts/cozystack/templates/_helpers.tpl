@@ -6,7 +6,7 @@
 {{- end }}
 {{- end }}
 
-{{- /* Shared machine section: type, kubelet, sysctls, kernel, certSANs, files, install */ -}}
+{{- /* Shared machine section: type, nodeLabels (controlplane), kubelet, sysctls, kernel, certSANs, files, install */ -}}
 {{- define "talos.config.machine.common" }}
 machine:
   {{- if eq .MachineType "controlplane" }}
