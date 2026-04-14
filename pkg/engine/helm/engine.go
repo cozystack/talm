@@ -32,9 +32,9 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 )
 
-var Disks map[string]interface{} = map[string]interface{}{}
-var LookupFunc func(resource string, namespace string, name string) (map[string]interface{}, error) = func(string, string, string) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+var Disks map[string]any = map[string]any{}
+var LookupFunc func(resource string, namespace string, name string) (map[string]any, error) = func(string, string, string) (map[string]any, error) {
+	return map[string]any{}, nil
 }
 
 // Engine is an implementation of the Helm rendering implementation for templates.
@@ -100,8 +100,8 @@ func warnWrap(warn string) string {
 
 // 'include' needs to be defined in the scope of a 'tpl' template as
 // well as regular file-loaded templates.
-func includeFun(t *template.Template, includedNames map[string]int) func(string, interface{}) (string, error) {
-	return func(name string, data interface{}) (string, error) {
+func includeFun(t *template.Template, includedNames map[string]int) func(string, any) (string, error) {
+	return func(name string, data any) (string, error) {
 		var buf strings.Builder
 		if v, ok := includedNames[name]; ok {
 			if v > recursionMaxNums {
@@ -119,8 +119,8 @@ func includeFun(t *template.Template, includedNames map[string]int) func(string,
 
 // As does 'tpl', so that nested calls to 'tpl' see the templates
 // defined by their enclosing contexts.
-func tplFun(parent *template.Template, includedNames map[string]int, strict bool) func(string, interface{}) (string, error) {
-	return func(tpl string, vals interface{}) (string, error) {
+func tplFun(parent *template.Template, includedNames map[string]int, strict bool) func(string, any) (string, error) {
+	return func(tpl string, vals any) (string, error) {
 		t, err := parent.Clone()
 		if err != nil {
 			return "", errors.Wrapf(err, "cannot clone template")
@@ -173,7 +173,7 @@ func (e Engine) initFunMap(t *template.Template) {
 	funcMap["tpl"] = tplFun(t, includedNames, e.Strict)
 
 	// Add the `required` function here so we can use lintMode
-	funcMap["required"] = func(warn string, val interface{}) (interface{}, error) {
+	funcMap["required"] = func(warn string, val any) (any, error) {
 		if val == nil {
 			if e.LintMode {
 				// Don't fail on missing required values when linting
@@ -355,14 +355,14 @@ func allTemplates(c *chart.Chart, vals chartutil.Values) map[string]renderable {
 //
 // As it recurses, it also sets the values to be appropriate for the template
 // scope.
-func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.Values) map[string]interface{} {
-	subCharts := make(map[string]interface{})
+func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.Values) map[string]any {
+	subCharts := make(map[string]any)
 	chartMetaData := struct {
 		chart.Metadata
 		IsRoot bool
 	}{*c.Metadata, c.IsRoot()}
 
-	next := map[string]interface{}{
+	next := map[string]any{
 		"Chart":        chartMetaData,
 		"Files":        newFiles(c.Files),
 		"Release":      vals["Release"],

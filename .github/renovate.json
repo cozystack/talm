@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "postUpdateOptions": ["gomodUpdateImportPaths", "gomodTidy"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Surface helm.sh/helm v3 -> v4 major upgrade in go.mod",
+      "managerFilePatterns": ["/(^|/)go\\.mod$/"],
+      "matchStrings": [
+        "helm\\.sh/helm/v3 v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "helm.sh/helm/v4",
+      "datasourceTemplate": "go",
+      "versioningTemplate": "semver"
+    }
+  ]
+}
