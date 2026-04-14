@@ -144,12 +144,16 @@ addresses:
 routes:
   - gateway: {{ include "talm.discovered.default_gateway" . }}
 {{- end }}
+{{- $vipLinkName := $interfaceName }}
+{{- if $isVlan }}
+{{- $vipLinkName = $defaultLinkName }}
+{{- end }}
 {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
 name: {{ .Values.floatingIP | quote }}
-link: {{ $interfaceName }}
+link: {{ $vipLinkName }}
 {{- end }}
 {{- end }}
 
