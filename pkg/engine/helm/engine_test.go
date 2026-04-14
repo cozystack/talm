@@ -843,15 +843,12 @@ func TestRenderRecursionLimit(t *testing.T) {
 	times := 4000
 	phrase := "All work and no play makes Jack a dull boy"
 	printFunc := `{{define "overlook"}}{{printf "` + phrase + `\n"}}{{end}}`
-	var repeatedIncl strings.Builder
-	for range times {
-		repeatedIncl.WriteString(`{{include "overlook" . }}`)
-	}
+	repeatedIncl := strings.Repeat(`{{include "overlook" . }}`, times)
 
 	d := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "overlook"},
 		Templates: []*chart.File{
-			{Name: "templates/quote", Data: []byte(repeatedIncl.String())},
+			{Name: "templates/quote", Data: []byte(repeatedIncl)},
 			{Name: "templates/_function", Data: []byte(printFunc)},
 		},
 	}
@@ -861,12 +858,9 @@ func TestRenderRecursionLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var expect strings.Builder
-	for range times {
-		expect.WriteString(phrase + "\n")
-	}
-	if got := out["overlook/templates/quote"]; got != expect.String() {
-		t.Errorf("Expected %q, got %q (%v)", expect.String(), got, out)
+	expect := strings.Repeat(phrase+"\n", times)
+	if got := out["overlook/templates/quote"]; got != expect {
+		t.Errorf("Expected %q, got %q (%v)", expect, got, out)
 	}
 
 }
@@ -1121,4 +1115,106 @@ func TestRenderTplMissingKeyString(t *testing.T) {
 		// Some unexpected error.
 		t.Fatal(err)
 	}
+}
+
+func TestTalosVersionInTemplateContext(t *testing.T) {
+	t.Parallel()
+
+	c := &chart.Chart{
+		Metadata: &chart.Metadata{
+			Name:    "testchart",
+			Version: "0.1.0",
+		},
+		Templates: []*chart.File{
+			{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
+		},
+	}
+
+	vals := chartutil.Values{
+		"Values":       chartutil.Values{},
+		"TalosVersion": "v1.12",
+	}
+
+	out, err := Render(c, vals)
+	if err != nil {
+		t.Fatalf("failed to render: %v", err)
+	}
+
+	result := out["testchart/templates/test.yaml"]
+	expected := "talosVersion: v1.12"
+	if strings.TrimSpace(result) != expected {
+		t.Errorf("expected %q, got %q", expected, strings.TrimSpace(result))
+	}
+}
+
+func TestTalosVersionEmpty(t *testing.T) {
+	t.Parallel()
+
+	c := &chart.Chart{
+		Metadata: &chart.Metadata{
+			Name:    "testchart",
+			Version: "0.1.0",
+		},
+		Templates: []*chart.File{
+			{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
+		},
+	}
+
+	vals := chartutil.Values{
+		"Values": chartutil.Values{},
+	}
+
+	out, err := Render(c, vals)
+	if err != nil {
+		t.Fatalf("failed to render: %v", err)
+	}
+
+	result := out["testchart/templates/test.yaml"]
+	expected := "talosVersion:"
+	if strings.TrimSpace(result) != expected {
+		t.Errorf("expected %q, got %q", expected, strings.TrimSpace(result))
+	}
+}
+
+func TestTalosVersionConcurrentRender(t *testing.T) {
+	t.Parallel()
+
+	renderWithVersion := func(version string, expected string) {
+		c := &chart.Chart{
+			Metadata: &chart.Metadata{
+				Name:    "testchart",
+				Version: "0.1.0",
+			},
+			Templates: []*chart.File{
+				{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
+			},
+		}
+		vals := chartutil.Values{
+			"Values":       chartutil.Values{},
+			"TalosVersion": version,
+		}
+		out, err := Render(c, vals)
+		if err != nil {
+			t.Errorf("render with version %q failed: %v", version, err)
+			return
+		}
+		result := strings.TrimSpace(out["testchart/templates/test.yaml"])
+		if result != expected {
+			t.Errorf("version %q: expected %q, got %q", version, expected, result)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			renderWithVersion("v1.12", "talosVersion: v1.12")
+		}()
+		go func() {
+			defer wg.Done()
+			renderWithVersion("v1.11", "talosVersion: v1.11")
+		}()
+	}
+	wg.Wait()
 }

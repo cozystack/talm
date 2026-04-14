@@ -116,6 +116,10 @@ cluster:
         endpoint: https://192.168.0.1:6443
 ```
 
+> **Note:** The output format depends on the Talos version configured in `Chart.yaml` (`templateOptions.talosVersion`) or via the `--talos-version` CLI flag.
+> For Talos < v1.12, the output is a single YAML document with `machine.network` and `machine.registries` sections (as shown above).
+> For Talos >= v1.12, the output uses the multi-document format with separate typed documents instead of the deprecated monolithic fields. `HostnameConfig`, `ResolverConfig` and a network interface document (`LinkConfig`, `BondConfig`, or `VLANConfig` — depending on topology) are always emitted; `Layer2VIPConfig` appears on controlplane nodes when `floatingIP` is set; `RegistryMirrorConfig` is emitted only by the cozystack chart.
+
 Apply config:
 ```bash
 talm apply -f nodes/node1.yaml -i

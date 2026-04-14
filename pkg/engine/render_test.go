@@ -15,14 +15,415 @@
 package engine
 
 import (
+	"context"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
 )
+
+// renderChartTemplate renders a chart template in offline mode and returns the output.
+// talosVersion sets the TalosVersion in the Helm engine context (empty string for legacy).
+func renderChartTemplate(t *testing.T, chartPath string, templateFile string, talosVersion ...string) string {
+	t.Helper()
+
+	// Reset to offline mode
+	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+
+	chrt, err := loader.LoadDir(chartPath)
+	if err != nil {
+		t.Fatalf("failed to load chart from %s: %v", chartPath, err)
+	}
+
+	tv := ""
+	if len(talosVersion) > 0 {
+		tv = talosVersion[0]
+	}
+
+	rootValues := chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": tv,
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, rootValues)
+	if err != nil {
+		t.Fatalf("failed to render chart: %v", err)
+	}
+
+	key := path.Join(chrt.Name(), templateFile)
+	result, ok := out[key]
+	if !ok {
+		var keys []string
+		for k := range out {
+			keys = append(keys, k)
+		}
+		t.Fatalf("template %s not found in output, available keys: %v", key, keys)
+	}
+
+	return result
+}
+
+// assertContains checks that the output contains the expected substring.
+func assertContains(t *testing.T, output string, substr string) {
+	t.Helper()
+	if !strings.Contains(output, substr) {
+		t.Errorf("expected output to contain %q, but it does not.\nOutput:\n%s", substr, output)
+	}
+}
+
+// assertNotContains checks that the output does NOT contain the substring.
+func assertNotContains(t *testing.T, output string, substr string) {
+	t.Helper()
+	if strings.Contains(output, substr) {
+		t.Errorf("expected output NOT to contain %q, but it does.\nOutput:\n%s", substr, output)
+	}
+}
+
+func TestLegacyCozystack_ControlPlane(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml")
+
+	// Legacy format: machine.network section present
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "network:")
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "nameservers:")
+	assertContains(t, output, "interfaces:")
+
+	// Legacy format: machine.registries section present
+	assertContains(t, output, "registries:")
+	assertContains(t, output, "mirrors:")
+	assertContains(t, output, "docker.io:")
+	assertContains(t, output, "https://mirror.gcr.io")
+
+	// Legacy format: cluster section present
+	assertContains(t, output, "cluster:")
+	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "controlPlane:")
+	assertContains(t, output, "endpoint:")
+
+	// Legacy format: cozystack-specific sections present
+	assertContains(t, output, "sysctls:")
+	assertContains(t, output, "kernel:")
+	assertContains(t, output, "kubelet:")
+	assertContains(t, output, "certSANs:")
+	assertContains(t, output, "install:")
+
+	// Legacy format: controlplane-specific settings
+	assertContains(t, output, "allowSchedulingOnControlPlanes:")
+	assertContains(t, output, "etcd:")
+	assertContains(t, output, "proxy:")
+
+	// Legacy format: no v1.12 multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: ResolverConfig")
+	assertNotContains(t, output, "kind: LinkConfig")
+	assertNotContains(t, output, "kind: BondConfig")
+	assertNotContains(t, output, "kind: VLANConfig")
+	assertNotContains(t, output, "kind: RegistryMirrorConfig")
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
+}
+
+func TestLegacyCozystack_Worker(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/worker.yaml")
+
+	// Legacy format: machine section present
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: worker")
+	assertContains(t, output, "network:")
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "interfaces:")
+	assertContains(t, output, "registries:")
+
+	// Legacy format: cluster section present
+	assertContains(t, output, "cluster:")
+
+	// Worker should NOT have controlplane-specific settings
+	assertNotContains(t, output, "allowSchedulingOnControlPlanes:")
+
+	// No v1.12 multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: RegistryMirrorConfig")
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
+}
+
+func TestLegacyGeneric_ControlPlane(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/generic", "templates/controlplane.yaml")
+
+	// Legacy format: machine.network section present
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "network:")
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "nameservers:")
+	assertContains(t, output, "interfaces:")
+
+	// Legacy format: cluster section present
+	assertContains(t, output, "cluster:")
+	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "controlPlane:")
+	assertContains(t, output, "endpoint:")
+
+	// Generic does NOT have registries
+	assertNotContains(t, output, "registries:")
+
+	// No v1.12 multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: ResolverConfig")
+	assertNotContains(t, output, "kind: LinkConfig")
+	assertNotContains(t, output, "kind: RegistryMirrorConfig")
+}
+
+func TestLegacyGeneric_Worker(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/generic", "templates/worker.yaml")
+
+	// Legacy format: machine section present
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: worker")
+	assertContains(t, output, "network:")
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "interfaces:")
+
+	// Legacy format: cluster section present
+	assertContains(t, output, "cluster:")
+
+	// No v1.12 multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: LinkConfig")
+}
+
+// --- Multi-doc format tests for cozystack (v1.12+) ---
+
+func TestMultiDocCozystack_ControlPlane(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12")
+
+	// Multi-doc: machine section retains non-deprecated fields
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: controlplane")
+	assertContains(t, output, "kubelet:")
+	assertContains(t, output, "sysctls:")
+	assertContains(t, output, "kernel:")
+	assertContains(t, output, "certSANs:")
+	assertContains(t, output, "install:")
+	assertContains(t, output, "files:")
+
+	// Multi-doc: deprecated machine.network and machine.registries REMOVED
+	assertNotContains(t, output, "    interfaces:")
+	assertNotContains(t, output, "    mirrors:")
+
+	// Multi-doc: cluster section unchanged
+	assertContains(t, output, "cluster:")
+	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "controlPlane:")
+	assertContains(t, output, "allowSchedulingOnControlPlanes:")
+	assertContains(t, output, "etcd:")
+	assertContains(t, output, "proxy:")
+
+	// Multi-doc: new document types present
+	assertContains(t, output, "---")
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: ResolverConfig")
+	assertContains(t, output, "kind: RegistryMirrorConfig")
+	assertContains(t, output, "https://mirror.gcr.io")
+
+	// Multi-doc: Layer2VIPConfig emitted for controlplane when floatingIP is
+	// set in values (cozystack default: 192.168.100.10).
+	assertContains(t, output, "kind: Layer2VIPConfig")
+	assertContains(t, output, "192.168.100.10")
+
+	// Multi-doc: network interface document present (LinkConfig or BondConfig)
+	hasLinkConfig := strings.Contains(output, "kind: LinkConfig")
+	hasBondConfig := strings.Contains(output, "kind: BondConfig")
+	if !hasLinkConfig && !hasBondConfig {
+		t.Errorf("expected output to contain either LinkConfig or BondConfig document")
+	}
+}
+
+func TestMultiDocCozystack_Worker(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/worker.yaml", "v1.12")
+
+	// Multi-doc: machine section
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: worker")
+	assertContains(t, output, "kubelet:")
+	assertContains(t, output, "install:")
+
+	// Multi-doc: deprecated fields REMOVED
+	assertNotContains(t, output, "    interfaces:")
+	assertNotContains(t, output, "    mirrors:")
+
+	// Multi-doc: new document types present
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: ResolverConfig")
+	assertContains(t, output, "kind: RegistryMirrorConfig")
+
+	// Worker should NOT have VIP or controlplane cluster settings
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
+	assertNotContains(t, output, "allowSchedulingOnControlPlanes:")
+}
+
+func TestMultiDocCozystack_LegacyFallback(t *testing.T) {
+	// v1.11 should produce legacy format even for cozystack chart
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.11")
+
+	// Legacy format present
+	assertContains(t, output, "    interfaces:")
+	assertContains(t, output, "  registries:")
+	assertContains(t, output, "    mirrors:")
+
+	// No multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: RegistryMirrorConfig")
+}
+
+func TestMultiDocCozystack_PreReleaseVersion(t *testing.T) {
+	// Pre-release v1.12 versions should still use multi-doc format
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12.0-alpha.1")
+
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: RegistryMirrorConfig")
+	assertNotContains(t, output, "    interfaces:")
+}
+
+func TestMultiDocCozystack_TwoComponentVersion(t *testing.T) {
+	// Two-component version string (v1.12 without patch) should work
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12")
+
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: RegistryMirrorConfig")
+	assertNotContains(t, output, "    interfaces:")
+}
+
+func TestLegacyCozystack_NrHugepages(t *testing.T) {
+	// Test nr_hugepages is rendered correctly in legacy format
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["nr_hugepages"] = 1024
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values": values,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, `vm.nr_hugepages: "1024"`)
+}
+
+func TestMultiDocCozystack_NrHugepages(t *testing.T) {
+	// Test nr_hugepages is rendered correctly (non-zero value)
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["nr_hugepages"] = 1024
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, `vm.nr_hugepages: "1024"`)
+}
+
+// --- Multi-doc format tests for generic (v1.12+) ---
+
+func TestMultiDocGeneric_ControlPlane(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/generic", "templates/controlplane.yaml", "v1.12")
+
+	// Multi-doc: machine section still present but WITHOUT legacy network fields
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: controlplane")
+	assertContains(t, output, "kubelet:")
+	assertContains(t, output, "install:")
+
+	// Multi-doc: deprecated machine.network fields REMOVED (hostname, nameservers, interfaces)
+	assertNotContains(t, output, "    interfaces:")
+
+	// Multi-doc: cluster section still present
+	assertContains(t, output, "cluster:")
+	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "controlPlane:")
+	assertContains(t, output, "endpoint:")
+
+	// Multi-doc: new document types present
+	assertContains(t, output, "---")
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: ResolverConfig")
+	assertContains(t, output, "kind: LinkConfig")
+
+	// Generic does NOT have registries
+	assertNotContains(t, output, "kind: RegistryMirrorConfig")
+}
+
+func TestMultiDocGeneric_Worker(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/generic", "templates/worker.yaml", "v1.12")
+
+	// Multi-doc: machine section present
+	assertContains(t, output, "machine:")
+	assertContains(t, output, "type: worker")
+	assertContains(t, output, "kubelet:")
+	assertContains(t, output, "install:")
+
+	// Multi-doc: deprecated machine.network fields REMOVED
+	assertNotContains(t, output, "    interfaces:")
+
+	// Multi-doc: new document types present
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: ResolverConfig")
+	assertContains(t, output, "kind: LinkConfig")
+
+	// Worker should NOT have VIP
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
+}
+
+func TestMultiDocGeneric_LegacyFallback(t *testing.T) {
+	// v1.11 should produce legacy format
+	output := renderChartTemplate(t, "../../charts/generic", "templates/controlplane.yaml", "v1.11")
+
+	// Legacy format: machine.network present
+	assertContains(t, output, "  network:")
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "interfaces:")
+
+	// No multi-doc types
+	assertNotContains(t, output, "kind: HostnameConfig")
+	assertNotContains(t, output, "kind: LinkConfig")
+}
 
 // createTestChart creates a minimal Helm chart in a temp directory with the
 // given template content. Returns the chart root path.
@@ -180,4 +581,386 @@ func TestRenderOfflineSkipsLookupFunc(t *testing.T) {
 	// We can't call full Render without a chart/client, but the logic is:
 	//   if !opts.Offline { helmEngine.LookupFunc = newLookupFunction(ctx, c) }
 	// This is tested implicitly by the online_lookup_populates_interface subtest.
+}
+
+// bondTopologyLookup returns a LookupFunc emulating a bonded interface with
+// two physical slaves and a default route pointing through it. Used by
+// BondConfig rendering tests.
+func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
+	bondLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":  "bond",
+			"index": 10,
+			"bondMaster": map[string]any{
+				"mode":           "802.3ad",
+				"xmitHashPolicy": "layer3+4",
+				"lacpRate":       "fast",
+				"miimon":         100,
+			},
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"busPath":      "pci-0000:00:1f.6",
+		},
+	}
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "bond0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{bondLink, eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "bond0",
+					"address":  "192.168.1.100/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.1.100/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8", "1.1.1.1"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "bond0" {
+				return bondLink, nil
+			}
+			if id == "" {
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// vlanOnBondTopologyLookup returns a LookupFunc emulating a VLAN interface
+// stacked on top of a bond. Used by VLANConfig rendering tests.
+func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, error) {
+	bondLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":  "bond",
+			"index": 10,
+			"bondMaster": map[string]any{
+				"mode": "802.3ad",
+			},
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"busPath":      "pci-0000:00:1f.6",
+		},
+	}
+	vlanLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0.100"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     42,
+			"linkIndex": 10,
+			"vlan":      map[string]any{"vlanID": 100},
+		},
+	}
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"slaveKind":    "bond",
+			"masterIndex":  10,
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.0.0.1",
+					"outLinkName": "bond0.100",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{bondLink, vlanLink, eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "bond0.100",
+					"address":  "10.0.0.50/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"10.0.0.50/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "bond0":
+				return bondLink, nil
+			case "bond0.100":
+				return vlanLink, nil
+			case "":
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+func TestMultiDocCozystack_BondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = bondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "name: bond0")
+	assertContains(t, result, "- eth0")
+	assertContains(t, result, "- eth1")
+	assertContains(t, result, "bondMode: 802.3ad")
+	assertContains(t, result, "xmitHashPolicy: layer3+4")
+	assertContains(t, result, "lacpRate: fast")
+	assertContains(t, result, "address: 192.168.1.100/24")
+	assertContains(t, result, "gateway: 192.168.1.1")
+	assertNotContains(t, result, "kind: LinkConfig")
+	assertNotContains(t, result, "kind: VLANConfig")
+}
+
+func TestMultiDocCozystack_VlanOnBondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = vlanOnBondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["cozystack/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "kind: VLANConfig")
+	assertContains(t, result, "name: bond0.100")
+	assertContains(t, result, "vlanID: 100")
+	assertContains(t, result, "parent: bond0")
+	assertContains(t, result, "address: 10.0.0.50/24")
+	assertContains(t, result, "gateway: 10.0.0.1")
+	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+func TestMultiDocGeneric_BondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = bondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["generic/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "name: bond0")
+	assertContains(t, result, "bondMode: 802.3ad")
+	assertContains(t, result, "- eth0")
+	assertContains(t, result, "- eth1")
+	assertNotContains(t, result, "kind: LinkConfig")
+	assertNotContains(t, result, "kind: VLANConfig")
+}
+
+func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = vlanOnBondTopologyLookup()
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := out["generic/templates/controlplane.yaml"]
+	assertContains(t, result, "kind: BondConfig")
+	assertContains(t, result, "kind: VLANConfig")
+	assertContains(t, result, "vlanID: 100")
+	assertContains(t, result, "parent: bond0")
+	assertContains(t, result, "address: 10.0.0.50/24")
+	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+// TestRenderInvalidTalosVersion verifies that malformed TalosVersion values
+// surface a user-friendly error before template rendering, instead of the
+// opaque "error calling semverCompare: invalid semantic version" that escapes
+// from deep inside the Helm engine.
+func TestRenderInvalidTalosVersion(t *testing.T) {
+	chartRoot := createTestChart(t, "dummy", "config.yaml", "machine:\n  type: worker\n")
+
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{"plain word", "latest"},
+		{"garbage", "foobar"},
+		{"v-prefixed garbage", "vlatest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{
+				Offline:       true,
+				Root:          chartRoot,
+				TalosVersion:  tt.version,
+				TemplateFiles: []string{"templates/config.yaml"},
+			}
+			_, err := Render(context.Background(), nil, opts)
+			if err == nil {
+				t.Fatalf("Render(%q) expected error, got nil", tt.version)
+			}
+			if !strings.Contains(err.Error(), "invalid talos-version") {
+				t.Errorf("Render(%q) error = %q, want prefix 'invalid talos-version'", tt.version, err.Error())
+			}
+		})
+	}
 }

@@ -23,7 +23,6 @@ import (
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
-	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/strvals"
 
@@ -206,6 +205,15 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 // Render executes the rendering of templates based on the provided options.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
 
+	// Validate TalosVersion early so malformed values surface a user-friendly
+	// error instead of an opaque "semverCompare: invalid semantic version" from
+	// inside template rendering.
+	if opts.TalosVersion != "" {
+		if _, err := config.ParseContractFromVersion(opts.TalosVersion); err != nil {
+			return nil, fmt.Errorf("invalid talos-version: %w", err)
+		}
+	}
+
 	// Gather facts and enable lookup options
 	if !opts.Offline {
 		if err := helpers.FailIfMultiNodes(ctx, "talm template"); err != nil {
@@ -233,7 +241,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	}
 
 	rootValues := map[string]any{
-		"Values": mergeMaps(chrt.Values, values),
+		"Values":       mergeMaps(chrt.Values, values),
+		"TalosVersion": opts.TalosVersion,
 	}
 
 	eng := helmEngine.Engine{}
@@ -257,7 +266,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		configPatches = append(configPatches, configPatch)
 	}
 
-	finalConfig, err := applyPatchesAndRenderConfig(ctx, opts, configPatches, chrt)
+	finalConfig, err := applyPatchesAndRenderConfig(opts, configPatches)
 	if err != nil {
 		// TODO
 		return nil, err
@@ -391,7 +400,7 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 	return talosPatches, extraDocs, nil
 }
 
-func applyPatchesAndRenderConfig(ctx context.Context, opts Options, configPatches []string, chrt *chart.Chart) ([]byte, error) {
+func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
 	if err != nil {
