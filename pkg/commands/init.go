@@ -670,7 +670,7 @@ func GenerateProject(opts GenerateOptions) error {
 		if chartName == opts.Preset {
 			file := filepath.Join(opts.RootDir, filepath.Join(parts[1:]...))
 			if parts[len(parts)-1] == "Chart.yaml" {
-				err = writeToFile(file, []byte(fmt.Sprintf(content, opts.ClusterName, version)), opts.Force, 0o644)
+				err = writeToFile(file, fmt.Appendf(nil, content, opts.ClusterName, version), opts.Force, 0o644)
 			} else {
 				err = writeToFile(file, []byte(content), opts.Force, 0o644)
 			}
@@ -682,7 +682,7 @@ func GenerateProject(opts GenerateOptions) error {
 		if chartName == "talm" {
 			file := filepath.Join(opts.RootDir, filepath.Join("charts", path))
 			if parts[len(parts)-1] == "Chart.yaml" {
-				err = writeToFile(file, []byte(fmt.Sprintf(content, "talm", version)), opts.Force, 0o644)
+				err = writeToFile(file, fmt.Appendf(nil, content, "talm", version), opts.Force, 0o644)
 			} else {
 				err = writeToFile(file, []byte(content), opts.Force, 0o644)
 			}
