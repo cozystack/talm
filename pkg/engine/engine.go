@@ -204,6 +204,30 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
 }
 
+// MergeFileAsPatch overlays the YAML content of patchFile onto rendered
+// using the Talos config-patcher (strategic merge for normal Talos config
+// fields, JSON6902 for explicit JSON-patch documents). The first line of
+// patchFile is the talm modeline (a YAML comment) and is harmlessly
+// ignored by the patcher.
+//
+// When patchFile contains only a modeline (no Talos config body) the
+// resulting patch list is empty, Apply is a no-op, and rendered is
+// returned unchanged.
+func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
+	patches, err := configpatcher.LoadPatches([]string{"@" + patchFile})
+	if err != nil {
+		return nil, fmt.Errorf("loading patch from %s: %w", patchFile, err)
+	}
+	if len(patches) == 0 {
+		return rendered, nil
+	}
+	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), patches)
+	if err != nil {
+		return nil, fmt.Errorf("applying patch from %s: %w", patchFile, err)
+	}
+	return out.Bytes()
+}
+
 // Render executes the rendering of templates based on the provided options.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
 

@@ -125,6 +125,15 @@ func apply(args []string) error {
 					return fmt.Errorf("template rendering error: %w", err)
 				}
 
+				// Overlay any per-node config from the modeline'd file on top
+				// of the rendered template. Without this merge, hostname,
+				// secondary interfaces, VIP placement and other per-node
+				// fields defined in the node file are silently lost.
+				result, err = engine.MergeFileAsPatch(result, configFile)
+				if err != nil {
+					return fmt.Errorf("merging node file as patch: %w", err)
+				}
+
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           result,
 					Mode:           applyCmdFlags.Mode.Mode,

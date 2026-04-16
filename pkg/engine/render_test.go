@@ -931,6 +931,116 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	assertNotContains(t, result, "kind: LinkConfig")
 }
 
+// TestMergeFileAsPatch covers #126: when `talm apply -f node.yaml` runs
+// the template-rendering branch (modeline `templates=[...]`), the
+// non-modeline body of the node file must overlay the rendered output —
+// previously it was silently discarded, taking per-node hostname,
+// secondary interfaces, VIP placement, etc. with it.
+func TestMergeFileAsPatch(t *testing.T) {
+	const renderedTemplate = `version: v1alpha1
+debug: false
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    hostname: talos-abcde
+    interfaces:
+      - interface: ens3
+        addresses:
+          - 10.0.0.1/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.0.0.254
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/16
+`
+
+	t.Run("overlays hostname and adds secondary interface", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		// First line is the modeline (a YAML comment); the body is a
+		// strategic merge patch.
+		const nodeBody = `# talm: nodes=["10.0.0.1"], endpoints=["10.0.0.1"], templates=["templates/controlplane.yaml"]
+machine:
+  network:
+    hostname: node0
+    interfaces:
+      - interface: ens3
+        addresses:
+          - 10.0.0.1/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.0.0.254
+      - deviceSelector:
+          hardwareAddr: "02:00:17:02:55:aa"
+        addresses:
+          - 10.0.100.11/24
+        vip:
+          ip: 10.0.100.10
+`
+		if err := os.WriteFile(nodeFile, []byte(nodeBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+
+		out := string(merged)
+		if !strings.Contains(out, "hostname: node0") {
+			t.Errorf("merged output missing custom hostname 'node0':\n%s", out)
+		}
+		if strings.Contains(out, "hostname: talos-abcde") {
+			t.Errorf("merged output still contains template hostname 'talos-abcde':\n%s", out)
+		}
+		if !strings.Contains(out, "02:00:17:02:55:aa") {
+			t.Errorf("merged output missing deviceSelector secondary interface:\n%s", out)
+		}
+		if !strings.Contains(out, "10.0.100.10") {
+			t.Errorf("merged output missing VIP from node file:\n%s", out)
+		}
+	})
+
+	t.Run("modeline-only file preserves rendered fields", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# talm: nodes=[\"10.0.0.1\"], templates=[\"templates/controlplane.yaml\"]\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+
+		// Talos configpatcher always round-trips through its config loader,
+		// which normalises formatting — so byte-equality is too strict.
+		// What matters: every field present in the rendered template
+		// survives, since there is nothing in the patch to override it.
+		out := string(merged)
+		for _, want := range []string{
+			"hostname: talos-abcde",
+			"interface: ens3",
+			"10.0.0.1/24",
+			"endpoint: https://10.0.0.10:6443",
+			"10.244.0.0/16",
+			"10.96.0.0/16",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("modeline-only merge must preserve %q from rendered template, missing in:\n%s", want, out)
+			}
+		}
+	})
+}
+
 // TestRenderFailIfMultiNodes_UsesCommandName covers #121: the multi-node
 // rejection error must reference the calling subcommand passed via
 // Options.CommandName, not the historical hardcoded "talm template" that
