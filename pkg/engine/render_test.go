@@ -1206,6 +1206,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 func TestDefaultLinkByGatewayHelpers_MultiNIC(t *testing.T) {
 	const tmpl = `link={{ include "talm.discovered.default_link_name_by_gateway" . }}
 mac={{ include "talm.discovered.default_link_address_by_gateway" . }}
+bus={{ include "talm.discovered.default_link_bus_by_gateway" . }}
 `
 	chartRoot := createTestChart(t, "tc", "out.yaml", tmpl)
 
@@ -1222,6 +1223,10 @@ mac={{ include "talm.discovered.default_link_address_by_gateway" . }}
 
 	assertContains(t, output, "link=eth0\n")
 	assertContains(t, output, "mac=aa:bb:cc:dd:ee:00\n")
+	// default_link_bus_by_gateway must return the busPath, not the MAC.
+	// Long-standing copy-paste bug from the address helper: see commit log.
+	assertContains(t, output, "bus=pci-0000:00:1f.0\n")
+	assertNotContains(t, output, "bus=aa:bb:cc:dd:ee:00")
 	assertNotContains(t, output, "eth1")
 	assertNotContains(t, output, "eth2")
 }
@@ -1301,13 +1306,25 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 					"priority":    200,
 				},
 			},
-			// Route with several fields absent — exercises the default ""
-			// guard in routes_by_link so consumers never see "<nil>".
+			// Route with several fields absent — exercises the kindIs
+			// "invalid" guard in routes_by_link so consumers never see "<nil>".
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "172.16.0.0/12",
 					"outLinkName": "eth1",
 					"table":       "main",
+				},
+			},
+			// Route with priority: 0 — int zero must round-trip through
+			// printf "%v" (the older `default ""` guard collapsed it to "").
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "203.0.113.0/24",
+					"gateway":     "10.0.0.1",
+					"outLinkName": "eth1",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    0,
 				},
 			},
 		},
@@ -1326,6 +1343,10 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 			// IPv6 link-local on a configurable link — addresses_by_link must
 			// filter scope=link out so callers never configure fe80::/64.
 			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "fe80::aa:bbff:fecc:dd01/64", "family": "inet6", "scope": "link"}},
+			// Address with no scope set at all — must also be filtered out
+			// (defensive: real Talos always emits scope, but missing-field
+			// safety matters for user mocks and future API changes).
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.99.99.99/32", "family": "inet4"}},
 			map[string]any{"spec": map[string]any{"linkName": "lo", "address": "127.0.0.1/8", "family": "inet4", "scope": "host"}},
 		},
 	}
@@ -1357,8 +1378,8 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 // route) so user templates can configure secondary uplinks (e.g. storage
 // network on a control-plane).
 func TestSecondaryNicHelpers(t *testing.T) {
-	const tmpl = `physical={{ include "talm.discovered.physical_links" . }}
-configurable={{ include "talm.discovered.configurable_links" . }}
+	const tmpl = `physical={{ include "talm.discovered.physical_link_names" . }}
+configurable={{ include "talm.discovered.configurable_link_names" . }}
 addr_eth0={{ include "talm.discovered.addresses_by_link" "eth0" }}
 addr_eth1={{ include "talm.discovered.addresses_by_link" "eth1" }}
 gw_eth0={{ include "talm.discovered.gateway_by_link" "eth0" }}
@@ -1366,6 +1387,8 @@ gw_eth1={{ include "talm.discovered.gateway_by_link" "eth1" }}
 routes_eth1={{ include "talm.discovered.routes_by_link" "eth1" }}
 mac_eth1={{ include "talm.discovered.mac_by_link" "eth1" }}
 bus_eth1={{ include "talm.discovered.bus_by_link" "eth1" }}
+mac_unknown={{ include "talm.discovered.mac_by_link" "doesnotexist" }}
+bus_unknown={{ include "talm.discovered.bus_by_link" "doesnotexist" }}
 selector_eth1=
 {{ include "talm.discovered.link_selector_by_name" "eth1" }}
 `
@@ -1381,12 +1404,15 @@ selector_eth1=
 	output := renderChartTemplateWithLookup(t, chartRoot, "templates/out.yaml", secondaryNicLookup())
 
 	assertContains(t, output, `physical=["eth0","eth1"]`)
-	// configurable_links must include the bond master too.
+	// configurable_link_names must include the bond master too.
 	assertContains(t, output, `configurable=["eth0","eth1","bond0"]`)
 	assertContains(t, output, `addr_eth0=["192.168.1.10/24"]`)
-	// IPv6 link-local (scope=link) on eth1 must be filtered out.
+	// eth1 has 4 raw addresses but only the global one survives the filter:
+	// fe80::/64 (scope=link), 10.99.99.99/32 (no scope), 127.0.0.1/8
+	// (scope=host on lo, different link) — all rejected.
 	assertContains(t, output, `addr_eth1=["10.0.0.5/24"]`)
 	assertNotContains(t, output, "fe80::aa:bbff:fecc:dd01")
+	assertNotContains(t, output, "10.99.99.99")
 	// gateway_by_link returns IPv4 even when an IPv6 default route is also
 	// present on the same link.
 	assertContains(t, output, "gw_eth0=192.168.1.1")
@@ -1397,14 +1423,22 @@ selector_eth1=
 	assertContains(t, output, `"dst":"10.0.0.0/24"`)
 	assertContains(t, output, `"dst":"10.10.0.0/16"`)
 	assertContains(t, output, `"dst":"172.16.0.0/12"`)
+	assertContains(t, output, `"dst":"203.0.113.0/24"`)
 	assertContains(t, output, `"gateway":"10.0.0.254"`)
 	assertNotContains(t, output, `"dst":""`)
+	// priority: 0 must round-trip as "0", not collapse to "" via sprig
+	// `default ""`.
+	assertContains(t, output, `"priority":"0"`)
 	// Missing route fields must render as empty strings, never "<nil>" or
 	// HTML-escaped "\u003cnil\u003e".
 	assertNotContains(t, output, "<nil>")
 	assertNotContains(t, output, `\u003cnil\u003e`)
 	assertContains(t, output, "mac_eth1=aa:bb:cc:dd:ee:01")
 	assertContains(t, output, "bus_eth1=pci-0000:00:1f.1")
+	// Unknown link must yield empty MAC/busPath even when the lookup mock
+	// returns an empty map (real Helm returns nil; defensive on both).
+	assertContains(t, output, "mac_unknown=\n")
+	assertContains(t, output, "bus_unknown=\n")
 	assertContains(t, output, "busPath: pci-0000:00:1f.1")
 }
 
