@@ -307,26 +307,30 @@ vlans:
 {{- toJson $names -}}
 {{- end -}}
 
-{{- /* JSON list of CIDR addresses configured on the given link (any family),
-       excluding host-scoped addresses. Caller is responsible for filtering
-       VIPs or family if needed. */ -}}
+{{- /* JSON list of CIDR addresses configured on the given link, excluding
+       kernel-managed scopes (host loopback, link-local, nowhere). Both IPv4
+       and IPv6 globally-scoped addresses are returned; the caller is
+       responsible for filtering by family or stripping VIPs if needed. */ -}}
 {{- define "talm.discovered.addresses_by_link" -}}
 {{- $linkName := . -}}
 {{- $addresses := list -}}
 {{- range (lookup "addresses" "" "").items -}}
-{{- if and (eq .spec.linkName $linkName) (not (eq .spec.scope "host")) -}}
+{{- $skip := has (.spec.scope | toString) (list "host" "link" "nowhere") -}}
+{{- if and (eq .spec.linkName $linkName) (not $skip) -}}
 {{- $addresses = append $addresses .spec.address -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $addresses -}}
 {{- end -}}
 
-{{- /* Scalar gateway IP for the default route (dst="", main table) on the
-       given link. Empty if no default route uses this link. */ -}}
+{{- /* Scalar IPv4 gateway for the default route (dst="", main table) on the
+       given link. Empty if the link has no IPv4 default route. IPv4-only by
+       convention to avoid family/address mismatch on dual-stack nodes — add
+       a sibling helper for IPv6 if you need it. */ -}}
 {{- define "talm.discovered.gateway_by_link" -}}
 {{- $linkName := . -}}
 {{- range (lookup "routes" "" "").items -}}
-{{- if and (eq .spec.outLinkName $linkName) (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") -}}
+{{- if and (eq .spec.outLinkName $linkName) (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") -}}
 {{- .spec.gateway -}}
 {{- break -}}
 {{- end -}}
@@ -335,13 +339,19 @@ vlans:
 
 {{- /* JSON list of non-default routes on the given link. Each entry is a flat
        map {dst, gateway, family, table, priority} so consumers can
-       fromJsonArray + range + dig. */ -}}
+       fromJsonArray + range + dig. Missing route fields are emitted as empty
+       strings so consumers never see the literal "<nil>". */ -}}
 {{- define "talm.discovered.routes_by_link" -}}
 {{- $linkName := . -}}
 {{- $routes := list -}}
 {{- range (lookup "routes" "" "").items -}}
 {{- if and (eq .spec.outLinkName $linkName) (not (eq .spec.dst "")) -}}
-{{- $entry := dict "dst" .spec.dst "gateway" (.spec.gateway | toString) "family" (.spec.family | toString) "table" (.spec.table | toString) "priority" (.spec.priority | toString) -}}
+{{- $entry := dict
+    "dst" .spec.dst
+    "gateway" (default "" .spec.gateway | toString)
+    "family" (default "" .spec.family | toString)
+    "table" (default "" .spec.table | toString)
+    "priority" (default "" .spec.priority | toString) -}}
 {{- $routes = append $routes $entry -}}
 {{- end -}}
 {{- end -}}

@@ -1258,6 +1258,19 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 		"apiVersion": "v1",
 		"kind":       "List",
 		"items": []any{
+			// IPv6 default route ordered first so a missing family filter in
+			// gateway_by_link would return fe80::1 instead of the IPv4
+			// gateway. Required for the no-IPv4-family-filter regression.
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "fe80::1",
+					"outLinkName": "eth0",
+					"family":      "inet6",
+					"table":       "main",
+					"priority":    1024,
+				},
+			},
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
@@ -1288,6 +1301,15 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 					"priority":    200,
 				},
 			},
+			// Route with several fields absent — exercises the default ""
+			// guard in routes_by_link so consumers never see "<nil>".
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "172.16.0.0/12",
+					"outLinkName": "eth1",
+					"table":       "main",
+				},
+			},
 		},
 	}
 	linksList := map[string]any{
@@ -1301,6 +1323,9 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 		"items": []any{
 			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.1.10/24", "family": "inet4", "scope": "global"}},
 			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.0.0.5/24", "family": "inet4", "scope": "global"}},
+			// IPv6 link-local on a configurable link — addresses_by_link must
+			// filter scope=link out so callers never configure fe80::/64.
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "fe80::aa:bbff:fecc:dd01/64", "family": "inet6", "scope": "link"}},
 			map[string]any{"spec": map[string]any{"linkName": "lo", "address": "127.0.0.1/8", "family": "inet4", "scope": "host"}},
 		},
 	}
@@ -1359,15 +1384,25 @@ selector_eth1=
 	// configurable_links must include the bond master too.
 	assertContains(t, output, `configurable=["eth0","eth1","bond0"]`)
 	assertContains(t, output, `addr_eth0=["192.168.1.10/24"]`)
+	// IPv6 link-local (scope=link) on eth1 must be filtered out.
 	assertContains(t, output, `addr_eth1=["10.0.0.5/24"]`)
+	assertNotContains(t, output, "fe80::aa:bbff:fecc:dd01")
+	// gateway_by_link returns IPv4 even when an IPv6 default route is also
+	// present on the same link.
 	assertContains(t, output, "gw_eth0=192.168.1.1")
+	assertNotContains(t, output, "gw_eth0=fe80::1")
 	// Storage NIC has no default route.
 	assertContains(t, output, "gw_eth1=\n")
 	// Static routes are exposed; default route is excluded.
 	assertContains(t, output, `"dst":"10.0.0.0/24"`)
 	assertContains(t, output, `"dst":"10.10.0.0/16"`)
+	assertContains(t, output, `"dst":"172.16.0.0/12"`)
 	assertContains(t, output, `"gateway":"10.0.0.254"`)
 	assertNotContains(t, output, `"dst":""`)
+	// Missing route fields must render as empty strings, never "<nil>" or
+	// HTML-escaped "\u003cnil\u003e".
+	assertNotContains(t, output, "<nil>")
+	assertNotContains(t, output, `\u003cnil\u003e`)
 	assertContains(t, output, "mac_eth1=aa:bb:cc:dd:ee:01")
 	assertContains(t, output, "bus_eth1=pci-0000:00:1f.1")
 	assertContains(t, output, "busPath: pci-0000:00:1f.1")
