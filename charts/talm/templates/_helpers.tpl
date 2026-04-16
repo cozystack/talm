@@ -270,3 +270,106 @@ vlans:
   - vlanId: {{ $link.spec.vlan.vlanID }}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+  Multi-NIC discovery helpers (#125).
+
+  The `default_*_by_gateway` family above resolves only the link carrying the
+  default route (primary). Templates targeting nodes with secondary NICs
+  (storage links on a control-plane, second uplink, etc.) need to enumerate
+  every physical link and read its addresses/routes/MAC by name. The helpers
+  below are the by-name building blocks; existing default_*_by_gateway helpers
+  remain wrappers that resolve the primary link and call into these.
+*/ -}}
+
+{{- /* JSON list of physical link names (raw NICs only — not bond/vlan masters). */ -}}
+{{- define "talm.discovered.physical_links" -}}
+{{- $names := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) -}}
+{{- $names = append $names .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{- /* JSON list of every link a user template can configure: physical NICs
+       plus bond / vlan / bridge top-level links. */ -}}
+{{- define "talm.discovered.configurable_links" -}}
+{{- $names := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- $isPhysical := and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) -}}
+{{- $isVirtual := has (.spec.kind | toString) (list "bond" "vlan" "bridge") -}}
+{{- if or $isPhysical $isVirtual -}}
+{{- $names = append $names .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{- /* JSON list of CIDR addresses configured on the given link (any family),
+       excluding host-scoped addresses. Caller is responsible for filtering
+       VIPs or family if needed. */ -}}
+{{- define "talm.discovered.addresses_by_link" -}}
+{{- $linkName := . -}}
+{{- $addresses := list -}}
+{{- range (lookup "addresses" "" "").items -}}
+{{- if and (eq .spec.linkName $linkName) (not (eq .spec.scope "host")) -}}
+{{- $addresses = append $addresses .spec.address -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $addresses -}}
+{{- end -}}
+
+{{- /* Scalar gateway IP for the default route (dst="", main table) on the
+       given link. Empty if no default route uses this link. */ -}}
+{{- define "talm.discovered.gateway_by_link" -}}
+{{- $linkName := . -}}
+{{- range (lookup "routes" "" "").items -}}
+{{- if and (eq .spec.outLinkName $linkName) (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") -}}
+{{- .spec.gateway -}}
+{{- break -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* JSON list of non-default routes on the given link. Each entry is a flat
+       map {dst, gateway, family, table, priority} so consumers can
+       fromJsonArray + range + dig. */ -}}
+{{- define "talm.discovered.routes_by_link" -}}
+{{- $linkName := . -}}
+{{- $routes := list -}}
+{{- range (lookup "routes" "" "").items -}}
+{{- if and (eq .spec.outLinkName $linkName) (not (eq .spec.dst "")) -}}
+{{- $entry := dict "dst" .spec.dst "gateway" (.spec.gateway | toString) "family" (.spec.family | toString) "table" (.spec.table | toString) "priority" (.spec.priority | toString) -}}
+{{- $routes = append $routes $entry -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $routes -}}
+{{- end -}}
+
+{{- /* Scalar MAC address for the given link, or empty. */ -}}
+{{- define "talm.discovered.mac_by_link" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if $link -}}
+{{- $link.spec.hardwareAddr | toString -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Scalar PCI / bus path for the given link, or empty. */ -}}
+{{- define "talm.discovered.bus_by_link" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if $link -}}
+{{- $link.spec.busPath | toString -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* YAML fragment `busPath: <path>` for use as a Talos deviceSelector by
+       link name. Prefer this over emitting `interface:` when you need the
+       config to be portable across renames (e.g. predictable network names). */ -}}
+{{- define "talm.discovered.link_selector_by_name" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if and $link $link.spec.busPath -}}
+busPath: {{ $link.spec.busPath }}
+{{- end -}}
+{{- end -}}
