@@ -230,11 +230,11 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	if isEffectivelyEmptyYAML(patchBytes) {
 		return rendered, nil
 	}
-	patches, err := configpatcher.LoadPatches([]string{"@" + patchFile})
+	patch, err := configpatcher.LoadPatch(patchBytes)
 	if err != nil {
 		return nil, fmt.Errorf("loading patch from %s: %w", patchFile, err)
 	}
-	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), patches)
+	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), []configpatcher.Patch{patch})
 	if err != nil {
 		return nil, fmt.Errorf("applying patch from %s: %w", patchFile, err)
 	}

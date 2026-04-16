@@ -287,12 +287,13 @@ func openClientPerNodeMaintenance(fingerprints []string) openClientFunc {
 
 // openClientPerNodeAuth returns an openClientFunc that reuses one
 // authenticated client (the one withApplyClientBare opened above this
-// callback) and rotates the addressed node via client.WithNodes on the
-// per-iteration context. engine.Render's FailIfMultiNodes guard then sees
-// exactly one node and is satisfied.
+// callback) and rotates the addressed node via client.WithNode on the
+// per-iteration context. WithNode (rather than WithNodes) sets the
+// "node" metadata key for single-target proxying, which engine.Render's
+// FailIfMultiNodes guard treats as one node.
 func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
-		return action(client.WithNodes(parentCtx, node), c)
+		return action(client.WithNode(parentCtx, node), c)
 	}
 }
 

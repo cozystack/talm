@@ -931,11 +931,19 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	assertNotContains(t, result, "kind: LinkConfig")
 }
 
-// TestMergeFileAsPatch covers #126: when `talm apply -f node.yaml` runs
-// the template-rendering branch (modeline `templates=[...]`), the
-// non-modeline body of the node file must overlay the rendered output —
-// previously it was silently discarded, taking per-node hostname,
-// secondary interfaces, VIP placement, etc. with it.
+// TestMergeFileAsPatch pins the contract for the apply-side overlay of a
+// node file's body on top of a rendered template:
+//
+//   - When the node file has Talos config in addition to the modeline,
+//     fields from the file must overlay the rendered template (custom
+//     hostname wins over the auto-generated one; secondary interfaces and
+//     VIPs declared in the file appear in the merged output).
+//   - When the node file is just a modeline, an empty file, or comments
+//     and document separators with no body, the merge must be a true
+//     byte-for-byte identity over rendered. The Talos config-patcher
+//     misclassifies such inputs as empty JSON6902 patches, which then
+//     refuses any multi-document machine config — the v1.12+ default
+//     output format. The empty-detection short-circuit avoids that.
 func TestMergeFileAsPatch(t *testing.T) {
 	const renderedTemplate = `version: v1alpha1
 debug: false
@@ -1031,11 +1039,12 @@ machine:
 	})
 
 	t.Run("modeline-only file does not break multi-doc rendered (Talos v1.12+)", func(t *testing.T) {
-		// Reproduces the BLOCKER 2 regression vector: pre-fix, a
-		// modeline-only node file routed through configpatcher.Apply →
-		// JSON6902, which rejects any multi-document machine config with
-		// `JSON6902 patches are not supported for multi-document machine
-		// configuration`. Talos v1.12+ default output is multi-doc.
+		// Default Talos v1.12+ output format is multi-document. A
+		// modeline-only node file used to route through
+		// configpatcher.Apply → JSON6902, which refuses multi-document
+		// machine configs with: `JSON6902 patches are not supported for
+		// multi-document machine configuration`. The empty-content
+		// short-circuit must keep this case working.
 		const multiDocRendered = `version: v1alpha1
 machine:
   type: controlplane
@@ -1062,6 +1071,71 @@ addresses:
 		}
 		if string(merged) != multiDocRendered {
 			t.Errorf("multi-doc + modeline-only merge must return rendered byte-for-byte, got:\n%s", string(merged))
+		}
+	})
+
+	t.Run("multi-doc rendered + non-empty patch overlays the legacy machine doc", func(t *testing.T) {
+		// The realistic Talos v1.12+ apply scenario: a multi-document
+		// rendered config (legacy `machine:`/`cluster:` doc plus typed
+		// HostnameConfig / LinkConfig docs) plus a node file that pins
+		// hostname/network on the legacy machine doc. The strategic-merge
+		// patcher must accept the multi-doc input, apply the patch to the
+		// legacy machine doc, and leave the typed sibling docs intact.
+		const multiDocRendered = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    hostname: talos-abcde
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: talos-abcde
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: ens3
+addresses:
+  - address: 10.0.0.1/24
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		const patchBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  network:
+    hostname: node0
+    interfaces:
+      - deviceSelector:
+          hardwareAddr: "02:00:17:02:55:aa"
+        addresses:
+          - 10.0.100.11/24
+`
+		if err := os.WriteFile(nodeFile, []byte(patchBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(multiDocRendered), nodeFile)
+		if err != nil {
+			t.Fatalf("multi-doc + non-empty patch must not error, got: %v", err)
+		}
+
+		out := string(merged)
+		if !strings.Contains(out, "hostname: node0") {
+			t.Errorf("merged output must overlay machine.network.hostname with node0:\n%s", out)
+		}
+		if !strings.Contains(out, "02:00:17:02:55:aa") {
+			t.Errorf("merged output must include node-file deviceSelector:\n%s", out)
+		}
+		// The sibling typed documents must not be dropped by the merge.
+		if !strings.Contains(out, "kind: LinkConfig") {
+			t.Errorf("merged output must preserve sibling LinkConfig document:\n%s", out)
+		}
+		if !strings.Contains(out, "name: ens3") {
+			t.Errorf("merged output must preserve LinkConfig name field:\n%s", out)
 		}
 	})
 
@@ -1096,10 +1170,11 @@ addresses:
 	})
 }
 
-// TestRenderFailIfMultiNodes_UsesCommandName covers #121: the multi-node
-// rejection error must reference the calling subcommand passed via
-// Options.CommandName, not the historical hardcoded "talm template" that
-// confused users running `talm apply`.
+// TestRenderFailIfMultiNodes_UsesCommandName guards the contract for
+// Options.CommandName: the multi-node rejection error must reference the
+// calling subcommand the caller passed in, never the historical
+// hardcoded literal that pre-dated this option. An empty value falls back
+// to the neutral "talm".
 func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1128,7 +1203,10 @@ func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 		})
 	}
 
-	t.Run("non-empty CommandName must not leak the historical default", func(t *testing.T) {
+	t.Run("non-CommandName subcommand names must not leak into the error", func(t *testing.T) {
+		// If a caller passes "talm apply", the error must not carry any
+		// other subcommand name — historically the call site here emitted
+		// "talm template" unconditionally.
 		ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
 		opts := Options{Offline: false, CommandName: "talm apply"}
 		_, err := Render(ctx, nil, opts)
