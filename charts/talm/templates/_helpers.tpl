@@ -69,6 +69,7 @@
 {{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- $linkName = .spec.outLinkName }}
 {{- $family = .spec.family }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- $addresses := list }}
@@ -106,31 +107,34 @@
 
 {{- define "talm.discovered.default_link_name_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- .spec.outLinkName }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_address_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- (lookup "links" "" .spec.outLinkName).spec.hardwareAddr }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_bus_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- (lookup "links" "" .spec.outLinkName).spec.hardwareAddr }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_selector_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- with (lookup "links" "" .spec.outLinkName) }}
 busPath: {{ .spec.busPath }}
 {{- break }}
