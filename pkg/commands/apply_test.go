@@ -15,20 +15,17 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	origTalosVersion := applyCmdFlags.talosVersion
 	origKubeVersion := applyCmdFlags.kubernetesVersion
 	origDebug := applyCmdFlags.debug
-	origInsecure := applyCmdFlags.insecure
 	origRootDir := Config.RootDir
 	defer func() {
 		applyCmdFlags.talosVersion = origTalosVersion
 		applyCmdFlags.kubernetesVersion = origKubeVersion
 		applyCmdFlags.debug = origDebug
-		applyCmdFlags.insecure = origInsecure
 		Config.RootDir = origRootDir
 	}()
 
 	applyCmdFlags.talosVersion = "v1.12"
 	applyCmdFlags.kubernetesVersion = "1.31.0"
 	applyCmdFlags.debug = false
-	applyCmdFlags.insecure = true
 	Config.RootDir = "/project"
 
 	opts := buildApplyRenderOptions(
@@ -41,9 +38,6 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	}
 	if opts.Offline {
 		t.Error("expected Offline=false for online template rendering path")
-	}
-	if !opts.Insecure {
-		t.Error("expected Insecure=true to be passed through from flags")
 	}
 	if opts.Root != "/project" {
 		t.Errorf("expected Root=/project, got %s", opts.Root)

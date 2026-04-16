@@ -40,7 +40,6 @@ import (
 
 // Options encapsulates all parameters necessary for rendering.
 type Options struct {
-	Insecure          bool
 	ValueFiles        []string
 	StringValues      []string
 	Values            []string

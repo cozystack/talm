@@ -274,7 +274,6 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 	}
 
 	opts := engine.Options{
-		Insecure:          templateCmdFlags.insecure,
 		ValueFiles:        templateCmdFlags.valueFiles,
 		StringValues:      templateCmdFlags.stringValues,
 		Values:            templateCmdFlags.values,

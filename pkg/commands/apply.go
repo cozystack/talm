@@ -214,7 +214,6 @@ func withApplyClient(f func(ctx context.Context, c *client.Client) error) error 
 func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
 	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 	return engine.Options{
-		Insecure:          applyCmdFlags.insecure,
 		TalosVersion:      applyCmdFlags.talosVersion,
 		WithSecrets:       withSecretsPath,
 		KubernetesVersion: applyCmdFlags.kubernetesVersion,
