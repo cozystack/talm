@@ -54,6 +54,9 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	if len(opts.TemplateFiles) != 1 || opts.TemplateFiles[0] != "templates/controlplane.yaml" {
 		t.Errorf("expected TemplateFiles=[templates/controlplane.yaml], got %v", opts.TemplateFiles)
 	}
+	if opts.CommandName != "talm apply" {
+		t.Errorf("expected CommandName=%q, got %q (engine.Render uses this for FailIfMultiNodes error wording)", "talm apply", opts.CommandName)
+	}
 }
 
 func TestBuildApplyPatchOptions(t *testing.T) {
