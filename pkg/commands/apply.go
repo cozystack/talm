@@ -135,7 +135,7 @@ func apply(args []string) error {
 			}
 
 			if applyCmdFlags.insecure {
-				openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints)
+				openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints, WithClientMaintenance)
 				if err := applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure); err != nil {
 					return err
 				}
@@ -229,10 +229,10 @@ type applyFunc func(ctx context.Context, c *client.Client, data []byte) error
 
 // openClientFunc opens a Talos client suitable for a single node and runs
 // action with it. Authenticated mode reuses one parent client and rotates
-// the node via gRPC metadata (client.WithNodes); insecure (maintenance)
-// mode opens a fresh single-endpoint client per node because Talos's
-// maintenance client ignores nodes-in-context and round-robins between its
-// configured endpoints.
+// the node via single-target gRPC metadata (client.WithNode); insecure
+// (maintenance) mode opens a fresh single-endpoint client per node because
+// Talos's maintenance client ignores node metadata in the context and
+// round-robins between its configured endpoints.
 type openClientFunc func(node string, action func(ctx context.Context, c *client.Client) error) error
 
 // applyTemplatesPerNode runs render → MergeFileAsPatch → apply once per
@@ -269,6 +269,12 @@ func applyTemplatesPerNode(
 	return nil
 }
 
+// maintenanceClientFunc is the contract WithClientMaintenance satisfies in
+// production and a fake satisfies in tests. Injection lets the unit tests
+// run the real openClientPerNodeMaintenance body without dialing a Talos
+// node.
+type maintenanceClientFunc func(fingerprints []string, action func(ctx context.Context, c *client.Client) error) error
+
 // openClientPerNodeMaintenance returns an openClientFunc that opens a
 // fresh single-endpoint maintenance client per node. Multi-node insecure
 // apply (first bootstrap of a multi-node cluster) needs this because
@@ -276,12 +282,16 @@ func applyTemplatesPerNode(
 // round-robins ApplyConfiguration across them — most nodes never see the
 // config. Narrowing GlobalArgs.Nodes to the current iteration's node and
 // restoring it via defer keeps the wrapper's signature unchanged.
-func openClientPerNodeMaintenance(fingerprints []string) openClientFunc {
+//
+// mkClient is normally WithClientMaintenance; tests pass a fake that
+// captures the GlobalArgs.Nodes value at the moment WithClientMaintenance
+// would have read it.
+func openClientPerNodeMaintenance(fingerprints []string, mkClient maintenanceClientFunc) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
 		savedNodes := append([]string(nil), GlobalArgs.Nodes...)
 		GlobalArgs.Nodes = []string{node}
 		defer func() { GlobalArgs.Nodes = savedNodes }()
-		return WithClientMaintenance(fingerprints, action)
+		return mkClient(fingerprints, action)
 	}
 }
 

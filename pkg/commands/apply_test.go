@@ -431,47 +431,95 @@ func TestApplyTemplatesPerNode_MaintenanceModeOpensFreshClientPerNode(t *testing
 	}
 }
 
-// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes verifies
-// the production maintenance opener narrows GlobalArgs.Nodes to the
-// iteration's single endpoint while WithClientMaintenance reads it, and
-// restores the prior value afterwards regardless of whether the action
-// succeeded. Without this narrowing, WithClientMaintenance would build a
-// client with every endpoint and gRPC would round-robin
-// ApplyConfiguration.
+// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes drives
+// the real openClientPerNodeMaintenance with an injected
+// maintenanceClientFunc fake. The fake captures GlobalArgs.Nodes at the
+// moment a real WithClientMaintenance would have read it for endpoint
+// resolution. The contract: every iteration narrows GlobalArgs.Nodes to
+// exactly the iteration's node, and the prior value is restored after
+// the action returns regardless of success. Without the narrowing, the
+// real WithClientMaintenance would dial every endpoint at once and gRPC
+// would round-robin ApplyConfiguration across them.
 func TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes(t *testing.T) {
 	saved := append([]string(nil), GlobalArgs.Nodes...)
 	defer func() { GlobalArgs.Nodes = saved }()
 
 	GlobalArgs.Nodes = []string{"original-A", "original-B"}
 
-	// We can't invoke the real WithClientMaintenance without a Talos
-	// endpoint, but openClientPerNodeMaintenance's narrowing is
-	// observable: stub the action to capture GlobalArgs.Nodes at the
-	// moment WithClientMaintenance reads them. WithClientMaintenance
-	// dials a TCP socket; stubbing it requires a fake. We instead
-	// replicate the narrow/defer/restore logic on an inline maintenance
-	// stub of the same shape.
-	openWithStub := func(node string, action func(ctx context.Context, c *client.Client) error) error {
-		savedNodes := append([]string(nil), GlobalArgs.Nodes...)
-		GlobalArgs.Nodes = []string{node}
-		defer func() { GlobalArgs.Nodes = savedNodes }()
+	type call struct {
+		fingerprints []string
+		nodesAtCall  []string
+	}
+	var calls []call
 
-		// In production WithClientMaintenance reads GlobalArgs.Nodes here.
-		// Capture the value and exit without doing real network IO.
-		if got := GlobalArgs.Nodes; len(got) != 1 || got[0] != node {
-			t.Errorf("expected GlobalArgs.Nodes pinned to %q during open; got %v", node, got)
-		}
+	fakeMaintenance := func(fingerprints []string, action func(ctx context.Context, c *client.Client) error) error {
+		// WithClientMaintenance reads GlobalArgs.Nodes for its endpoints
+		// at this point. Snapshot the value so the test can inspect it.
+		calls = append(calls, call{
+			fingerprints: append([]string(nil), fingerprints...),
+			nodesAtCall:  append([]string(nil), GlobalArgs.Nodes...),
+		})
 		return action(context.Background(), nil)
 	}
 
+	openClient := openClientPerNodeMaintenance([]string{"fp-1"}, fakeMaintenance)
+
 	for _, node := range []string{"10.0.0.1", "10.0.0.2"} {
-		if err := openWithStub(node, func(_ context.Context, _ *client.Client) error { return nil }); err != nil {
-			t.Fatalf("openWithStub(%q): %v", node, err)
+		if err := openClient(node, func(_ context.Context, _ *client.Client) error { return nil }); err != nil {
+			t.Fatalf("openClient(%q): %v", node, err)
 		}
 	}
 
 	if !slices.Equal(GlobalArgs.Nodes, []string{"original-A", "original-B"}) {
 		t.Errorf("GlobalArgs.Nodes not restored after maintenance loop: got %v", GlobalArgs.Nodes)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("maintenance fake should have been called twice, got %d times", len(calls))
+	}
+	for i, want := range []string{"10.0.0.1", "10.0.0.2"} {
+		if !slices.Equal(calls[i].nodesAtCall, []string{want}) {
+			t.Errorf("call %d: GlobalArgs.Nodes at WithClientMaintenance time = %v, want [%q]", i, calls[i].nodesAtCall, want)
+		}
+		if !slices.Equal(calls[i].fingerprints, []string{"fp-1"}) {
+			t.Errorf("call %d: fingerprints passed through = %v, want [\"fp-1\"]", i, calls[i].fingerprints)
+		}
+	}
+}
+
+// TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey pins the
+// gRPC metadata key the auth-mode opener writes. WithNode sets "node"
+// (single-target proxy); WithNodes sets "nodes" (apid aggregation).
+// engine.Render's FailIfMultiNodes guard treats len("nodes") > 1 as the
+// multi-node case, so single-target metadata under "node" passes
+// trivially. A future refactor that swaps WithNode back to WithNodes
+// would slip past nodesFromOutgoingCtx (which reads either key) — this
+// assertion catches that regression directly.
+func TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\"]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	const node = "10.0.0.1"
+	render := func(ctx context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		md, ok := metadata.FromOutgoingContext(ctx)
+		if !ok {
+			t.Fatal("expected outgoing metadata on per-iteration ctx")
+		}
+		if got := md.Get("node"); !slices.Equal(got, []string{node}) {
+			t.Errorf(`metadata key "node" = %v, want [%q]`, got, node)
+		}
+		if got := md.Get("nodes"); len(got) != 0 {
+			t.Errorf(`metadata key "nodes" must be unset for single-target apply, got %v`, got)
+		}
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error { return nil }
+
+	openClient := openClientPerNodeAuth(context.Background(), nil)
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, []string{node}, openClient, render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
 }
 

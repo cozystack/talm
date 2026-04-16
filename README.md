@@ -140,6 +140,23 @@ Re-template and update generated file in place (this will overwrite it):
 talm template -f nodes/node1.yaml -I
 ```
 
+> **Per-node patches inside node files.** A node file can carry Talos config
+> below its modeline (for example, a custom `hostname`, secondary
+> interfaces with `deviceSelector`, VIP placement, or extra etcd args).
+> When `talm apply -f node.yaml` runs the template-rendering branch, that
+> body is applied as a strategic merge patch on top of the rendered
+> template before the result is sent to the node — so per-node fields
+> survive even when the template auto-generates conflicting values
+> (e.g. `hostname: talos-XXXXX`).
+>
+> `talm template -f node.yaml` (with or without `-I`) does **not** apply
+> the same overlay: its output is the rendered template plus the modeline
+> and the auto-generated warning, byte-identical to what the template
+> alone would produce. Routing it through the patcher would drop every
+> YAML comment (including the modeline) and re-sort keys, breaking
+> downstream commands that read the file back. Use `apply --dry-run` if
+> you want to preview the exact bytes that will be sent to the node.
+
 ## Using talosctl commands
 
 Talm offers a similar set of commands to those provided by talosctl.
