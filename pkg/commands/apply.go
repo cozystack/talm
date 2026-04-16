@@ -113,36 +113,39 @@ func apply(args []string) error {
 		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
 
 		if len(modelineTemplates) > 0 {
-			// Template rendering path: connect to the node first, render
-			// templates online per node (so lookup() functions resolve each
-			// node's own discovery data), merge the node file as a patch,
-			// then apply. The bare client wrapper is used so the per-node
-			// loop can attach a single-node gRPC context per iteration —
-			// engine.Render's FailIfMultiNodes guard rejects a batched
-			// multi-node context.
+			// Template rendering path: render templates online per node and
+			// apply the rendered config plus the node file overlay. See
+			// applyTemplatesPerNode for why the loop is mandatory.
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 			nodes := append([]string(nil), GlobalArgs.Nodes...)
+			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
-			if err := withApplyClientBare(func(ctx context.Context, c *client.Client) error {
-				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
-				return applyTemplatesPerNode(ctx, c, opts, configFile, nodes,
-					engine.Render,
-					func(ctx context.Context, c *client.Client, data []byte) error {
-						resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
-							Data:           data,
-							Mode:           applyCmdFlags.Mode.Mode,
-							DryRun:         applyCmdFlags.dryRun,
-							TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
-						})
-						if err != nil {
-							return fmt.Errorf("error applying new configuration: %w", err)
-						}
-						helpers.PrintApplyResults(resp)
-						return nil
-					},
-				)
-			}); err != nil {
-				return err
+			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
+				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+					Data:           data,
+					Mode:           applyCmdFlags.Mode.Mode,
+					DryRun:         applyCmdFlags.dryRun,
+					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+				})
+				if err != nil {
+					return fmt.Errorf("error applying new configuration: %w", err)
+				}
+				helpers.PrintApplyResults(resp)
+				return nil
+			}
+
+			if applyCmdFlags.insecure {
+				openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints)
+				if err := applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure); err != nil {
+					return err
+				}
+			} else {
+				if err := withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
+					openClient := openClientPerNodeAuth(parentCtx, c)
+					return applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure)
+				}); err != nil {
+					return err
+				}
 			}
 		} else {
 			// Direct patch path: apply config file as patch against empty bundle
@@ -190,24 +193,24 @@ func apply(args []string) error {
 	return nil
 }
 
-// withApplyClient creates a Talos client appropriate for the current apply mode
-// and invokes the given action with it. The action receives a context with
-// every node from GlobalArgs.Nodes batched into the gRPC metadata, matching
-// the legacy direct-patch fan-out behaviour.
+// withApplyClient creates a Talos client appropriate for the current apply
+// mode and invokes the given action with it. The action receives a context
+// in which gRPC node metadata is set to the resolved node list — either
+// GlobalArgs.Nodes (when set) or the talosconfig context's Nodes (when not).
+// Used by the direct-patch branch where multi-node fan-out happens at the
+// gRPC layer inside ApplyConfiguration.
 func withApplyClient(f func(ctx context.Context, c *client.Client) error) error {
 	return withApplyClientBare(wrapWithNodeContext(f))
 }
 
 // withApplyClientBare connects to Talos for the current apply mode but does
-// NOT inject GlobalArgs.Nodes into the context. The template-rendering path
-// uses this so its per-node loop can attach a single-node context per
-// iteration instead — engine.Render's FailIfMultiNodes guard rejects a
-// batched multi-node context, and discovery via lookup() is per-node anyway.
+// NOT inject node metadata into the context — leaving that decision to the
+// caller. Used by the template-rendering path (see applyTemplatesPerNode for
+// the rationale).
 func withApplyClientBare(f func(ctx context.Context, c *client.Client) error) error {
 	if applyCmdFlags.insecure {
-		// Maintenance mode connects directly to the node IP without talosconfig;
-		// node context injection is not needed — the maintenance client handles
-		// node targeting internally via GlobalArgs.Nodes.
+		// Maintenance mode reads its endpoints directly from
+		// GlobalArgs.Nodes — gRPC node metadata is not consulted.
 		return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
 	}
 
@@ -218,22 +221,38 @@ func withApplyClientBare(f func(ctx context.Context, c *client.Client) error) er
 	return WithClientNoNodes(f)
 }
 
-// renderFunc and applyFunc are injection points for applyTemplatesPerNode so
-// unit tests can drive the loop with fakes instead of a real Talos client.
+// renderFunc, applyFunc and openClientFunc are injection points for
+// applyTemplatesPerNode so unit tests can drive the loop with fakes instead
+// of a real Talos client.
 type renderFunc func(ctx context.Context, c *client.Client, opts engine.Options) ([]byte, error)
 type applyFunc func(ctx context.Context, c *client.Client, data []byte) error
 
-// applyTemplatesPerNode runs render → MergeFileAsPatch → apply once per node,
-// each iteration carrying a single-node gRPC context. Enables multi-node
-// modelines and `--nodes A,B,C` against the template-rendering branch:
-// engine.Render's FailIfMultiNodes guard requires a single-node context, and
-// each node should resolve its own discovery via lookup() in any case.
+// openClientFunc opens a Talos client suitable for a single node and runs
+// action with it. Authenticated mode reuses one parent client and rotates
+// the node via gRPC metadata (client.WithNodes); insecure (maintenance)
+// mode opens a fresh single-endpoint client per node because Talos's
+// maintenance client ignores nodes-in-context and round-robins between its
+// configured endpoints.
+type openClientFunc func(node string, action func(ctx context.Context, c *client.Client) error) error
+
+// applyTemplatesPerNode runs render → MergeFileAsPatch → apply once per
+// node. Two reasons it has to iterate:
+//
+//   - engine.Render's FailIfMultiNodes guard rejects a context that carries
+//     more than one node, so the auth-mode caller has to attach a single
+//     node per iteration — and discovery via lookup() should resolve each
+//     node's own topology in any case.
+//   - In insecure (maintenance) mode the client connects directly to a
+//     Talos node and ignores nodes-in-context entirely, so each node needs
+//     its own client; otherwise gRPC round-robins ApplyConfiguration
+//     across the endpoint list and most nodes never see the config.
+//
+// Both modes share this loop via openClient.
 func applyTemplatesPerNode(
-	parentCtx context.Context,
-	c *client.Client,
 	opts engine.Options,
 	configFile string,
 	nodes []string,
+	openClient openClientFunc,
 	render renderFunc,
 	apply applyFunc,
 ) error {
@@ -241,20 +260,53 @@ func applyTemplatesPerNode(
 		return fmt.Errorf("no nodes specified for template-rendering apply")
 	}
 	for _, node := range nodes {
-		perCtx := client.WithNodes(parentCtx, node)
-		rendered, err := render(perCtx, c, opts)
-		if err != nil {
-			return fmt.Errorf("node %s: template rendering: %w", node, err)
-		}
-		merged, err := engine.MergeFileAsPatch(rendered, configFile)
-		if err != nil {
-			return fmt.Errorf("node %s: merging node file as patch: %w", node, err)
-		}
-		if err := apply(perCtx, c, merged); err != nil {
+		if err := openClient(node, func(ctx context.Context, c *client.Client) error {
+			return renderMergeAndApply(ctx, c, opts, configFile, render, apply)
+		}); err != nil {
 			return fmt.Errorf("node %s: %w", node, err)
 		}
 	}
 	return nil
+}
+
+// openClientPerNodeMaintenance returns an openClientFunc that opens a
+// fresh single-endpoint maintenance client per node. Multi-node insecure
+// apply (first bootstrap of a multi-node cluster) needs this because
+// WithClientMaintenance creates a client with all endpoints and gRPC then
+// round-robins ApplyConfiguration across them — most nodes never see the
+// config. Narrowing GlobalArgs.Nodes to the current iteration's node and
+// restoring it via defer keeps the wrapper's signature unchanged.
+func openClientPerNodeMaintenance(fingerprints []string) openClientFunc {
+	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
+		savedNodes := append([]string(nil), GlobalArgs.Nodes...)
+		GlobalArgs.Nodes = []string{node}
+		defer func() { GlobalArgs.Nodes = savedNodes }()
+		return WithClientMaintenance(fingerprints, action)
+	}
+}
+
+// openClientPerNodeAuth returns an openClientFunc that reuses one
+// authenticated client (the one withApplyClientBare opened above this
+// callback) and rotates the addressed node via client.WithNodes on the
+// per-iteration context. engine.Render's FailIfMultiNodes guard then sees
+// exactly one node and is satisfied.
+func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClientFunc {
+	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
+		return action(client.WithNodes(parentCtx, node), c)
+	}
+}
+
+// renderMergeAndApply is the per-node body shared by every apply mode.
+func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, render renderFunc, apply applyFunc) error {
+	rendered, err := render(ctx, c, opts)
+	if err != nil {
+		return fmt.Errorf("template rendering: %w", err)
+	}
+	merged, err := engine.MergeFileAsPatch(rendered, configFile)
+	if err != nil {
+		return fmt.Errorf("merging node file as patch: %w", err)
+	}
+	return apply(ctx, c, merged)
 }
 
 // buildApplyRenderOptions constructs engine.Options for the template rendering path.

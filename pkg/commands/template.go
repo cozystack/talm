@@ -172,17 +172,6 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 						return err
 					}
 
-					// Overlay any per-node config from the modeline'd file on
-					// top of the rendered template — same semantics as
-					// `talm apply -f node.yaml` so a piped flow
-					// `talm template -f X | talm apply -f -` carries the
-					// node file body through.
-					merged, err := engine.MergeFileAsPatch([]byte(output), configFile)
-					if err != nil {
-						return fmt.Errorf("merging node file as patch: %w", err)
-					}
-					output = string(merged)
-
 					if templateCmdFlags.inplace {
 						if err = os.WriteFile(configFile, []byte(output), 0o644); err != nil {
 							return fmt.Errorf("failed to write file %s: %w", configFile, err)

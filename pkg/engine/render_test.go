@@ -1009,7 +1009,7 @@ machine:
 		}
 	})
 
-	t.Run("modeline-only file preserves rendered fields", func(t *testing.T) {
+	t.Run("modeline-only file is a true byte-identity no-op", func(t *testing.T) {
 		dir := t.TempDir()
 		nodeFile := filepath.Join(dir, "node0.yaml")
 		if err := os.WriteFile(nodeFile, []byte("# talm: nodes=[\"10.0.0.1\"], templates=[\"templates/controlplane.yaml\"]\n"), 0o644); err != nil {
@@ -1021,22 +1021,77 @@ machine:
 			t.Fatalf("MergeFileAsPatch: %v", err)
 		}
 
-		// Talos configpatcher always round-trips through its config loader,
-		// which normalises formatting — so byte-equality is too strict.
-		// What matters: every field present in the rendered template
-		// survives, since there is nothing in the patch to override it.
-		out := string(merged)
-		for _, want := range []string{
-			"hostname: talos-abcde",
-			"interface: ens3",
-			"10.0.0.1/24",
-			"endpoint: https://10.0.0.10:6443",
-			"10.244.0.0/16",
-			"10.96.0.0/16",
-		} {
-			if !strings.Contains(out, want) {
-				t.Errorf("modeline-only merge must preserve %q from rendered template, missing in:\n%s", want, out)
-			}
+		// Modeline-only node files must short-circuit before the Talos
+		// config-patcher round-trip — the patcher would otherwise reformat
+		// YAML, drop comments, and (worse) reject multi-document rendered
+		// configs via JSON6902. Identity is the contract.
+		if string(merged) != renderedTemplate {
+			t.Errorf("modeline-only merge must return rendered byte-for-byte, got diff:\n%s", string(merged))
+		}
+	})
+
+	t.Run("modeline-only file does not break multi-doc rendered (Talos v1.12+)", func(t *testing.T) {
+		// Reproduces the BLOCKER 2 regression vector: pre-fix, a
+		// modeline-only node file routed through configpatcher.Apply →
+		// JSON6902, which rejects any multi-document machine config with
+		// `JSON6902 patches are not supported for multi-document machine
+		// configuration`. Talos v1.12+ default output is multi-doc.
+		const multiDocRendered = `version: v1alpha1
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: talos-abcde
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: ens3
+addresses:
+  - address: 10.0.0.1/24
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# talm: nodes=[\"10.0.0.1\"]\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(multiDocRendered), nodeFile)
+		if err != nil {
+			t.Fatalf("multi-doc + modeline-only patch must not error, got: %v", err)
+		}
+		if string(merged) != multiDocRendered {
+			t.Errorf("multi-doc + modeline-only merge must return rendered byte-for-byte, got:\n%s", string(merged))
+		}
+	})
+
+	t.Run("empty file is also a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "empty.yaml")
+		if err := os.WriteFile(nodeFile, []byte(""), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch on empty file: %v", err)
+		}
+		if string(merged) != renderedTemplate {
+			t.Errorf("empty patch must round-trip rendered byte-for-byte")
+		}
+	})
+
+	t.Run("comments-and-separators-only file is a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "comments.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# top\n---\n# middle\n  \n---\n# bottom\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch on comments-only file: %v", err)
+		}
+		if string(merged) != renderedTemplate {
+			t.Errorf("comments-only patch must round-trip rendered byte-for-byte")
 		}
 	})
 }

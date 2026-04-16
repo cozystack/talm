@@ -204,28 +204,66 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
 }
 
-// MergeFileAsPatch overlays the YAML content of patchFile onto rendered
-// using the Talos config-patcher (strategic merge for normal Talos config
-// fields, JSON6902 for explicit JSON-patch documents). The first line of
-// patchFile is the talm modeline (a YAML comment) and is harmlessly
-// ignored by the patcher.
+// MergeFileAsPatch overlays the YAML body of patchFile onto rendered using
+// Talos's strategic-merge config patcher.
 //
-// When patchFile contains only a modeline (no Talos config body) the
-// resulting patch list is empty, Apply is a no-op, and rendered is
-// returned unchanged.
+// patchFile is a node file: its first line is the talm modeline (a YAML
+// comment) followed by an arbitrary Talos config patch (typically machine.*
+// fields the user wants pinned per node). When the file contains only the
+// modeline (or is otherwise empty after stripping comments and whitespace)
+// the function returns rendered unchanged — short-circuiting Talos's
+// configpatcher which would otherwise route the empty patch through
+// JSON6902 and reject any multi-document rendered config (the v1.12+ output
+// format) outright.
+//
+// Note that for non-empty patches the patcher round-trips rendered through
+// its config loader, normalising YAML formatting and dropping comments.
+// This is acceptable for the apply path (the result goes straight to
+// ApplyConfiguration) but unsuitable for human-facing output such as
+// `talm template` — which is why the template subcommand does not call
+// this helper.
 func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
+	patchBytes, err := os.ReadFile(patchFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading patch %s: %w", patchFile, err)
+	}
+	if isEffectivelyEmptyYAML(patchBytes) {
+		return rendered, nil
+	}
 	patches, err := configpatcher.LoadPatches([]string{"@" + patchFile})
 	if err != nil {
 		return nil, fmt.Errorf("loading patch from %s: %w", patchFile, err)
-	}
-	if len(patches) == 0 {
-		return rendered, nil
 	}
 	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), patches)
 	if err != nil {
 		return nil, fmt.Errorf("applying patch from %s: %w", patchFile, err)
 	}
-	return out.Bytes()
+	merged, err := out.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("encoding merged config from %s: %w", patchFile, err)
+	}
+	return merged, nil
+}
+
+// isEffectivelyEmptyYAML reports whether the input contains nothing but
+// YAML comments, document separators, and whitespace. Used by
+// MergeFileAsPatch to detect modeline-only node files that the Talos
+// config-patcher misclassifies as empty JSON6902 patches.
+func isEffectivelyEmptyYAML(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if trimmed[0] == '#' {
+			continue
+		}
+		if string(trimmed) == "---" || string(trimmed) == "..." {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Render executes the rendering of templates based on the provided options.
