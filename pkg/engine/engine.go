@@ -56,6 +56,9 @@ type Options struct {
 	TemplateFiles     []string
 	ClusterName       string
 	Endpoint          string
+	// CommandName names the caller subcommand for error messages such as
+	// the one produced by FailIfMultiNodes. Empty value falls back to "talm".
+	CommandName string
 }
 
 // NormalizeTemplatePath converts OS-specific path separators to forward slash.
@@ -215,7 +218,11 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	// Gather facts and enable lookup options
 	if !opts.Offline {
-		if err := helpers.FailIfMultiNodes(ctx, "talm template"); err != nil {
+		cmdName := opts.CommandName
+		if cmdName == "" {
+			cmdName = "talm"
+		}
+		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
 			return nil, err
 		}
 		helmEngine.LookupFunc = newLookupFunction(ctx, c)

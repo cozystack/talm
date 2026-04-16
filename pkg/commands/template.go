@@ -288,6 +288,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 		Offline:           templateCmdFlags.offline,
 		KubernetesVersion: templateCmdFlags.kubernetesVersion,
 		TemplateFiles:     resolvedTemplateFiles,
+		CommandName:       "talm template",
 	}
 
 	result, err := engine.Render(ctx, c, opts)

@@ -221,6 +221,7 @@ func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string)
 		Full:              true,
 		Root:              Config.RootDir,
 		TemplateFiles:     resolvedTemplates,
+		CommandName:       "talm apply",
 	}
 }
 

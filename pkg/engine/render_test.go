@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
+	"github.com/siderolabs/talos/pkg/machinery/client"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 )
@@ -928,6 +929,51 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	assertContains(t, result, "parent: bond0")
 	assertContains(t, result, "address: 10.0.0.50/24")
 	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+// TestRenderFailIfMultiNodes_UsesCommandName covers #121: the multi-node
+// rejection error must reference the calling subcommand passed via
+// Options.CommandName, not the historical hardcoded "talm template" that
+// confused users running `talm apply`.
+func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
+	tests := []struct {
+		name        string
+		commandName string
+		wantInError string
+	}{
+		{"talm apply", "talm apply", "talm apply"},
+		{"talm template", "talm template", "talm template"},
+		{"empty falls back to talm", "", "talm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+			opts := Options{
+				Offline:     false,
+				CommandName: tt.commandName,
+			}
+			_, err := Render(ctx, nil, opts)
+			if err == nil {
+				t.Fatalf("Render expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantInError) {
+				t.Errorf("error = %q, expected to contain %q", err.Error(), tt.wantInError)
+			}
+		})
+	}
+
+	t.Run("non-empty CommandName must not leak the historical default", func(t *testing.T) {
+		ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+		opts := Options{Offline: false, CommandName: "talm apply"}
+		_, err := Render(ctx, nil, opts)
+		if err == nil {
+			t.Fatal("Render expected an error, got nil")
+		}
+		if strings.Contains(err.Error(), "talm template") {
+			t.Errorf("error must not mention 'talm template' when CommandName is 'talm apply'; got %q", err.Error())
+		}
+	})
 }
 
 // TestRenderInvalidTalosVersion verifies that malformed TalosVersion values
