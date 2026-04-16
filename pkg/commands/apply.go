@@ -117,7 +117,7 @@ func apply(args []string) error {
 			// online (so lookup() functions resolve real discovery data), then apply.
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 
-			err = withApplyClient(func(ctx context.Context, c *client.Client) error {
+			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
 				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
 				result, err := engine.Render(ctx, c, opts)
@@ -138,7 +138,9 @@ func apply(args []string) error {
 				helpers.PrintApplyResults(resp)
 
 				return nil
-			})
+			}); err != nil {
+				return err
+			}
 		} else {
 			// Direct patch path: apply config file as patch against empty bundle
 			opts := buildApplyPatchOptions(withSecretsPath)
@@ -172,9 +174,6 @@ func apply(args []string) error {
 			}); err != nil {
 				return err
 			}
-		}
-		if err != nil {
-			return err
 		}
 
 		// Reset args
