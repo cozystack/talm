@@ -222,56 +222,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 	withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
 
 	// Resolve template file paths relative to project root
-	resolvedTemplateFiles := make([]string, len(templateCmdFlags.templateFiles))
-	absRootDir, rootErr := filepath.Abs(Config.RootDir)
-	if rootErr != nil {
-		// If we can't get absolute root, normalize original paths for helm engine
-		for i, p := range templateCmdFlags.templateFiles {
-			resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(p)
-		}
-	} else {
-		for i, templatePath := range templateCmdFlags.templateFiles {
-			var absTemplatePath string
-			if filepath.IsAbs(templatePath) {
-				// Already absolute, use as is
-				absTemplatePath = templatePath
-			} else {
-				// Resolve relative path from current working directory
-				var absErr error
-				absTemplatePath, absErr = filepath.Abs(templatePath)
-				if absErr != nil {
-					// If we can't get absolute path, normalize original for helm engine
-					resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
-					continue
-				}
-			}
-			// Convert to relative path from root
-			relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
-			if relErr != nil {
-				// If we can't get relative path, use original (normalized for helm engine)
-				resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
-				continue
-			}
-			// Normalize the path (remove .. and .)
-			relPath = filepath.Clean(relPath)
-			// Check if path goes outside root
-			if strings.HasPrefix(relPath, "..") {
-				// Path goes outside root, try to find file in templates/ relative to root
-				templateName := filepath.Base(templatePath)
-				possiblePath := filepath.Join("templates", templateName)
-				fullPath := filepath.Join(absRootDir, possiblePath)
-				if _, statErr := os.Stat(fullPath); statErr == nil {
-					relPath = possiblePath
-				} else {
-					// Can't resolve, use original (normalized for helm engine)
-					resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(templatePath)
-					continue
-				}
-			}
-			// Normalize path separators for helm engine (always uses forward slash)
-			resolvedTemplateFiles[i] = engine.NormalizeTemplatePath(relPath)
-		}
-	}
+	resolvedTemplateFiles := resolveEngineTemplatePaths(templateCmdFlags.templateFiles, Config.RootDir)
 
 	opts := engine.Options{
 		ValueFiles:        templateCmdFlags.valueFiles,
@@ -427,4 +378,61 @@ func writeInplaceRendered(configFile string, output string) error {
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "Updated.\n")
 	return nil
+}
+
+// resolveEngineTemplatePaths resolves each template path to a
+// forward-slash relative path under rootDir, ready to index into the
+// helm engine's map keys. Relative inputs are resolved against CWD
+// (matching the current shell context); if the resolved path lies
+// outside rootDir, the function falls back to `templates/<basename>`
+// under rootDir when such a file exists. Anything that cannot be
+// resolved is returned normalized through engine.NormalizeTemplatePath
+// so downstream map lookups never see backslashes.
+//
+// Extracted as a named function so Windows path handling can be
+// exercised directly in unit tests — PowerShell callers pass
+// backslash separators on `-t`, and a regression that reintroduces
+// backslashes into the engine-bound string would otherwise only be
+// observable at integration time.
+func resolveEngineTemplatePaths(templateFiles []string, rootDir string) []string {
+	resolved := make([]string, len(templateFiles))
+	absRootDir, rootErr := filepath.Abs(rootDir)
+	if rootErr != nil {
+		for i, p := range templateFiles {
+			resolved[i] = engine.NormalizeTemplatePath(p)
+		}
+		return resolved
+	}
+	for i, templatePath := range templateFiles {
+		var absTemplatePath string
+		if filepath.IsAbs(templatePath) {
+			absTemplatePath = templatePath
+		} else {
+			var absErr error
+			absTemplatePath, absErr = filepath.Abs(templatePath)
+			if absErr != nil {
+				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+				continue
+			}
+		}
+		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
+		if relErr != nil {
+			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+			continue
+		}
+		relPath = filepath.Clean(relPath)
+		if strings.HasPrefix(relPath, "..") {
+			templateName := filepath.Base(templatePath)
+			possiblePath := filepath.Join("templates", templateName)
+			fullPath := filepath.Join(absRootDir, possiblePath)
+			if _, statErr := os.Stat(fullPath); statErr == nil {
+				relPath = possiblePath
+			} else {
+				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+				continue
+			}
+		}
+		resolved[i] = engine.NormalizeTemplatePath(relPath)
+	}
+	return resolved
 }
