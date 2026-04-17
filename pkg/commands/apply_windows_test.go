@@ -22,12 +22,12 @@ import (
 	"testing"
 )
 
-// TestResolveTemplatePaths_BackslashInput is the regression guard for
-// issue #11: users running `talm apply` from PowerShell pass template
-// arguments with backslash separators (e.g. "templates\worker.yaml").
-// resolveTemplatePaths must normalize these to forward slashes because
-// the downstream helm engine only looks up templates by forward-slash
-// map keys.
+// TestResolveTemplatePaths_BackslashInput pins that users running
+// `talm apply` from PowerShell with template arguments that use
+// backslash separators (e.g. "templates\worker.yaml") end up with
+// forward-slash paths. The downstream helm engine only looks up
+// templates by forward-slash map keys, so anything else fails with
+// "template not found".
 func TestResolveTemplatePaths_BackslashInput(t *testing.T) {
 	rootDir := t.TempDir()
 	absRoot, err := filepath.Abs(rootDir)
