@@ -17,6 +17,7 @@ package commands
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,7 +92,7 @@ func TestWriteToDestination_AnnouncesOnSuccess(t *testing.T) {
 	createdSink = &buf
 
 	dir := t.TempDir()
-	path := dir + "/ok.txt"
+	path := filepath.Join(dir, "ok.txt")
 
 	if err := writeToDestination([]byte("x"), path, 0o644); err != nil {
 		t.Fatalf("writeToDestination: %v", err)
