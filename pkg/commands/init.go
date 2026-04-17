@@ -17,6 +17,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -862,6 +863,10 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	return keyWasCreated, nil
 }
 
+// createdSink is where "Created <path>" messages go after a successful
+// write. Swappable in tests to assert no message is emitted on failure.
+var createdSink io.Writer = os.Stderr
+
 func writeToDestination(data []byte, destination string, permissions os.FileMode) error {
 	if err := validateFileExists(destination); err != nil {
 		return err
@@ -875,9 +880,9 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 	}
 
 	err := os.WriteFile(destination, data, permissions)
-
-	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
-
+	if err == nil {
+		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+	}
 	return err
 }
 
@@ -897,8 +902,8 @@ func writeSecureToDestination(data []byte, destination string) error {
 	}
 
 	err := secureperm.WriteFile(destination, data)
-
-	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
-
+	if err == nil {
+		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+	}
 	return err
 }
