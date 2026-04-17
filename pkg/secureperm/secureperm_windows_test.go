@@ -19,6 +19,7 @@ package secureperm_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,6 +27,52 @@ import (
 
 	"github.com/cozystack/talm/pkg/secureperm"
 )
+
+// extractAllowACETrustee pulls the trustee string out of the first
+// Allow ACE in a SDDL string. SDDL ACE shape:
+//
+//	(ace_type;ace_flags;rights;object_guid;inherit_object_guid;account_sid)
+//
+// The returned string may be a literal SID ("S-1-5-21-...") or a
+// well-known alias ("LA", "BA", "SY", ...) — caller feeds it to
+// windows.StringToSid which accepts both forms.
+func extractAllowACETrustee(sddl string) (string, error) {
+	re := regexp.MustCompile(`\(A;([^)]+)\)`)
+	m := re.FindStringSubmatch(sddl)
+	if len(m) < 2 {
+		return "", &sddlParseError{sddl: sddl, reason: "no Allow ACE"}
+	}
+	fields := strings.Split(m[1], ";")
+	// After the leading "A;" that lives in the regex literal, the inner
+	// fields are: ace_flags, rights, object_guid, inherit_object_guid,
+	// account_sid[, resource_attribute]. Minimum 5 fields.
+	if len(fields) < 5 {
+		return "", &sddlParseError{sddl: sddl, reason: "ACE has fewer than 5 fields"}
+	}
+	return fields[4], nil
+}
+
+type sddlParseError struct{ sddl, reason string }
+
+func (e *sddlParseError) Error() string { return e.reason + ": " + e.sddl }
+
+// assertTrusteeMatches resolves the ACE trustee string (literal SID or
+// SDDL alias) to a SID and compares to wantSid via EqualSid. SDDL
+// output on GitHub Actions runners returns the RID-500 admin as the
+// alias "LA" rather than the literal SID, so a string-contains check
+// against wantSid.String() is not robust. Resolving both sides to
+// canonical *SID and comparing with EqualSid is.
+func assertTrusteeMatches(t *testing.T, trusteeStr string, wantSid *windows.SID) {
+	t.Helper()
+	aceSid, err := windows.StringToSid(trusteeStr)
+	if err != nil {
+		t.Fatalf("StringToSid(%q): %v", trusteeStr, err)
+	}
+	if !windows.EqualSid(aceSid, wantSid) {
+		t.Errorf("ACE trustee %q (SID %s) != current user SID %s",
+			trusteeStr, aceSid.String(), wantSid.String())
+	}
+}
 
 // assertProtectedOwnerOnlyDACL reads the security descriptor back and
 // asserts it is structurally D:P(A;;FA;;;<current-user-SID>) — a
@@ -58,7 +105,6 @@ func assertProtectedOwnerOnlyDACL(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("GetTokenUser: %v", err)
 	}
-	wantSid := tu.User.Sid.String()
 
 	if !strings.Contains(sddl, "D:P") {
 		t.Errorf("DACL is not protected (missing D:P flag); SDDL=%q", sddl)
@@ -66,9 +112,11 @@ func assertProtectedOwnerOnlyDACL(t *testing.T, path string) {
 	if got := strings.Count(sddl, "(A;"); got != 1 {
 		t.Errorf("DACL has %d Allow ACEs, want exactly 1; SDDL=%q", got, sddl)
 	}
-	if !strings.Contains(sddl, wantSid) {
-		t.Errorf("DACL does not reference current user SID %q; SDDL=%q", wantSid, sddl)
+	trusteeStr, err := extractAllowACETrustee(sddl)
+	if err != nil {
+		t.Fatalf("extract trustee: %v", err)
 	}
+	assertTrusteeMatches(t, trusteeStr, tu.User.Sid)
 }
 
 // TestWriteFile_NewFile_DACL_Windows pins the happy path: a brand-new

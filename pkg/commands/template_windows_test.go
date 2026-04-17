@@ -19,6 +19,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -119,7 +120,6 @@ func TestWriteInplaceRendered_ProtectedDACL_Windows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTokenUser: %v", err)
 	}
-	wantSid := tu.User.Sid.String()
 
 	if !strings.Contains(sddl, "D:P") {
 		t.Errorf("DACL not protected; SDDL=%q", sddl)
@@ -127,7 +127,27 @@ func TestWriteInplaceRendered_ProtectedDACL_Windows(t *testing.T) {
 	if got := strings.Count(sddl, "(A;"); got != 1 {
 		t.Errorf("DACL has %d Allow ACEs, want 1; SDDL=%q", got, sddl)
 	}
-	if !strings.Contains(sddl, wantSid) {
-		t.Errorf("DACL does not reference current user SID %q; SDDL=%q", wantSid, sddl)
+
+	// SDDL emits well-known SIDs as aliases (e.g. the RID-500 admin on
+	// GitHub Actions runners comes back as "LA" rather than the full
+	// "S-1-5-21-...-500"). Resolve the trustee string back through
+	// StringToSid and compare with EqualSid to get a robust match.
+	re := regexp.MustCompile(`\(A;([^)]+)\)`)
+	m := re.FindStringSubmatch(sddl)
+	if len(m) < 2 {
+		t.Fatalf("no Allow ACE found in SDDL %q", sddl)
+	}
+	fields := strings.Split(m[1], ";")
+	if len(fields) < 5 {
+		t.Fatalf("unexpected ACE shape %q", m[1])
+	}
+	trusteeStr := fields[4]
+	aceSid, err := windows.StringToSid(trusteeStr)
+	if err != nil {
+		t.Fatalf("StringToSid(%q): %v", trusteeStr, err)
+	}
+	if !windows.EqualSid(aceSid, tu.User.Sid) {
+		t.Errorf("ACE trustee %q (SID %s) != current user SID %s",
+			trusteeStr, aceSid.String(), tu.User.Sid.String())
 	}
 }

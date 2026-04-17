@@ -115,6 +115,12 @@ func TestResolveTemplatePaths(t *testing.T) {
 		t.Fatalf("failed to create templates dir: %v", err)
 	}
 
+	// Build a platform-portable absolute path outside tmpRoot.
+	// filepath.VolumeName is "" on POSIX (yielding e.g. "/other/...") and
+	// "C:" on Windows (yielding "C:\other\..."). Both are absolute and
+	// definitely outside tmpRoot (which lives under the user temp dir).
+	absOutside := filepath.Join(filepath.VolumeName(tmpRoot), string(filepath.Separator), "other", "project", "templates", "controlplane.yaml")
+
 	tests := []struct {
 		name      string
 		templates []string
@@ -146,10 +152,14 @@ func TestResolveTemplatePaths(t *testing.T) {
 			want:      []string{"templates/controlplane.yaml"},
 		},
 		{
+			// Constructed to be absolute on both POSIX and Windows so the
+			// filepath.IsAbs branch is exercised on both CI runners. The
+			// resolver normalizes outside-root paths via filepath.ToSlash,
+			// so the expected output is the forward-slash form.
 			name:      "path outside rootDir is kept as-is",
-			templates: []string{"/other/project/templates/controlplane.yaml"},
+			templates: []string{absOutside},
 			rootDir:   tmpRoot,
-			want:      []string{"/other/project/templates/controlplane.yaml"},
+			want:      []string{filepath.ToSlash(absOutside)},
 		},
 	}
 
