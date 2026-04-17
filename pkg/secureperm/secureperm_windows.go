@@ -19,35 +19,25 @@ package secureperm
 import (
 	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// WriteFile writes data to path and then tightens the NTFS DACL so only
-// the current user SID has access. os.WriteFile's mode argument is
-// effectively ignored on Windows — without the DACL step the file
-// inherits the parent directory's ACL and remains readable by
-// BUILTIN\Users.
-func WriteFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return err
-	}
-	return LockDown(path)
-}
-
-// LockDown replaces the DACL on an existing file with a single ACE
-// granting the current user full control, and marks the DACL as
-// protected so inherited ACEs are stripped.
-func LockDown(path string) error {
+// ownerOnlyDACL builds an ACL with a single Allow ACE granting full
+// control to the current process user SID, with no inheritance. Used
+// by both WriteFile (at create time) and LockDown (to rewrite an
+// existing file's DACL).
+func ownerOnlyDACL() (*windows.ACL, error) {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
-		return fmt.Errorf("open process token: %w", err)
+		return nil, fmt.Errorf("open process token: %w", err)
 	}
 	defer func() { _ = token.Close() }()
 
 	tokenUser, err := token.GetTokenUser()
 	if err != nil {
-		return fmt.Errorf("get token user: %w", err)
+		return nil, fmt.Errorf("get token user: %w", err)
 	}
 
 	entries := []windows.EXPLICIT_ACCESS{
@@ -62,11 +52,79 @@ func LockDown(path string) error {
 			},
 		},
 	}
-	dacl, err := windows.ACLFromEntries(entries, nil)
+	acl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
-		return fmt.Errorf("build DACL: %w", err)
+		return nil, fmt.Errorf("build DACL: %w", err)
+	}
+	return acl, nil
+}
+
+// WriteFile creates path with a protected DACL granting only the
+// current user SID, then writes data. Using CreateFile with a
+// SECURITY_ATTRIBUTES descriptor means the file's contents never touch
+// disk under the parent directory's inherited (likely permissive) ACL
+// — closing the write-then-tighten race that a naive os.WriteFile +
+// LockDown sequence would leave open.
+func WriteFile(path string, data []byte) error {
+	dacl, err := ownerOnlyDACL()
+	if err != nil {
+		return err
 	}
 
+	sd, err := windows.NewSecurityDescriptor()
+	if err != nil {
+		return fmt.Errorf("create security descriptor: %w", err)
+	}
+	if err := sd.SetDACL(dacl, true, false); err != nil {
+		return fmt.Errorf("attach DACL: %w", err)
+	}
+	// Mark the DACL as protected so inherited ACEs from the parent
+	// directory are stripped rather than merged.
+	if err := sd.SetControl(windows.SE_DACL_PROTECTED, windows.SE_DACL_PROTECTED); err != nil {
+		return fmt.Errorf("protect DACL: %w", err)
+	}
+
+	sa := windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: sd,
+		InheritHandle:      0,
+	}
+
+	pathUTF16, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("encode path: %w", err)
+	}
+
+	handle, err := windows.CreateFile(
+		pathUTF16,
+		windows.GENERIC_WRITE,
+		0, // exclusive — no sharing during write
+		&sa,
+		windows.CREATE_ALWAYS,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("create secure file %s: %w", path, err)
+	}
+
+	f := os.NewFile(uintptr(handle), path)
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("write secure file %s: %w", path, err)
+	}
+	return nil
+}
+
+// LockDown replaces the DACL on an existing file with a single ACE
+// granting the current user full control, and marks the DACL as
+// protected so inherited ACEs are stripped.
+func LockDown(path string) error {
+	dacl, err := ownerOnlyDACL()
+	if err != nil {
+		return err
+	}
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
