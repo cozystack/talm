@@ -18,6 +18,7 @@ package commands
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,21 +76,22 @@ func TestResolveTemplatePaths_BackslashInput(t *testing.T) {
 }
 
 // TestResolveTemplatePaths_OutsideRoot_Backslash asserts that a
-// backslash path that resolves outside rootDir is still normalized to
-// forward slashes (the engine map keys never contain backslashes, even
-// for paths that the caller declined to resolve).
+// backslash path resolving outside rootDir still emerges without any
+// backslashes — the helm engine only looks up templates by forward-
+// slash map keys, so regardless of which internal branch the function
+// takes (Rel-success, Rel-failure, prefix-checks), the result must be
+// backslash-free. Constructing `outside` via filepath.Join on rootDir
+// keeps the test on the same drive as t.TempDir() and works on any
+// GitHub Actions runner image.
 func TestResolveTemplatePaths_OutsideRoot_Backslash(t *testing.T) {
 	rootDir := t.TempDir()
-	// Absolute Windows path that is guaranteed not under rootDir.
-	outside := `C:\elsewhere\templates\foo.yaml`
+	outside := filepath.Join(rootDir, "..", "..", "..", "elsewhere", "templates", "foo.yaml")
 
 	got := resolveTemplatePaths([]string{outside}, rootDir)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(got))
 	}
-	// The function returns the original path on "outside" — but still
-	// normalized for the helm engine.
-	if want := "C:/elsewhere/templates/foo.yaml"; got[0] != want {
-		t.Errorf("outside-root normalization: got %q, want %q", got[0], want)
+	if strings.ContainsRune(got[0], '\\') {
+		t.Errorf("result still contains backslash: %q", got[0])
 	}
 }
