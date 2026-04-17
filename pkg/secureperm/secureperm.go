@@ -21,9 +21,14 @@
 // a pre-existing file's mode bits untouched on overwrite.
 //
 // On Windows os.Chmod does not translate to NTFS DACLs — files inherit
-// ACLs from their parent and remain readable by BUILTIN\Users. The
-// Windows implementation creates the file with a protected DACL
-// granting only the current user SID, installed via CreateFile's
-// SECURITY_ATTRIBUTES argument. The file's contents never exist on
-// disk under a lax DACL, even for a moment.
+// ACLs from their parent, which may leave secrets readable by
+// non-owner principals such as BUILTIN\Users. The Windows
+// implementation creates the file with a protected owner-only DACL
+// via CreateFile's SECURITY_ATTRIBUTES argument, then immediately
+// calls SetSecurityInfo on the handle (before any bytes are written)
+// to cover the overwrite case: per MSDN, CreateFile ignores
+// SECURITY_ATTRIBUTES when opening an existing file, so the handle
+// would otherwise keep the prior DACL. Because the handle is opened
+// exclusive, no other process can observe the file between the DACL
+// switch and the write.
 package secureperm

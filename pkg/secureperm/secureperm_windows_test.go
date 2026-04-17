@@ -17,6 +17,7 @@
 package secureperm_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,25 +27,17 @@ import (
 	"github.com/cozystack/talm/pkg/secureperm"
 )
 
-// TestWriteFile_DACL_OwnerOnly confirms that WriteFile produces a
-// protected DACL (inheritance blocked) containing exactly one Allow ACE
-// for the current user SID. Without the DACL the file inherits
-// BUILTIN\Users from the parent — that is the whole point of the
-// Windows variant.
+// assertProtectedOwnerOnlyDACL reads the security descriptor back and
+// asserts it is structurally D:P(A;;FA;;;<current-user-SID>) — a
+// protected DACL with exactly one Allow ACE naming the current user.
+// The SDDL for a protected owner-only DACL looks like
 //
-// Assertion strategy: read the SDDL string of the security descriptor
-// and match structurally. The SDDL for a protected, owner-only DACL
-// looks like:  D:PAI(A;;FA;;;<USER-SID>)
-//   - "D:P" marks the DACL as protected (the PROTECTED flag we set)
-//   - "(A;" appears exactly once (one Allow ACE, no others)
-//   - the current user SID appears in that ACE
-func TestWriteFile_DACL_OwnerOnly(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.txt")
-
-	if err := secureperm.WriteFile(path, []byte("x")); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+//	D:PAI(A;;FA;;;<USER-SID>)
+//
+// where "D:P" marks the DACL as protected, "(A;" prefixes an Allow
+// ACE, and the trailing SID names the trustee.
+func assertProtectedOwnerOnlyDACL(t *testing.T, path string) {
+	t.Helper()
 
 	sd, err := windows.GetNamedSecurityInfo(
 		path,
@@ -56,7 +49,6 @@ func TestWriteFile_DACL_OwnerOnly(t *testing.T) {
 	}
 	sddl := sd.String()
 
-	// Current user SID for the expected trustee.
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
 		t.Fatalf("OpenProcessToken: %v", err)
@@ -77,4 +69,56 @@ func TestWriteFile_DACL_OwnerOnly(t *testing.T) {
 	if !strings.Contains(sddl, wantSid) {
 		t.Errorf("DACL does not reference current user SID %q; SDDL=%q", wantSid, sddl)
 	}
+}
+
+// TestWriteFile_NewFile_DACL_Windows pins the happy path: a brand-new
+// file created by WriteFile ends up with a protected, owner-only DACL.
+func TestWriteFile_NewFile_DACL_Windows(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret.txt")
+
+	if err := secureperm.WriteFile(path, []byte("x")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	assertProtectedOwnerOnlyDACL(t, path)
+}
+
+// TestWriteFile_Overwrite_DACL_Windows pins the fix for the CreateFile
+// + CREATE_ALWAYS + SECURITY_ATTRIBUTES gotcha: per MSDN, the
+// SECURITY_ATTRIBUTES descriptor is silently ignored when an existing
+// file is opened. If secureperm only relied on CreateFile to apply the
+// DACL then a pre-existing secrets.yaml left with a permissive
+// inherited DACL would stay permissive after rewrite. The fix
+// (SetSecurityInfo on the handle before writing bytes) must make the
+// post-write DACL protected and owner-only regardless of prior state.
+func TestWriteFile_Overwrite_DACL_Windows(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pre-existing.txt")
+
+	// Seed the file via os.WriteFile — it inherits the TempDir DACL,
+	// which on a GitHub Actions runner typically includes BUILTIN\Users.
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := secureperm.WriteFile(path, []byte("new")); err != nil {
+		t.Fatalf("WriteFile (overwrite): %v", err)
+	}
+	assertProtectedOwnerOnlyDACL(t, path)
+}
+
+// TestLockDown_DACL_Windows mirrors the overwrite assertion for
+// LockDown alone — a file left permissive by some earlier process must
+// end up with a protected owner-only DACL after LockDown.
+func TestLockDown_DACL_Windows(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "to-tighten.txt")
+
+	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := secureperm.LockDown(path); err != nil {
+		t.Fatalf("LockDown: %v", err)
+	}
+	assertProtectedOwnerOnlyDACL(t, path)
 }

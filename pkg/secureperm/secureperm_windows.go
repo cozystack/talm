@@ -59,12 +59,17 @@ func ownerOnlyDACL() (*windows.ACL, error) {
 	return acl, nil
 }
 
-// WriteFile creates path with a protected DACL granting only the
-// current user SID, then writes data. Using CreateFile with a
-// SECURITY_ATTRIBUTES descriptor means the file's contents never touch
-// disk under the parent directory's inherited (likely permissive) ACL
-// — closing the write-then-tighten race that a naive os.WriteFile +
-// LockDown sequence would leave open.
+// WriteFile writes data to path under a protected DACL granting only
+// the current user SID.
+//
+// For new files the DACL is installed at creation via CreateFile's
+// SECURITY_ATTRIBUTES. For existing files CreateFile + CREATE_ALWAYS
+// silently ignores SECURITY_ATTRIBUTES (per MSDN), so we additionally
+// call SetSecurityInfo on the open handle before writing any bytes —
+// the handle was opened exclusive (no share-mode), so no other process
+// can observe the file between the old DACL and the new one. After
+// SetSecurityInfo returns, the write proceeds under the owner-only
+// DACL and the final on-disk state is always protected.
 func WriteFile(path string, data []byte) error {
 	dacl, err := ownerOnlyDACL()
 	if err != nil {
@@ -78,8 +83,6 @@ func WriteFile(path string, data []byte) error {
 	if err := sd.SetDACL(dacl, true, false); err != nil {
 		return fmt.Errorf("attach DACL: %w", err)
 	}
-	// Mark the DACL as protected so inherited ACEs from the parent
-	// directory are stripped rather than merged.
 	if err := sd.SetControl(windows.SE_DACL_PROTECTED, windows.SE_DACL_PROTECTED); err != nil {
 		return fmt.Errorf("protect DACL: %w", err)
 	}
@@ -97,7 +100,7 @@ func WriteFile(path string, data []byte) error {
 
 	handle, err := windows.CreateFile(
 		pathUTF16,
-		windows.GENERIC_WRITE,
+		windows.GENERIC_WRITE|windows.WRITE_DAC,
 		0, // exclusive — no sharing during write
 		&sa,
 		windows.CREATE_ALWAYS,
@@ -110,6 +113,20 @@ func WriteFile(path string, data []byte) error {
 
 	f := os.NewFile(uintptr(handle), path)
 	defer func() { _ = f.Close() }()
+
+	// Force the DACL onto the handle before writing bytes. Covers the
+	// overwrite case where SECURITY_ATTRIBUTES from CreateFile is
+	// ignored. Uses SetSecurityInfo on the handle (not the path) so
+	// nothing can re-open the file between the DACL switch and the
+	// write — share mode on the handle is 0.
+	if err := windows.SetSecurityInfo(
+		handle,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil,
+	); err != nil {
+		return fmt.Errorf("set handle DACL on %s: %w", path, err)
+	}
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write secure file %s: %w", path, err)
