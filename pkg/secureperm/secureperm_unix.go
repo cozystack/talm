@@ -18,9 +18,16 @@ package secureperm
 
 import "os"
 
-// WriteFile writes data to path with mode 0o600.
+// WriteFile writes data to path with mode 0o600. os.WriteFile only
+// applies the mode argument when creating the file — on overwrite it
+// preserves whatever bits were there, so a pre-existing 0o644 secrets
+// file would stay world-readable after rewrite. An explicit Chmod
+// afterwards guarantees the final mode regardless of prior state.
 func WriteFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // LockDown narrows an existing file's permissions to 0o600.

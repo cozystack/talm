@@ -16,9 +16,14 @@
 // (age private keys, decrypted secrets.yaml, talosconfig, kubeconfig)
 // so that only the file owner can read them.
 //
-// On Unix the implementation is a thin wrapper over os.WriteFile and
-// os.Chmod with mode 0o600. On Windows os.Chmod does not translate to
-// NTFS DACLs — files inherit ACLs from their parent and remain readable
-// by BUILTIN\Users. The Windows implementation (secureperm_windows.go)
-// additionally sets a protected DACL granting only the current user SID.
+// On Unix WriteFile is os.WriteFile(…, 0o600) followed by an explicit
+// os.Chmod — the trailing Chmod is required because os.WriteFile keeps
+// a pre-existing file's mode bits untouched on overwrite.
+//
+// On Windows os.Chmod does not translate to NTFS DACLs — files inherit
+// ACLs from their parent and remain readable by BUILTIN\Users. The
+// Windows implementation creates the file with a protected DACL
+// granting only the current user SID, installed via CreateFile's
+// SECURITY_ATTRIBUTES argument. The file's contents never exist on
+// disk under a lax DACL, even for a moment.
 package secureperm

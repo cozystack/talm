@@ -60,3 +60,27 @@ func TestLockDown_Mode0600_Unix(t *testing.T) {
 		t.Errorf("mode = %o, want 0600", got)
 	}
 }
+
+// TestWriteFile_OverwriteDowngrades_Unix pins the behavior that
+// rewriting an existing file with lax permissions tightens them.
+// os.WriteFile alone preserves prior mode bits on overwrite, so this
+// test fails unless WriteFile follows up with an explicit Chmod.
+func TestWriteFile_OverwriteDowngrades_Unix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lax.txt")
+
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := secureperm.WriteFile(path, []byte("new")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode after overwrite = %o, want 0600", got)
+	}
+}
