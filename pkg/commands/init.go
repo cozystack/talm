@@ -456,10 +456,8 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	}
 
 	secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
-	if err = validateFileExists(secretsFile); err != nil {
-		return err
-	}
-
+	// validateFileExists is invoked inside writeSecureToDestination;
+	// no need to duplicate the --force / existing-file gate here.
 	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 

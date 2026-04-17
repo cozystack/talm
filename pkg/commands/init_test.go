@@ -17,6 +17,7 @@ package commands
 import (
 	"bytes"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,3 +105,44 @@ func TestWriteToDestination_AnnouncesOnSuccess(t *testing.T) {
 
 // compile-time assert createdSink is writer-shaped.
 var _ io.Writer = (*bytes.Buffer)(nil)
+
+// TestWriteSecretsBundleToFile_StillRefusesOverwrite pins that
+// writeSecretsBundleToFile still honors the --force gate after the
+// redundant validateFileExists call was dropped — the gate now lives
+// only inside writeSecureToDestination, and this test would fail if
+// that inner check were ever removed too.
+func TestWriteSecretsBundleToFile_StillRefusesOverwrite(t *testing.T) {
+	forceOrig := initCmdFlags.force
+	rootOrig := Config.RootDir
+	t.Cleanup(func() {
+		initCmdFlags.force = forceOrig
+		Config.RootDir = rootOrig
+	})
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+	initCmdFlags.force = false
+
+	// Seed a pre-existing secrets.yaml.
+	existing := filepath.Join(dir, "secrets.yaml")
+	if err := os.WriteFile(existing, []byte("preserve-me"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	err := writeSecretsBundleToFile(nil)
+	if err == nil {
+		t.Fatal("expected error refusing to overwrite existing secrets.yaml")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error should mention existing-file gate, got: %v", err)
+	}
+
+	// Original content must be intact.
+	got, readErr := os.ReadFile(existing)
+	if readErr != nil {
+		t.Fatalf("ReadFile: %v", readErr)
+	}
+	if string(got) != "preserve-me" {
+		t.Errorf("original content changed: %q", got)
+	}
+}
