@@ -17,8 +17,11 @@
 package secureperm
 
 import (
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -26,8 +29,7 @@ import (
 
 // ownerOnlyDACL builds an ACL with a single Allow ACE granting full
 // control to the current process user SID, with no inheritance. Used
-// by both WriteFile (at create time) and LockDown (to rewrite an
-// existing file's DACL).
+// by both WriteFile (when creating the tmp sibling) and LockDown.
 func ownerOnlyDACL() (*windows.ACL, error) {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
@@ -59,78 +61,118 @@ func ownerOnlyDACL() (*windows.ACL, error) {
 	return acl, nil
 }
 
-// WriteFile writes data to path under a protected DACL granting only
-// the current user SID.
-//
-// For new files the DACL is installed at creation via CreateFile's
-// SECURITY_ATTRIBUTES. For existing files CreateFile + CREATE_ALWAYS
-// silently ignores SECURITY_ATTRIBUTES (per MSDN), so we additionally
-// call SetSecurityInfo on the open handle before writing any bytes —
-// the handle was opened exclusive (no share-mode), so no other process
-// can observe the file between the old DACL and the new one. After
-// SetSecurityInfo returns, the write proceeds under the owner-only
-// DACL and the final on-disk state is always protected.
-func WriteFile(path string, data []byte) error {
+// ownerOnlyDescriptor bundles the owner-only DACL into a protected
+// SECURITY_DESCRIPTOR ready to hand to CreateFile.
+func ownerOnlyDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	dacl, err := ownerOnlyDACL()
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	sd, err := windows.NewSecurityDescriptor()
 	if err != nil {
-		return fmt.Errorf("create security descriptor: %w", err)
+		return nil, fmt.Errorf("create security descriptor: %w", err)
 	}
 	if err := sd.SetDACL(dacl, true, false); err != nil {
-		return fmt.Errorf("attach DACL: %w", err)
+		return nil, fmt.Errorf("attach DACL: %w", err)
 	}
+	// Mark the DACL protected so inherited ACEs are stripped rather
+	// than merged.
 	if err := sd.SetControl(windows.SE_DACL_PROTECTED, windows.SE_DACL_PROTECTED); err != nil {
-		return fmt.Errorf("protect DACL: %w", err)
+		return nil, fmt.Errorf("protect DACL: %w", err)
 	}
+	return sd, nil
+}
 
+// createSecureTmp picks an unused path in dir and creates the file via
+// CreateFile with CREATE_NEW + a protected owner-only SECURITY_-
+// ATTRIBUTES. CREATE_NEW is important: CreateFile ignores the SA
+// member when opening an existing file, so using the NEW variant on a
+// filename we already verified didn't exist is what makes the DACL
+// actually apply at creation time.
+func createSecureTmp(dir string) (tmpPath string, handle windows.Handle, err error) {
+	sd, err := ownerOnlyDescriptor()
+	if err != nil {
+		return "", 0, err
+	}
 	sa := windows.SecurityAttributes{
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		SecurityDescriptor: sd,
 		InheritHandle:      0,
 	}
 
-	pathUTF16, err := windows.UTF16PtrFromString(path)
+	for range 100 {
+		candidate := filepath.Join(dir, fmt.Sprintf(".secureperm-%d-%d", os.Getpid(), rand.Uint32()))
+		utf16, err := windows.UTF16PtrFromString(candidate)
+		if err != nil {
+			return "", 0, fmt.Errorf("encode tmp path: %w", err)
+		}
+		h, err := windows.CreateFile(
+			utf16,
+			windows.GENERIC_WRITE,
+			0, // exclusive — no sharing during write
+			&sa,
+			windows.CREATE_NEW,
+			windows.FILE_ATTRIBUTE_NORMAL,
+			0,
+		)
+		if err == nil {
+			return candidate, h, nil
+		}
+		if !errors.Is(err, windows.ERROR_FILE_EXISTS) && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+			return "", 0, fmt.Errorf("create tmp %s: %w", candidate, err)
+		}
+		// Name already in use — pick another.
+	}
+	return "", 0, errors.New("could not find unused tmp filename after 100 attempts")
+}
+
+// WriteFile writes data to path atomically under a protected DACL
+// granting only the current user SID.
+//
+// Atomic in the sense that either the write fully succeeds and path
+// references the new content, or it fails and the prior file is left
+// intact. Secrets files are not reconstructible (losing secrets.yaml
+// means reissuing cluster PKI), so the helper must not destroy the
+// existing file if the write can't complete.
+//
+// Strategy: create a hidden sibling tmp with CreateFile + CREATE_NEW +
+// SECURITY_ATTRIBUTES (protected owner-only DACL), write the bytes,
+// close the handle, rename over the target. Rename uses Win32
+// MoveFileEx with MOVEFILE_REPLACE_EXISTING under the hood (os.Rename
+// on Windows), which preserves the tmp's owner-only DACL on the final
+// file. At no point do the new bytes exist on disk under a permissive
+// DACL, and the old bytes remain readable by the owner until the final
+// rename succeeds.
+func WriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+
+	tmpPath, handle, err := createSecureTmp(dir)
 	if err != nil {
-		return fmt.Errorf("encode path: %w", err)
+		return err
 	}
 
-	handle, err := windows.CreateFile(
-		pathUTF16,
-		windows.GENERIC_WRITE|windows.WRITE_DAC,
-		0, // exclusive — no sharing during write
-		&sa,
-		windows.CREATE_ALWAYS,
-		windows.FILE_ATTRIBUTE_NORMAL,
-		0,
-	)
-	if err != nil {
-		return fmt.Errorf("create secure file %s: %w", path, err)
-	}
-
-	f := os.NewFile(uintptr(handle), path)
-	defer func() { _ = f.Close() }()
-
-	// Force the DACL onto the handle before writing bytes. Covers the
-	// overwrite case where SECURITY_ATTRIBUTES from CreateFile is
-	// ignored. Uses SetSecurityInfo on the handle (not the path) so
-	// nothing can re-open the file between the DACL switch and the
-	// write — share mode on the handle is 0.
-	if err := windows.SetSecurityInfo(
-		handle,
-		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil, nil, dacl, nil,
-	); err != nil {
-		return fmt.Errorf("set handle DACL on %s: %w", path, err)
-	}
+	f := os.NewFile(uintptr(handle), tmpPath)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write secure file %s: %w", path, err)
+		return fmt.Errorf("write tmp %s: %w", tmpPath, err)
 	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close tmp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename tmp %s -> %s: %w", tmpPath, path, err)
+	}
+	committed = true
 	return nil
 }
 

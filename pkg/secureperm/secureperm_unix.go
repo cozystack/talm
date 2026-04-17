@@ -16,18 +16,56 @@
 
 package secureperm
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
 
-// WriteFile writes data to path with mode 0o600. os.WriteFile only
-// applies the mode argument when creating the file — on overwrite it
-// preserves whatever bits were there, so a pre-existing 0o644 secrets
-// file would stay world-readable after rewrite. An explicit Chmod
-// afterwards guarantees the final mode regardless of prior state.
+// WriteFile writes data to path atomically with mode 0o600.
+//
+// Atomic in the sense that either the write fully succeeds and path
+// references the new content, or it fails and path is left in its
+// prior state — secrets files are not reconstructible (losing
+// secrets.yaml means reissuing cluster PKI), so the helper must not
+// destroy the existing file if the write can't complete.
+//
+// Strategy: create a hidden sibling tmp file in the same directory via
+// os.CreateTemp (which uses O_CREATE|O_EXCL|O_RDWR with mode 0o600,
+// so the tmp is already owner-only), write the bytes, then rename
+// over the target. Rename is atomic on POSIX when both paths live on
+// the same filesystem, which they do by construction.
 func WriteFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".secureperm-*")
+	if err != nil {
+		return fmt.Errorf("create tmp in %s: %w", dir, err)
 	}
-	return os.Chmod(path, 0o600)
+	tmpPath := f.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	// os.CreateTemp already uses 0o600 but enforce explicitly so the
+	// contract survives any future stdlib change.
+	if err := f.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod tmp: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("write tmp: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename tmp -> %s: %w", path, err)
+	}
+	committed = true
+	return nil
 }
 
 // LockDown narrows an existing file's permissions to 0o600.

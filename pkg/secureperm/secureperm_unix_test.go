@@ -62,9 +62,9 @@ func TestLockDown_Mode0600_Unix(t *testing.T) {
 }
 
 // TestWriteFile_OverwriteDowngrades_Unix pins the behavior that
-// rewriting an existing file with lax permissions tightens them.
-// os.WriteFile alone preserves prior mode bits on overwrite, so this
-// test fails unless WriteFile follows up with an explicit Chmod.
+// rewriting an existing file with lax permissions tightens them. The
+// atomic tmp+rename strategy achieves this because the renamed tmp
+// file was created with 0o600.
 func TestWriteFile_OverwriteDowngrades_Unix(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lax.txt")
@@ -82,5 +82,45 @@ func TestWriteFile_OverwriteDowngrades_Unix(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Errorf("mode after overwrite = %o, want 0600", got)
+	}
+}
+
+// TestWriteFile_PreservesOriginalOnFailure_Unix asserts the atomic
+// write contract: if the write cannot complete, the original file's
+// content is left intact. Secrets files are not reconstructible —
+// corrupting secrets.yaml costs the user a cluster rebuild.
+//
+// Failure is induced by marking the parent directory read-only, which
+// makes os.CreateTemp fail with EACCES inside the tmp-creation step.
+// The existing target file has content that must survive.
+func TestWriteFile_PreservesOriginalOnFailure_Unix(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — directory permission bits are ignored")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.yaml")
+
+	original := []byte("critical-content-DO-NOT-LOSE")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Make the directory non-writable so os.CreateTemp fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	err := secureperm.WriteFile(path, []byte("replacement"))
+	if err == nil {
+		t.Fatal("expected WriteFile to fail on read-only directory")
+	}
+
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("original file missing after failure: %v", readErr)
+	}
+	if string(got) != string(original) {
+		t.Errorf("original content corrupted on failure:\nwant %q\n got %q", original, got)
 	}
 }
