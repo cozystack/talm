@@ -345,7 +345,7 @@ var initCmd = &cobra.Command{
 				return fmt.Errorf("failed to marshal config: %+v", err)
 			}
 
-			if err = writeToDestination(data, talosconfigFile, 0o600); err != nil {
+			if err = writeSecureToDestination(data, talosconfigFile); err != nil {
 				return err
 			}
 		}
@@ -459,7 +459,7 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 		return err
 	}
 
-	return writeToDestination(bundleBytes, secretsFile, 0o600)
+	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
@@ -874,15 +874,29 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
-	// Route owner-only writes through secureperm so Windows files get an
-	// NTFS DACL applied — os.WriteFile's mode argument is effectively
-	// ignored on Windows.
-	var err error
-	if permissions == 0o600 {
-		err = secureperm.WriteFile(destination, data)
-	} else {
-		err = os.WriteFile(destination, data, permissions)
+	err := os.WriteFile(destination, data, permissions)
+
+	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
+
+	return err
+}
+
+// writeSecureToDestination writes a secret (talosconfig, secrets.yaml,
+// talm.key) with owner-only permissions. On Windows the NTFS DACL is
+// installed via secureperm so os.WriteFile's ignored mode bits aren't
+// the only defense.
+func writeSecureToDestination(data []byte, destination string) error {
+	if err := validateFileExists(destination); err != nil {
+		return err
 	}
+
+	parentDir := filepath.Dir(destination)
+
+	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+
+	err := secureperm.WriteFile(destination, data)
 
 	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
 
