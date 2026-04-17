@@ -101,62 +101,60 @@ Otherwise, kubeconfig will be written to PWD.`
 			return fmt.Errorf("failed to resolve kubeconfig path: %w", err)
 		}
 
-		if err == nil {
-			// Set secure permissions (600) on kubeconfig file. On Windows
-			// this lays down an NTFS DACL; os.Chmod would have been a no-op.
-			if err := secureperm.LockDown(absPath); err != nil {
-				// Don't fail the command if the tighten fails, but log warning
-				fmt.Fprintf(os.Stderr, "Warning: failed to set permissions on kubeconfig: %v\n", err)
-			}
+		// Set secure permissions (600) on kubeconfig file. On Windows
+		// this lays down an NTFS DACL; os.Chmod would have been a no-op.
+		if err := secureperm.LockDown(absPath); err != nil {
+			// Don't fail the command if the tighten fails, but log warning
+			fmt.Fprintf(os.Stderr, "Warning: failed to set permissions on kubeconfig: %v\n", err)
+		}
 
-			rootAbs, err := filepath.Abs(Config.RootDir)
-			if err == nil {
-				relPath, err := filepath.Rel(rootAbs, absPath)
-				if err == nil && !strings.HasPrefix(relPath, "..") {
-					// Path is within project root, add to .gitignore
-					fileName := filepath.Base(kubeconfigPath)
-					if fileName == "kubeconfig" {
-						if err := addToGitignore("kubeconfig"); err != nil {
-							// Don't fail the command if gitignore update fails
-							fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
-						}
+		rootAbs, err := filepath.Abs(Config.RootDir)
+		if err == nil {
+			relPath, err := filepath.Rel(rootAbs, absPath)
+			if err == nil && !strings.HasPrefix(relPath, "..") {
+				// Path is within project root, add to .gitignore
+				fileName := filepath.Base(kubeconfigPath)
+				if fileName == "kubeconfig" {
+					if err := addToGitignore("kubeconfig"); err != nil {
+						// Don't fail the command if gitignore update fails
+						fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
 					}
 				}
 			}
+		}
 
-			// Update kubeconfig server endpoint if endpoint is available
-			if len(GlobalArgs.Endpoints) > 0 {
-				endpoint := GlobalArgs.Endpoints[0]
-				if err := updateKubeconfigServer(absPath, endpoint); err != nil {
-					// Don't fail the command if update fails, but log warning
-					fmt.Fprintf(os.Stderr, "Warning: failed to update kubeconfig server endpoint: %v\n", err)
-				}
+		// Update kubeconfig server endpoint if endpoint is available
+		if len(GlobalArgs.Endpoints) > 0 {
+			endpoint := GlobalArgs.Endpoints[0]
+			if err := updateKubeconfigServer(absPath, endpoint); err != nil {
+				// Don't fail the command if update fails, but log warning
+				fmt.Fprintf(os.Stderr, "Warning: failed to update kubeconfig server endpoint: %v\n", err)
 			}
+		}
 
-			// Automatically update kubeconfig.encrypted if it exists and talm.key exists
-			// Skip this if --login flag is set
-			if !loginFlagValue {
-				// Get relative path from project root for encryption
-				rootAbs, err := filepath.Abs(Config.RootDir)
-				if err == nil {
-					relKubeconfigPath, err := filepath.Rel(rootAbs, absPath)
-					if err == nil && !strings.HasPrefix(relKubeconfigPath, "..") {
-						// Path is within project root
-						encryptedKubeconfigPath := relKubeconfigPath + ".encrypted"
-						encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
-						keyFile := filepath.Join(Config.RootDir, "talm.key")
+		// Automatically update kubeconfig.encrypted if it exists and talm.key exists
+		// Skip this if --login flag is set
+		if !loginFlagValue {
+			// Get relative path from project root for encryption
+			rootAbs, err := filepath.Abs(Config.RootDir)
+			if err == nil {
+				relKubeconfigPath, err := filepath.Rel(rootAbs, absPath)
+				if err == nil && !strings.HasPrefix(relKubeconfigPath, "..") {
+					// Path is within project root
+					encryptedKubeconfigPath := relKubeconfigPath + ".encrypted"
+					encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
+					keyFile := filepath.Join(Config.RootDir, "talm.key")
 
-						encryptedExists := fileExists(encryptedKubeconfigFile)
-						keyExists := fileExists(keyFile)
+					encryptedExists := fileExists(encryptedKubeconfigFile)
+					keyExists := fileExists(keyFile)
 
-						if encryptedExists && keyExists {
-							// Both files exist, encrypt kubeconfig
-							if err := age.EncryptYAMLFile(Config.RootDir, relKubeconfigPath, encryptedKubeconfigPath); err != nil {
-								// Don't fail the command if encryption fails, but log warning
-								fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
-							} else {
-								fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
-							}
+					if encryptedExists && keyExists {
+						// Both files exist, encrypt kubeconfig
+						if err := age.EncryptYAMLFile(Config.RootDir, relKubeconfigPath, encryptedKubeconfigPath); err != nil {
+							// Don't fail the command if encryption fails, but log warning
+							fmt.Fprintf(os.Stderr, "Warning: failed to encrypt kubeconfig: %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stderr, "Updated %s\n", encryptedKubeconfigPath)
 						}
 					}
 				}
