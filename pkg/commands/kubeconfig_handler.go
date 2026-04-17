@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/cozystack/talm/pkg/age"
+	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
 )
 
@@ -101,9 +102,10 @@ Otherwise, kubeconfig will be written to PWD.`
 		}
 
 		if err == nil {
-			// Set secure permissions (600) on kubeconfig file
-			if err := os.Chmod(absPath, 0o600); err != nil {
-				// Don't fail the command if chmod fails, but log warning
+			// Set secure permissions (600) on kubeconfig file. On Windows
+			// this lays down an NTFS DACL; os.Chmod would have been a no-op.
+			if err := secureperm.LockDown(absPath); err != nil {
+				// Don't fail the command if the tighten fails, but log warning
 				fmt.Fprintf(os.Stderr, "Warning: failed to set permissions on kubeconfig: %v\n", err)
 			}
 

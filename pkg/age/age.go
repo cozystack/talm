@@ -26,6 +26,8 @@ import (
 
 	"filippo.io/age"
 	"gopkg.in/yaml.v3"
+
+	"github.com/cozystack/talm/pkg/secureperm"
 )
 
 const (
@@ -65,7 +67,7 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	keyData += fmt.Sprintf("# public key: %s\n", publicKey)
 	keyData += identity.String() + "\n"
 
-	if err := os.WriteFile(keyFile, []byte(keyData), 0o600); err != nil {
+	if err := secureperm.WriteFile(keyFile, []byte(keyData)); err != nil {
 		return nil, false, fmt.Errorf("failed to write key file: %w", err)
 	}
 
@@ -263,7 +265,7 @@ func DecryptSecretsFile(rootDir string) error {
 	}
 
 	// Write decrypted file with secure permissions
-	if err := os.WriteFile(secretsFile, decryptedData, 0o600); err != nil {
+	if err := secureperm.WriteFile(secretsFile, decryptedData); err != nil {
 		return fmt.Errorf("failed to write decrypted file: %w", err)
 	}
 
@@ -652,7 +654,7 @@ func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 	}
 
 	// Write decrypted file with secure permissions
-	if err := os.WriteFile(plainFilePath, decryptedData, 0o600); err != nil {
+	if err := secureperm.WriteFile(plainFilePath, decryptedData); err != nil {
 		return fmt.Errorf("failed to write decrypted file: %w", err)
 	}
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/generated"
+	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -873,7 +874,15 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
-	err := os.WriteFile(destination, data, permissions)
+	// Route owner-only writes through secureperm so Windows files get an
+	// NTFS DACL applied — os.WriteFile's mode argument is effectively
+	// ignored on Windows.
+	var err error
+	if permissions == 0o600 {
+		err = secureperm.WriteFile(destination, data)
+	} else {
+		err = os.WriteFile(destination, data, permissions)
+	}
 
 	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
 
