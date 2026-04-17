@@ -24,6 +24,7 @@ import (
 
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/cozystack/talm/pkg/modeline"
+	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
 
 	"github.com/siderolabs/talos/pkg/machinery/client"
@@ -173,10 +174,9 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 					}
 
 					if templateCmdFlags.inplace {
-						if err = os.WriteFile(configFile, []byte(output), 0o644); err != nil {
-							return fmt.Errorf("failed to write file %s: %w", configFile, err)
+						if err := writeInplaceRendered(configFile, output); err != nil {
+							return err
 						}
-						fmt.Fprintf(os.Stderr, "Updated.\n")
 					} else {
 						if firstFileProcessed {
 							fmt.Println("---")
@@ -414,4 +414,17 @@ func init() {
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
 	addCommand(templateCmd)
+}
+
+// writeInplaceRendered writes the rendered template output over the
+// node config file. Routes through secureperm because the rendered
+// machine config embeds certs, PKI keys, and cluster join tokens —
+// exactly the material that must not end up readable by other users
+// on Windows (inherited DACL) or Unix (0o644).
+func writeInplaceRendered(configFile string, output string) error {
+	if err := secureperm.WriteFile(configFile, []byte(output)); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", configFile, err)
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "Updated.\n")
+	return nil
 }
