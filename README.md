@@ -50,6 +50,14 @@ Or use simple script to install it:
 curl -sSL https://github.com/cozystack/talm/raw/refs/heads/main/hack/install.sh | sh -s
 ```
 
+### Windows
+
+Windows is supported. Download the `talm-windows-*.zip` archive from the
+[releases page](https://github.com/cozystack/talm/releases/latest) and
+extract `talm.exe`. Template paths passed to flags like `-t` may use
+either `\` or `/` separators (`-t templates\controlplane.yaml` and
+`-t templates/controlplane.yaml` are equivalent).
+
 ## Getting Started
 
 Create new project
