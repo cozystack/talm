@@ -83,14 +83,17 @@ func TestWriteFile_NewFile_DACL_Windows(t *testing.T) {
 	assertProtectedOwnerOnlyDACL(t, path)
 }
 
-// TestWriteFile_Overwrite_DACL_Windows pins the fix for the CreateFile
-// + CREATE_ALWAYS + SECURITY_ATTRIBUTES gotcha: per MSDN, the
-// SECURITY_ATTRIBUTES descriptor is silently ignored when an existing
-// file is opened. If secureperm only relied on CreateFile to apply the
-// DACL then a pre-existing secrets.yaml left with a permissive
-// inherited DACL would stay permissive after rewrite. The fix
-// (SetSecurityInfo on the handle before writing bytes) must make the
-// post-write DACL protected and owner-only regardless of prior state.
+// TestWriteFile_Overwrite_DACL_Windows pins that overwriting a
+// pre-existing file with a permissive inherited DACL leaves the
+// final on-disk file with a protected owner-only DACL. secureperm
+// achieves this via tmp + rename: the tmp is created fresh with
+// CREATE_NEW + SECURITY_ATTRIBUTES so its DACL is owner-only from
+// birth, and os.Rename on Windows (MoveFileEx with MOVEFILE_REPLACE_
+// EXISTING) carries the tmp's DACL over in place of whatever the
+// destination held. Any future regression — for example switching the
+// tmp to CREATE_ALWAYS, which silently ignores SECURITY_ATTRIBUTES,
+// or writing directly to the destination instead of renaming — would
+// cause this test to fail.
 func TestWriteFile_Overwrite_DACL_Windows(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pre-existing.txt")
@@ -105,6 +108,51 @@ func TestWriteFile_Overwrite_DACL_Windows(t *testing.T) {
 		t.Fatalf("WriteFile (overwrite): %v", err)
 	}
 	assertProtectedOwnerOnlyDACL(t, path)
+}
+
+// TestWriteFile_PreservesOriginalOnFailure_Windows asserts the atomic-
+// write contract on Windows: if the rename step fails, the original
+// file content is left intact. Secrets files are not reconstructible
+// — corrupting secrets.yaml costs the user a cluster PKI reissue.
+//
+// Failure is induced by setting FILE_ATTRIBUTE_READONLY on the
+// destination: MoveFileEx with MOVEFILE_REPLACE_EXISTING fails with
+// ERROR_ACCESS_DENIED against a read-only target, so os.Rename
+// returns an error and the deferred cleanup in WriteFile removes the
+// tmp. The original content must still be readable afterwards.
+func TestWriteFile_PreservesOriginalOnFailure_Windows(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.yaml")
+
+	original := []byte("critical-content-DO-NOT-LOSE")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	pathUTF16, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatalf("UTF16PtrFromString: %v", err)
+	}
+	if err := windows.SetFileAttributes(pathUTF16, windows.FILE_ATTRIBUTE_READONLY); err != nil {
+		t.Fatalf("SetFileAttributes: %v", err)
+	}
+	t.Cleanup(func() {
+		// Drop the readonly flag so t.TempDir can clean up.
+		_ = windows.SetFileAttributes(pathUTF16, windows.FILE_ATTRIBUTE_NORMAL)
+	})
+
+	err = secureperm.WriteFile(path, []byte("replacement"))
+	if err == nil {
+		t.Fatal("expected WriteFile to fail when destination is read-only")
+	}
+
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("original file missing after failure: %v", readErr)
+	}
+	if string(got) != string(original) {
+		t.Errorf("original content corrupted on failure:\nwant %q\n got %q", original, got)
+	}
 }
 
 // TestLockDown_DACL_Windows mirrors the overwrite assertion for
