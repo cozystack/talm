@@ -1,28 +1,34 @@
 # REQUIRED. Cluster control-plane endpoint. Left empty intentionally
-# so the chart's `required` check fires loudly on a fresh install —
-# a placeholder default would silently embed a broken endpoint in
+# so the chart's `required` check fires loudly on a fresh install.
+# A placeholder default would silently embed a broken endpoint in
 # every rendered machine config. No auto-discovery is possible: this
 # is a cluster-wide value that every node's kubelet and kube-proxy
 # dials, not a per-node one.
 #
-# For cozystack deployments, set `endpoint` AND `floatingIP` below
-# to the SAME IP — floatingIP drives the per-node VIP (Layer2VIPConfig)
-# that endpoint points at. Leaving them mismatched produces a cluster
+# For cozystack VIP setups, set `endpoint` AND `floatingIP` below to
+# the SAME IP. floatingIP drives the per-node VIP (Layer2VIPConfig)
+# that endpoint points at; leaving them mismatched produces a cluster
 # that talks to an IP no node actually claims.
 #
 # For single-node clusters without a VIP, set `endpoint` to that
-# node's routable IP and blank out `floatingIP` below.
+# node's routable IP and leave `floatingIP` blank.
 #
 # For multi-node with an external load balancer, set `endpoint` to
-# the LB URL and blank out `floatingIP`.
+# the LB URL and leave `floatingIP` blank.
 #
-# Example: endpoint: "https://192.168.100.10:6443"
+# Example: endpoint: "https://192.168.0.1:6443"
 endpoint: ""
 
 clusterDomain: cozy.local
-# REQUIRED for cozystack VIP setups (must equal `endpoint` host).
-# Set to "" to disable the VIP (single-node or external LB scenarios).
-floatingIP: 192.168.100.10
+# Layer-2 VIP for cozystack multi-node setups. When set, the chart
+# emits a Layer2VIPConfig document pinning this IP as a floating
+# address on the node's primary link. MUST equal the host portion
+# of `endpoint` above, otherwise the cluster dials an IP that no
+# node actually claims. Blank by default so the shipped value never
+# silently embeds a wrong VIP -- fill in only if you want a VIP.
+# Single-node clusters and external-LB topologies leave it blank.
+# Example: floatingIP: 192.168.0.1
+floatingIP: ""
 image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
 podSubnets:
 - 10.244.0.0/16
