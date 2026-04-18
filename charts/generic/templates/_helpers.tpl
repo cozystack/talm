@@ -13,7 +13,14 @@ machine:
   kubelet:
     nodeIP:
       validSubnets:
+        {{- if .Values.advertisedSubnets }}
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
+        {{- else }}
+        {{- /* Fall back to the CIDR of the node's default-gateway-bearing link. */ -}}
+        {{- range fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
   {{- with .Values.certSANs }}
   certSANs:
   {{- toYaml . | nindent 2 }}
