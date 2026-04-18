@@ -964,3 +964,257 @@ func TestRenderInvalidTalosVersion(t *testing.T) {
 		})
 	}
 }
+
+// simpleNicLookup returns a lookup fixture exposing one physical
+// interface (eth0) with address 192.168.201.10/24 and default route
+// via 192.168.201.1. Used by the discovery-fallback tests below — the
+// specific subnet is intentionally different from the 192.168.100.*
+// placeholders baked into charts' historical defaults so the tests
+// can distinguish "discovered" from "default" output.
+func simpleNicLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.201.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth0",
+					"address":  "192.168.201.10/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.201.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "eth0" {
+				return eth0, nil
+			}
+			if id == "" {
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// renderCozystackWith renders the cozystack controlplane template
+// against the supplied LookupFunc and values overrides, returning the
+// final template output or failing the test. Mirrors the pattern used
+// by the existing TestMultiDoc* suites.
+func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return out["cozystack/templates/controlplane.yaml"]
+}
+
+// renderGenericWith is the generic-preset counterpart of renderCozystackWith.
+func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return out["generic/templates/controlplane.yaml"]
+}
+
+// TestMultiDocCozystack_ValidSubnetsFallsBackToDiscovery pins the
+// issue-report fix: when values.yaml leaves advertisedSubnets empty,
+// the chart must fall back to the CIDR of the node's default-gateway-
+// bearing link rather than emitting the 192.168.100.0/24 placeholder
+// that used to be the default. Without the fallback branch, users on
+// networks other than 192.168.100.0/24 silently shipped a broken
+// kubelet.validSubnets value.
+func TestMultiDocCozystack_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{},
+	})
+
+	// The discovered CIDR must appear under kubelet.validSubnets and
+	// must NOT contain the historical 192.168.100.0/24 placeholder.
+	assertContains(t, result, "validSubnets:")
+	assertContains(t, result, "- 192.168.201.10/24")
+	if strings.Contains(result, "192.168.100.0/24") {
+		t.Errorf("output contains stale placeholder 192.168.100.0/24:\n%s", result)
+	}
+}
+
+// TestMultiDocCozystack_AdvertisedSubnetsFallsBackToDiscovery pins
+// the same fallback behavior on etcd.advertisedSubnets.
+func TestMultiDocCozystack_AdvertisedSubnetsFallsBackToDiscovery(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{},
+	})
+
+	// etcd.advertisedSubnets section must appear (controlplane only)
+	// and list the discovered CIDR.
+	assertContains(t, result, "advertisedSubnets:")
+	assertContains(t, result, "- 192.168.201.10/24")
+}
+
+// TestMultiDocCozystack_ValuesAdvertisedSubnetsOverridesDiscovery
+// pins the precedence: when an operator sets advertisedSubnets
+// explicitly in values.yaml, that value wins over the discovered CIDR
+// in both kubelet.validSubnets and etcd.advertisedSubnets (two
+// consumers of the same chart value).
+//
+// The discovered CIDR (192.168.201.10/24) is still expected to appear
+// elsewhere in the rendered output — specifically in LinkConfig under
+// the physical interface's `addresses:` list — that is the normal
+// network discovery path and not the subject of this test. What this
+// test pins is that the override does NOT leave the discovered CIDR
+// in the two subnet-selector fields.
+func TestMultiDocCozystack_ValuesAdvertisedSubnetsOverridesDiscovery(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.0.0.0/8"},
+	})
+
+	// Expect 10.0.0.0/8 to appear at least twice — once in
+	// machine.kubelet.nodeIP.validSubnets and once in
+	// cluster.etcd.advertisedSubnets.
+	if got := strings.Count(result, "- 10.0.0.0/8"); got < 2 {
+		t.Errorf("operator override 10.0.0.0/8 should appear in both validSubnets and advertisedSubnets; saw %d occurrence(s):\n%s", got, result)
+	}
+	// Ensure the discovered CIDR did NOT leak into the subnet-selector
+	// fields. We rely on YAML list-item indentation to disambiguate
+	// from LinkConfig's `- address: ...` line, which is structurally
+	// different.
+	if strings.Contains(result, "- 192.168.201.10/24\n") {
+		t.Errorf("operator override should win but discovered CIDR leaked into a subnet-selector list:\n%s", result)
+	}
+}
+
+// TestMultiDocCozystack_EndpointRequired asserts that an unset or
+// empty .Values.endpoint now produces a clear error at render time
+// via Helm's required(), instead of silently embedding the stale
+// placeholder that values.yaml ships with.
+func TestMultiDocCozystack_EndpointRequired(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = simpleNicLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = ""
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err == nil {
+		t.Fatal("expected render to fail with required() error when endpoint is empty")
+	}
+	if !strings.Contains(err.Error(), "endpoint") {
+		t.Errorf("error should mention 'endpoint'; got: %v", err)
+	}
+}
+
+// TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery mirrors the
+// cozystack-side smoke test for the generic preset. A single
+// representative assertion proves the edits apply symmetrically to
+// the generic copy of the shared machine/cluster block.
+func TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
+	result := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{},
+	})
+
+	assertContains(t, result, "validSubnets:")
+	assertContains(t, result, "- 192.168.201.10/24")
+	if strings.Contains(result, "192.168.100.0/24") {
+		t.Errorf("output contains stale placeholder 192.168.100.0/24:\n%s", result)
+	}
+}
