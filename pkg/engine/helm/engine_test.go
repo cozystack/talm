@@ -1218,3 +1218,56 @@ func TestTalosVersionConcurrentRender(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestCidrNetworkTemplateFunc exercises the cidrNetwork template
+// function directly (bypassing chart rendering) so a future refactor
+// that breaks parsing or masking — for either IPv4 or IPv6 inputs —
+// is caught without needing to boot the whole helm engine.
+func TestCidrNetworkTemplateFunc(t *testing.T) {
+	renderExpr := func(expr string) (string, error) {
+		chrt := &chart.Chart{
+			Metadata:  &chart.Metadata{Name: "cidrtest"},
+			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Values:    map[string]any{},
+		}
+		var eng Engine
+		out, err := eng.Render(chrt, chartutil.Values{"Values": map[string]any{}})
+		if err != nil {
+			return "", err
+		}
+		return out["cidrtest/templates/out.yaml"], nil
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"ipv4 host form", "192.168.201.10/24", "192.168.201.0/24", false},
+		{"ipv4 already canonical", "10.0.0.0/8", "10.0.0.0/8", false},
+		{"ipv4 narrow prefix", "192.168.201.10/31", "192.168.201.10/31", false},
+		{"ipv6 host form", "2001:db8::1/64", "2001:db8::/64", false},
+		{"ipv6 already canonical", "fd00::/8", "fd00::/8", false},
+		{"malformed missing prefix", "192.168.201.10", "", true},
+		{"malformed garbage", "not-a-cidr", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderExpr(fmt.Sprintf(`{{ cidrNetwork %q }}`, tt.input))
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for input %q, got output %q", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("cidrNetwork(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

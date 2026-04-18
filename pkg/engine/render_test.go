@@ -1444,8 +1444,15 @@ func TestMultiDocCozystack_EmptyDiscoveryErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected required() error when advertisedSubnets is empty and discovery yields nothing")
 	}
+	// Assert on both the user-facing field name and the diagnostic
+	// phrase about the default route — two independent substrings
+	// that together pin the guidance the error is supposed to deliver.
+	// If a future reword drops either signal, this test catches it.
 	if !strings.Contains(err.Error(), "advertisedSubnets") {
-		t.Errorf("error should mention advertisedSubnets / default route; got: %v", err)
+		t.Errorf("error should mention advertisedSubnets field; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "default route") {
+		t.Errorf("error should mention 'default route' remediation; got: %v", err)
 	}
 }
 
