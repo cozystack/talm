@@ -261,10 +261,12 @@ func TestMultiDocCozystack_ControlPlane(t *testing.T) {
 	assertContains(t, output, "kind: RegistryMirrorConfig")
 	assertContains(t, output, "https://mirror.gcr.io")
 
-	// Multi-doc: Layer2VIPConfig emitted for controlplane when floatingIP is
-	// set in values (cozystack default: 192.168.100.10).
-	assertContains(t, output, "kind: Layer2VIPConfig")
-	assertContains(t, output, "192.168.100.10")
+	// Multi-doc: Layer2VIPConfig is gated on floatingIP, which is now
+	// blank in the shipped cozystack values.yaml (see
+	// TestMultiDocCozystack_Layer2VIPConfigWhenFloatingIPSet for the
+	// emitted-when-set path). Absence here asserts the chart does not
+	// fall back to a placeholder VIP on a fresh install.
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
 
 	// Multi-doc: network interface document present (LinkConfig or BondConfig)
 	hasLinkConfig := strings.Contains(output, "kind: LinkConfig")
@@ -1305,6 +1307,110 @@ func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "endpoint") {
 		t.Errorf("error should mention 'endpoint'; got: %v", err)
+	}
+}
+
+// TestMultiDocCozystack_Layer2VIPConfigWhenFloatingIPSet pins that
+// the VIP path still works when the operator explicitly sets
+// floatingIP — the fix for the shipped-placeholder bug blanked the
+// default but must not break the VIP feature itself.
+func TestMultiDocCozystack_Layer2VIPConfigWhenFloatingIPSet(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"floatingIP": "192.168.201.5",
+	})
+
+	assertContains(t, result, "kind: Layer2VIPConfig")
+	assertContains(t, result, `"192.168.201.5"`)
+}
+
+// TestMultiDocCozystack_NoVIPOnFreshDefaults asserts the corollary:
+// a fresh install keeps floatingIP blank, so Layer2VIPConfig must not
+// appear. This is the regression guard for the shipped-placeholder
+// fix — any future commit that re-introduces a non-empty floatingIP
+// default fails this test.
+func TestMultiDocCozystack_NoVIPOnFreshDefaults(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{})
+
+	assertNotContains(t, result, "kind: Layer2VIPConfig")
+}
+
+// TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses
+// pins that a link with multiple addresses in the same subnet emits
+// a single entry in validSubnets / advertisedSubnets, not one entry
+// per address. validSubnets is a set semantically, so duplicates are
+// noise that churns config diffs.
+func TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses(t *testing.T) {
+	// Lookup fixture: two addresses on eth0 in the same /24.
+	multiAddrLookup := func() func(string, string, string) (map[string]any, error) {
+		eth0 := map[string]any{
+			"metadata": map[string]any{"id": "eth0"},
+			"spec": map[string]any{
+				"kind":         "physical",
+				"index":        1,
+				"hardwareAddr": "aa:bb:cc:00:00:01",
+				"busPath":      "pci-0000:00:1f.0",
+			},
+		}
+		routesList := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "List",
+			"items": []any{
+				map[string]any{
+					"spec": map[string]any{
+						"dst": "", "gateway": "192.168.201.1",
+						"outLinkName": "eth0", "family": "inet4", "table": "main",
+					},
+				},
+			},
+		}
+		addressesList := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "List",
+			"items": []any{
+				map[string]any{"spec": map[string]any{
+					"linkName": "eth0", "address": "192.168.201.10/24",
+					"family": "inet4", "scope": "global",
+				}},
+				map[string]any{"spec": map[string]any{
+					"linkName": "eth0", "address": "192.168.201.11/24",
+					"family": "inet4", "scope": "global",
+				}},
+			},
+		}
+		return func(resource, namespace, id string) (map[string]any, error) {
+			switch resource {
+			case "routes":
+				return routesList, nil
+			case "links":
+				if id == "eth0" {
+					return eth0, nil
+				}
+				if id == "" {
+					return map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{eth0}}, nil
+				}
+			case "addresses":
+				return addressesList, nil
+			case "nodeaddress":
+				if id == "default" {
+					return map[string]any{"spec": map[string]any{"addresses": []any{"192.168.201.10/24"}}}, nil
+				}
+			case "resolvers":
+				if id == "resolvers" {
+					return map[string]any{"spec": map[string]any{"dnsServers": []any{"8.8.8.8"}}}, nil
+				}
+			}
+			return map[string]any{}, nil
+		}
+	}()
+
+	result := renderCozystackWith(t, multiAddrLookup, map[string]any{
+		"advertisedSubnets": []any{},
+	})
+
+	// Two addresses in the same subnet must collapse to one list entry.
+	if got := strings.Count(result, "- 192.168.201.0/24"); got != 2 {
+		// Expected: 1 in validSubnets + 1 in advertisedSubnets = 2 total.
+		t.Errorf("expected canonical subnet 192.168.201.0/24 to appear exactly 2 times (once each in validSubnets and advertisedSubnets), got %d:\n%s", got, result)
 	}
 }
 

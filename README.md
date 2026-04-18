@@ -59,25 +59,26 @@ cd newcluster
 talm init -p cozystack -N myawesomecluster
 ```
 
-Edit `values.yaml` to set your cluster's control-plane endpoint — the
-URL every node's kubelet and kube-proxy will dial. The chart leaves
-it empty on purpose so a missed override fails loudly instead of
-silently embedding a placeholder. For cozystack deployments set
-`endpoint` and `floatingIP` together (same IP, single VIP); for
-single-node clusters use that node's routable IP; for multi-node
-with an external load balancer use the LB URL. Subnet-selector
-fields (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived
-automatically from the node's default-gateway-bearing link — no
-override needed unless you have a multi-homed node that requires a
-specific subnet pinned.
+Edit `values.yaml` to set your cluster's control-plane endpoint. This
+is the URL every node's kubelet and kube-proxy will dial. The chart
+leaves it empty on purpose so a missed override fails loudly instead
+of silently embedding a placeholder. For cozystack VIP setups set
+`endpoint` and `floatingIP` together (same IP, single shared VIP);
+for single-node clusters use that node's routable IP and leave
+`floatingIP` blank; for multi-node with an external load balancer
+use the LB URL and leave `floatingIP` blank. Subnet-selector fields
+(`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived
+automatically from the node's default-gateway-bearing link, so no
+override is needed unless you have a multi-homed node that requires
+a specific subnet pinned.
+
+Boot Talos Linux node, let's say it has address `1.2.3.4`. Then:
 
 ```yaml
-# values.yaml
-endpoint: "https://192.168.0.1:6443"
-floatingIP: 192.168.0.1
+# values.yaml (single-node example matching the 1.2.3.4 node below)
+endpoint: "https://1.2.3.4:6443"
+floatingIP: ""
 ```
-
-Boot Talos Linux node, let's say it has address `1.2.3.4`
 
 Gather node information:
 ```bash
