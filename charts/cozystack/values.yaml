@@ -3,13 +3,25 @@
 # a placeholder default would silently embed a broken endpoint in
 # every rendered machine config. No auto-discovery is possible: this
 # is a cluster-wide value that every node's kubelet and kube-proxy
-# dials, not a per-node one. For cozystack deployments set it to the
-# floatingIP below; for single-node clusters set it to that node's
-# routable IP; for external load balancers use the LB's URL.
+# dials, not a per-node one.
+#
+# For cozystack deployments, set `endpoint` AND `floatingIP` below
+# to the SAME IP — floatingIP drives the per-node VIP (Layer2VIPConfig)
+# that endpoint points at. Leaving them mismatched produces a cluster
+# that talks to an IP no node actually claims.
+#
+# For single-node clusters without a VIP, set `endpoint` to that
+# node's routable IP and blank out `floatingIP` below.
+#
+# For multi-node with an external load balancer, set `endpoint` to
+# the LB URL and blank out `floatingIP`.
+#
 # Example: endpoint: "https://192.168.100.10:6443"
 endpoint: ""
 
 clusterDomain: cozy.local
+# REQUIRED for cozystack VIP setups (must equal `endpoint` host).
+# Set to "" to disable the VIP (single-node or external LB scenarios).
 floatingIP: 192.168.100.10
 image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
 podSubnets:
