@@ -92,7 +92,7 @@ cluster:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
   clusterName: "{{ .Chart.Name }}"
   controlPlane:
-    endpoint: "{{ .Values.endpoint }}"
+    endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane endpoint (e.g. https://<vip>:6443); no auto-discovery is possible because this is a cluster-wide value, not a per-node one" .Values.endpoint | quote }}
   {{- if eq .MachineType "controlplane" }}
   allowSchedulingOnControlPlanes: true
   controllerManager:
