@@ -28,6 +28,13 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 )
 
+// testEndpoint is the cluster endpoint injected by tests that do not
+// specifically exercise the `required endpoint` guard. The chart's
+// shipped values.yaml leaves `endpoint` empty so a fresh install
+// surfaces the missing value loudly; tests need to supply their own
+// placeholder so they can exercise the rest of the chart.
+const testEndpoint = "https://talm-test.invalid:6443"
+
 // renderChartTemplate renders a chart template in offline mode and returns the output.
 // talosVersion sets the TalosVersion in the Helm engine context (empty string for legacy).
 func renderChartTemplate(t *testing.T, chartPath string, templateFile string, talosVersion ...string) string {
@@ -48,8 +55,18 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 		tv = talosVersion[0]
 	}
 
+	// Inject a test endpoint when the chart's shipped default is empty
+	// (true for cozystack and generic presets post-issue-25 fix). Tests
+	// that specifically exercise the required-endpoint guard build their
+	// own values maps and do not go through this helper.
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+
 	rootValues := chartutil.Values{
-		"Values":       chrt.Values,
+		"Values":       values,
 		"TalosVersion": tv,
 	}
 
@@ -317,6 +334,7 @@ func TestLegacyCozystack_NrHugepages(t *testing.T) {
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
+	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
@@ -346,6 +364,7 @@ func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
+	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
@@ -820,9 +839,13 @@ func TestMultiDocCozystack_BondTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       chrt.Values,
+		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
 	if err != nil {
@@ -853,9 +876,13 @@ func TestMultiDocCozystack_VlanOnBondTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       chrt.Values,
+		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
 	if err != nil {
@@ -883,9 +910,13 @@ func TestMultiDocGeneric_BondTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       chrt.Values,
+		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
 	if err != nil {
@@ -912,9 +943,13 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       chrt.Values,
+		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
 	if err != nil {
@@ -1068,6 +1103,11 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 	}
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
+	// Default endpoint for tests that don't exercise the required guard.
+	// Caller overrides via the overrides map if it wants to trigger `required`.
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
 	maps.Copy(values, overrides)
 
 	eng := helmEngine.Engine{}
@@ -1094,6 +1134,9 @@ func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[st
 	}
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
 	maps.Copy(values, overrides)
 
 	eng := helmEngine.Engine{}
@@ -1216,5 +1259,71 @@ func TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 	assertContains(t, result, "- 192.168.201.10/24")
 	if strings.Contains(result, "192.168.100.0/24") {
 		t.Errorf("output contains stale placeholder 192.168.100.0/24:\n%s", result)
+	}
+}
+
+// TestMultiDocCozystack_ShippedDefaultsFailFresh asserts that a fresh
+// `talm init -p cozystack` user who keeps values.yaml defaults gets a
+// loud `required` error — not a silently-embedded placeholder
+// endpoint. Unlike TestMultiDocCozystack_EndpointRequired, this test
+// does NOT override `endpoint` manually; it relies exclusively on
+// what the chart ships by default, so it catches any future regression
+// that puts a non-empty placeholder back into values.yaml.
+func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = simpleNicLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+
+	eng := helmEngine.Engine{}
+	// Render with chrt.Values exactly as shipped — no test injection.
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       chrt.Values,
+		"TalosVersion": "v1.12",
+	})
+	if err == nil {
+		t.Fatal("expected render to fail on shipped defaults — values.yaml must not ship a placeholder endpoint that silently satisfies required()")
+	}
+	if !strings.Contains(err.Error(), "endpoint") {
+		t.Errorf("error should mention 'endpoint'; got: %v", err)
+	}
+}
+
+// TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery pins
+// the fallback on worker nodes. The kubelet.validSubnets block lives
+// in the shared talos.config.machine.common definition, so it is
+// emitted for both controlplane and worker templates — this test
+// catches a regression that would only break the worker path.
+func TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = simpleNicLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+	values["advertisedSubnets"] = []any{}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	result := out["cozystack/templates/worker.yaml"]
+	assertContains(t, result, "validSubnets:")
+	assertContains(t, result, "- 192.168.201.10/24")
+	if strings.Contains(result, "192.168.100.0/24") {
+		t.Errorf("worker output contains stale placeholder 192.168.100.0/24:\n%s", result)
 	}
 }
