@@ -1,4 +1,10 @@
+# REQUIRED. Cluster control-plane endpoint. No auto-discovery — this
+# is a cluster-wide value that every node's kubelet and kube-proxy
+# dials, not a per-node one. For cozystack deployments set it to the
+# floatingIP below; for single-node clusters set it to that node's
+# routable IP; for external load balancers use the LB's URL.
 endpoint: "https://192.168.100.10:6443"
+
 clusterDomain: cozy.local
 floatingIP: 192.168.100.10
 image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
@@ -6,8 +12,17 @@ podSubnets:
 - 10.244.0.0/16
 serviceSubnets:
 - 10.96.0.0/16
-advertisedSubnets:
-- 192.168.100.0/24
+
+# Optional override for machine.kubelet.nodeIP.validSubnets and
+# cluster.etcd.advertisedSubnets. When left empty the chart derives
+# the value from the node's default-gateway-bearing link at render
+# time (via talm.discovered.default_addresses_by_gateway), so the
+# generated machine config matches the node's actual network without
+# any values.yaml edit. Set this only when you want to pin a specific
+# subnet — typically for multi-homed nodes where the default-gateway
+# link is not the subnet you want kubelet/etcd to use.
+advertisedSubnets: []
+
 oidcIssuerUrl: ""
 certSANs: []
 nr_hugepages: 0
