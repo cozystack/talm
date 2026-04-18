@@ -16,9 +16,15 @@ machine:
         {{- if .Values.advertisedSubnets }}
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
         {{- else }}
-        {{- /* Fall back to the CIDR of the node's default-gateway-bearing link. */ -}}
-        {{- range fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
-        - {{ . }}
+        {{- /* Fall back to the subnet of the node's default-gateway-bearing link.
+               cidrNetwork masks host bits so the emitted YAML is the canonical
+               network form (192.168.201.0/24) rather than host-form (192.168.201.10/24). */ -}}
+        {{- $addrs := fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
+        {{- if not $addrs }}
+        {{- required "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery — no default-gateway-bearing link was found on the node. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." "" }}
+        {{- end }}
+        {{- range $addrs }}
+        - {{ . | cidrNetwork }}
         {{- end }}
         {{- end }}
   {{- with .Values.certSANs }}
@@ -52,9 +58,13 @@ cluster:
       {{- if .Values.advertisedSubnets }}
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
       {{- else }}
-      {{- /* Fall back to the CIDR of the node's default-gateway-bearing link. */ -}}
+      {{- /* Fall back to the subnet of the node's default-gateway-bearing link;
+             cidrNetwork masks host bits to emit canonical network form. Empty
+             discovery already errored earlier in the template via validSubnets'
+             required() guard, so we reach this block only when at least one
+             address was resolved. */ -}}
       {{- range fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
-      - {{ . }}
+      - {{ . | cidrNetwork }}
       {{- end }}
       {{- end }}
   {{- end }}

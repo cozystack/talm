@@ -35,6 +35,13 @@ import (
 // placeholder so they can exercise the rest of the chart.
 const testEndpoint = "https://talm-test.invalid:6443"
 
+// testAdvertisedSubnet is injected for tests that do not supply a
+// discovery fixture (so the chart's empty-discovery required() guard
+// doesn't fire in unrelated tests). Tests that specifically exercise
+// the discovery fallback or the empty-discovery guard override
+// advertisedSubnets explicitly.
+const testAdvertisedSubnet = "192.168.1.0/24"
+
 // renderChartTemplate renders a chart template in offline mode and returns the output.
 // talosVersion sets the TalosVersion in the Helm engine context (empty string for legacy).
 func renderChartTemplate(t *testing.T, chartPath string, templateFile string, talosVersion ...string) string {
@@ -55,14 +62,18 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 		tv = talosVersion[0]
 	}
 
-	// Inject a test endpoint when the chart's shipped default is empty
-	// (true for cozystack and generic presets post-issue-25 fix). Tests
-	// that specifically exercise the required-endpoint guard build their
-	// own values maps and do not go through this helper.
+	// Inject test defaults when the chart ships empty values (true
+	// for cozystack and generic presets post-issue-25 fix). Tests
+	// that specifically exercise the required-endpoint or empty-
+	// discovery guards build their own values maps and do not go
+	// through this helper.
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
+	}
+	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
+		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 	}
 
 	rootValues := chartutil.Values{
@@ -335,6 +346,7 @@ func TestLegacyCozystack_NrHugepages(t *testing.T) {
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
 	values["endpoint"] = testEndpoint
+	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
@@ -365,6 +377,7 @@ func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
 	values["endpoint"] = testEndpoint
+	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
@@ -1165,7 +1178,7 @@ func TestMultiDocCozystack_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 	// The discovered CIDR must appear under kubelet.validSubnets and
 	// must NOT contain the historical 192.168.100.0/24 placeholder.
 	assertContains(t, result, "validSubnets:")
-	assertContains(t, result, "- 192.168.201.10/24")
+	assertContains(t, result, "- 192.168.201.0/24")
 	if strings.Contains(result, "192.168.100.0/24") {
 		t.Errorf("output contains stale placeholder 192.168.100.0/24:\n%s", result)
 	}
@@ -1181,7 +1194,7 @@ func TestMultiDocCozystack_AdvertisedSubnetsFallsBackToDiscovery(t *testing.T) {
 	// etcd.advertisedSubnets section must appear (controlplane only)
 	// and list the discovered CIDR.
 	assertContains(t, result, "advertisedSubnets:")
-	assertContains(t, result, "- 192.168.201.10/24")
+	assertContains(t, result, "- 192.168.201.0/24")
 }
 
 // TestMultiDocCozystack_ValuesAdvertisedSubnetsOverridesDiscovery
@@ -1208,11 +1221,13 @@ func TestMultiDocCozystack_ValuesAdvertisedSubnetsOverridesDiscovery(t *testing.
 		t.Errorf("operator override 10.0.0.0/8 should appear in both validSubnets and advertisedSubnets; saw %d occurrence(s):\n%s", got, result)
 	}
 	// Ensure the discovered CIDR did NOT leak into the subnet-selector
-	// fields. We rely on YAML list-item indentation to disambiguate
-	// from LinkConfig's `- address: ...` line, which is structurally
-	// different.
-	if strings.Contains(result, "- 192.168.201.10/24\n") {
-		t.Errorf("operator override should win but discovered CIDR leaked into a subnet-selector list:\n%s", result)
+	// fields. The fallback emits the canonical network form
+	// (192.168.201.0/24) via cidrNetwork, while LinkConfig emits the
+	// host-form as `- address: 192.168.201.10/24` — so checking for
+	// the bare canonical form in the output is a strong signal that
+	// the fallback fired despite the operator override.
+	if strings.Contains(result, "- 192.168.201.0/24\n") {
+		t.Errorf("operator override should win but fallback-form subnet leaked into a subnet-selector list:\n%s", result)
 	}
 }
 
@@ -1256,7 +1271,7 @@ func TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 	})
 
 	assertContains(t, result, "validSubnets:")
-	assertContains(t, result, "- 192.168.201.10/24")
+	assertContains(t, result, "- 192.168.201.0/24")
 	if strings.Contains(result, "192.168.100.0/24") {
 		t.Errorf("output contains stale placeholder 192.168.100.0/24:\n%s", result)
 	}
@@ -1293,6 +1308,41 @@ func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
 	}
 }
 
+// TestMultiDocCozystack_EmptyDiscoveryErrors pins that when the
+// operator leaves advertisedSubnets empty AND discovery returns
+// nothing (no default-gateway-bearing link found), the chart fails
+// loudly via required() instead of silently emitting an empty
+// validSubnets list. A silent empty list would be worse than the
+// previous buggy default because nothing surfaces the problem.
+func TestMultiDocCozystack_EmptyDiscoveryErrors(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["endpoint"] = testEndpoint
+	values["advertisedSubnets"] = []any{}
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err == nil {
+		t.Fatal("expected required() error when advertisedSubnets is empty and discovery yields nothing")
+	}
+	if !strings.Contains(err.Error(), "advertisedSubnets") {
+		t.Errorf("error should mention advertisedSubnets / default route; got: %v", err)
+	}
+}
+
 // TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery pins
 // the fallback on worker nodes. The kubelet.validSubnets block lives
 // in the shared talos.config.machine.common definition, so it is
@@ -1322,7 +1372,7 @@ func TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery(t *testing.T) 
 	}
 	result := out["cozystack/templates/worker.yaml"]
 	assertContains(t, result, "validSubnets:")
-	assertContains(t, result, "- 192.168.201.10/24")
+	assertContains(t, result, "- 192.168.201.0/24")
 	if strings.Contains(result, "192.168.100.0/24") {
 		t.Errorf("worker output contains stale placeholder 192.168.100.0/24:\n%s", result)
 	}
