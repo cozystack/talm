@@ -21,15 +21,22 @@ machine:
         {{- if .Values.advertisedSubnets }}
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
         {{- else }}
-        {{- /* Fall back to the subnet of the node's default-gateway-bearing link.
-               cidrNetwork masks host bits so the emitted YAML is the canonical
-               network form (192.168.201.0/24) rather than host-form (192.168.201.10/24). */ -}}
+        {{- /* Fall back to the subnet of the node's default-gateway-bearing
+               link. cidrNetwork masks host bits so the emitted YAML is the
+               canonical network form (192.168.201.0/24) rather than the
+               host form (192.168.201.10/24). Dedupe after masking because
+               a link with a secondary address in the same subnet would
+               otherwise produce duplicate list entries. */ -}}
         {{- $addrs := fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
         {{- if not $addrs }}
-        {{- required "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery — no default-gateway-bearing link was found on the node. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." "" }}
+        {{- required "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery. No default-gateway-bearing link was found on the node. This field is a cluster-wide subnet selector fed to kubelet and etcd; `talm template` is invoked once per node and cannot merge per-node values into one cluster value. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." "" }}
         {{- end }}
+        {{- $subnets := list }}
         {{- range $addrs }}
-        - {{ . | cidrNetwork }}
+        {{- $subnets = append $subnets (. | cidrNetwork) }}
+        {{- end }}
+        {{- range uniq $subnets }}
+        - {{ . }}
         {{- end }}
         {{- end }}
     extraConfig:
@@ -98,7 +105,7 @@ cluster:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
   clusterName: "{{ .Chart.Name }}"
   controlPlane:
-    endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane endpoint (e.g. https://<vip>:6443); no auto-discovery is possible because this is a cluster-wide value, not a per-node one" .Values.endpoint | quote }}
+    endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP (cozystack floatingIP) or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
   {{- if eq .MachineType "controlplane" }}
   allowSchedulingOnControlPlanes: true
   controllerManager:
@@ -135,13 +142,18 @@ cluster:
       {{- if .Values.advertisedSubnets }}
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
       {{- else }}
-      {{- /* Fall back to the subnet of the node's default-gateway-bearing link;
-             cidrNetwork masks host bits to emit canonical network form. Empty
-             discovery already errored earlier in the template via validSubnets'
-             required() guard, so we reach this block only when at least one
-             address was resolved. */ -}}
+      {{- /* Fall back to the subnet of the node's default-gateway-bearing
+             link; cidrNetwork masks host bits to emit canonical network
+             form. Dedupe handled the same way as validSubnets above.
+             Empty discovery already errored via validSubnets' required()
+             guard, so we reach this block only when at least one address
+             was resolved. */ -}}
+      {{- $subnets := list }}
       {{- range fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
-      - {{ . | cidrNetwork }}
+      {{- $subnets = append $subnets (. | cidrNetwork) }}
+      {{- end }}
+      {{- range uniq $subnets }}
+      - {{ . }}
       {{- end }}
       {{- end }}
   {{- end }}

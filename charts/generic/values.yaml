@@ -1,11 +1,11 @@
 # REQUIRED. Cluster control-plane endpoint. Left empty intentionally
-# so the chart's `required` check fires loudly on a fresh install —
-# a placeholder default would silently embed a broken endpoint in
+# so the chart's `required` check fires loudly on a fresh install.
+# A placeholder default would silently embed a broken endpoint in
 # every rendered machine config. No auto-discovery is possible: this
 # is a cluster-wide value that every node's kubelet and kube-proxy
 # dials, not a per-node one. For single-node clusters set it to that
 # node's routable IP; for multi-node set it to a VIP or external LB.
-# Example: endpoint: "https://192.168.100.10:6443"
+# Example: endpoint: "https://192.168.0.1:6443"
 endpoint: ""
 
 podSubnets:
