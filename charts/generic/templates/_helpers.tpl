@@ -24,7 +24,7 @@ machine:
                otherwise produce duplicate list entries. */ -}}
         {{- $addrs := fromJsonArray (include "talm.discovered.default_addresses_by_gateway" .) }}
         {{- if not $addrs }}
-        {{- required "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery. No default-gateway-bearing link was found on the node. This field is a cluster-wide subnet selector fed to kubelet and etcd; `talm template` is invoked once per node and cannot merge per-node values into one cluster value. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." "" }}
+        {{- fail "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery. No default-gateway-bearing link was found on the node. This field is a cluster-wide subnet selector fed to kubelet and etcd; `talm template` is invoked once per node and cannot merge per-node values into one cluster value. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." }}
         {{- end }}
         {{- $subnets := list }}
         {{- range $addrs }}
