@@ -42,6 +42,40 @@ const testEndpoint = "https://talm-test.invalid:6443"
 // advertisedSubnets explicitly.
 const testAdvertisedSubnet = "192.168.1.0/24"
 
+// cloneValues returns a recursive deep copy of the chart values map.
+// maps.Copy is a shallow copy — mutating a nested map or slice in a
+// test would leak into chrt.Values and corrupt subsequent renders.
+// Since chart values consist only of maps, slices, and primitives,
+// a small switch + recursion suffices; no external dep needed.
+func cloneValues(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = deepClone(v)
+	}
+	return dst
+}
+
+func deepClone(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			out[k] = deepClone(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, vv := range x {
+			out[i] = deepClone(vv)
+		}
+		return out
+	default:
+		// Primitives (string, bool, int, float, nil) are immutable —
+		// safe to share.
+		return v
+	}
+}
+
 // renderChartTemplate renders a chart template in offline mode and returns the output.
 // talosVersion sets the TalosVersion in the Helm engine context (empty string for legacy).
 func renderChartTemplate(t *testing.T, chartPath string, templateFile string, talosVersion ...string) string {
@@ -66,9 +100,9 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 	// for cozystack and generic presets post-issue-25 fix). Tests
 	// that specifically exercise the required-endpoint or empty-
 	// discovery guards build their own values maps and do not go
-	// through this helper.
-	values := make(map[string]any)
-	maps.Copy(values, chrt.Values)
+	// through this helper. cloneValues deep-copies so a mutation
+	// here never leaks into chrt.Values.
+	values := cloneValues(chrt.Values)
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
@@ -1116,8 +1150,10 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 	if err != nil {
 		t.Fatalf("load chart: %v", err)
 	}
-	values := make(map[string]any)
-	maps.Copy(values, chrt.Values)
+	// Deep-copy chart values so mutations in this helper (or in the
+	// caller's overrides) never leak into chrt.Values and corrupt
+	// subsequent renders.
+	values := cloneValues(chrt.Values)
 	// Default endpoint for tests that don't exercise the required guard.
 	// Caller overrides via the overrides map if it wants to trigger `required`.
 	if v, _ := values["endpoint"].(string); v == "" {
@@ -1147,8 +1183,9 @@ func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[st
 	if err != nil {
 		t.Fatalf("load chart: %v", err)
 	}
-	values := make(map[string]any)
-	maps.Copy(values, chrt.Values)
+	// Deep-copy chart values so mutations in this helper (or in the
+	// caller's overrides) never leak into chrt.Values.
+	values := cloneValues(chrt.Values)
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
