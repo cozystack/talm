@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/cozystack/talm/pkg/modeline"
@@ -280,7 +279,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 			// Normalize the path (remove .. and .)
 			relPath = filepath.Clean(relPath)
 			// Check if path goes outside root
-			if strings.HasPrefix(relPath, "..") {
+			if isOutsideRoot(relPath) {
 				// Path goes outside root, try to find file in templates/ relative to root
 				// This handles cases like "../templates/controlplane.yaml" when file is actually in root/templates/
 				templateName := filepath.Base(templatePath)
@@ -421,7 +420,7 @@ func resolveEngineTemplatePaths(templateFiles []string, rootDir string) []string
 			continue
 		}
 		relPath = filepath.Clean(relPath)
-		if strings.HasPrefix(relPath, "..") {
+		if isOutsideRoot(relPath) {
 			templateName := filepath.Base(templatePath)
 			possiblePath := filepath.Join("templates", templateName)
 			fullPath := filepath.Join(absRootDir, possiblePath)

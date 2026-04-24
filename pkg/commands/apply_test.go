@@ -114,6 +114,12 @@ func TestResolveTemplatePaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpRoot, "templates"), 0o755); err != nil {
 		t.Fatalf("failed to create templates dir: %v", err)
 	}
+	// A sibling directory whose name literally starts with "..". A naive
+	// HasPrefix(relPath, "..") check would misclassify it as outside-root;
+	// the resolver must treat ".." as a full path element, not a prefix.
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "..templates"), 0o755); err != nil {
+		t.Fatalf("failed to create ..templates dir: %v", err)
+	}
 
 	// Build a platform-portable absolute path outside tmpRoot.
 	// filepath.VolumeName is "" on POSIX (yielding e.g. "/other/...") and
@@ -160,6 +166,15 @@ func TestResolveTemplatePaths(t *testing.T) {
 			templates: []string{absOutside},
 			rootDir:   tmpRoot,
 			want:      []string{filepath.ToSlash(absOutside)},
+		},
+		{
+			// Directory name literally starting with "..". If the
+			// outside-root check used HasPrefix("..") it would wrongly
+			// drop this path back to the original input.
+			name:      "sibling dir whose name starts with .. is inside rootDir",
+			templates: []string{"..templates/controlplane.yaml"},
+			rootDir:   tmpRoot,
+			want:      []string{"..templates/controlplane.yaml"},
 		},
 	}
 
