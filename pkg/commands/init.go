@@ -895,7 +895,10 @@ func writeSecureToDestination(data []byte, destination string) error {
 
 	parentDir := filepath.Dir(destination)
 
-	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+	// Use 0o700 so any newly-created parent dir for secrets is owner-only
+	// even under a permissive umask. MkdirAll is a no-op when the dir
+	// already exists, so this does not override pre-existing dir perms.
+	if err := os.MkdirAll(parentDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
