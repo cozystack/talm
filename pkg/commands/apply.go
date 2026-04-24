@@ -141,8 +141,9 @@ func apply(args []string) error {
 				}
 			} else {
 				if err := withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
+					resolved := resolveAuthTemplateNodes(nodes, c)
 					openClient := openClientPerNodeAuth(parentCtx, c)
-					return applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure)
+					return applyTemplatesPerNode(opts, configFile, resolved, openClient, engine.Render, applyClosure)
 				}); err != nil {
 					return err
 				}
@@ -305,6 +306,28 @@ func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClie
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
 		return action(client.WithNode(parentCtx, node), c)
 	}
+}
+
+// resolveAuthTemplateNodes returns the node list the authenticated
+// template-rendering path should iterate over. cliNodes (from --nodes
+// or the modeline) takes precedence; when empty, the talosconfig
+// context's Nodes are used so a user who already ran `talosctl config
+// node <ip>` does not have to repeat the node list on every `talm
+// apply`. Mirrors wrapWithNodeContext's fallback for the direct-patch
+// branch. Insecure mode does not call this helper — maintenance
+// clients talk to node IPs directly and have no talosconfig context.
+func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
+	if len(cliNodes) > 0 {
+		return cliNodes
+	}
+	if c == nil {
+		return nil
+	}
+	cfg := c.GetConfigContext()
+	if cfg == nil {
+		return nil
+	}
+	return append([]string(nil), cfg.Nodes...)
 }
 
 // renderMergeAndApply is the per-node body shared by every apply mode.

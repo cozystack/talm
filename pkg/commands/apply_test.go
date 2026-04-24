@@ -59,6 +59,25 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	}
 }
 
+func TestResolveAuthTemplateNodes_CLINodesWin(t *testing.T) {
+	in := []string{"10.0.0.1", "10.0.0.2"}
+	got := resolveAuthTemplateNodes(in, nil)
+	if !slices.Equal(got, in) {
+		t.Errorf("got %v, want %v (CLI nodes must take precedence over talosconfig context)", got, in)
+	}
+}
+
+func TestResolveAuthTemplateNodes_NilClientReturnsNil(t *testing.T) {
+	got := resolveAuthTemplateNodes(nil, nil)
+	if got != nil {
+		t.Errorf("got %v, want nil (no CLI nodes + no client = nothing to iterate, caller must surface the error)", got)
+	}
+	got = resolveAuthTemplateNodes([]string{}, nil)
+	if got != nil {
+		t.Errorf("got %v, want nil on empty slice + nil client", got)
+	}
+}
+
 func TestBuildApplyPatchOptions(t *testing.T) {
 	origTalosVersion := applyCmdFlags.talosVersion
 	origKubeVersion := applyCmdFlags.kubernetesVersion
