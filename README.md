@@ -72,22 +72,22 @@ automatically from the node's default-gateway-bearing link, so no
 override is needed unless you have a multi-homed node that requires
 a specific subnet pinned.
 
-Boot Talos Linux node, let's say it has address `1.2.3.4`. Then:
+Boot Talos Linux node, let's say it has address `192.0.2.4`. Then:
 
 ```yaml
-# values.yaml (single-node example matching the 1.2.3.4 node below)
-endpoint: "https://1.2.3.4:6443"
+# values.yaml (single-node example matching the 192.0.2.4 node below)
+endpoint: "https://192.0.2.4:6443"
 floatingIP: ""
 ```
 
 Gather node information:
 ```bash
-talm -n 1.2.3.4 -e 1.2.3.4 template -t templates/controlplane.yaml -i > nodes/node1.yaml
+talm -n 192.0.2.4 -e 192.0.2.4 template -t templates/controlplane.yaml -i > nodes/node1.yaml
 ```
 
 Edit `nodes/node1.yaml` file:
 ```yaml
-# talm: nodes=["1.2.3.4"], endpoints=["1.2.3.4"], templates=["templates/controlplane.yaml"]
+# talm: nodes=["192.0.2.4"], endpoints=["192.0.2.4"], templates=["templates/controlplane.yaml"]
 machine:
     network:
         # -- Discovered interfaces:
@@ -108,10 +108,10 @@ machine:
         interfaces:
             - interface: enx9c6b0047066c
               addresses:
-                - 1.2.3.4/26
+                - 192.0.2.4/26
               routes:
                 - network: 0.0.0.0/0
-                  gateway: 1.2.3.1
+                  gateway: 192.0.2.1
         nameservers:
             - 8.8.8.8
             - 8.8.4.4
@@ -132,7 +132,7 @@ machine:
 cluster:
     clusterName: talm
     controlPlane:
-        endpoint: https://192.168.0.1:6443
+        endpoint: https://192.0.2.4:6443
 ```
 
 > **Note:** The output format depends on the Talos version configured in `Chart.yaml` (`templateOptions.talosVersion`) or via the `--talos-version` CLI flag.
