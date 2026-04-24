@@ -258,7 +258,7 @@ func applyTemplatesPerNode(
 	apply applyFunc,
 ) error {
 	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes specified for template-rendering apply")
+		return fmt.Errorf("nodes are not set for the command: please use '--nodes' flag, the node file modeline, or talosconfig context to set the nodes to run the command against")
 	}
 	for _, node := range nodes {
 		if err := openClient(node, func(ctx context.Context, c *client.Client) error {

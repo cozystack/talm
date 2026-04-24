@@ -403,8 +403,18 @@ func TestApplyTemplatesPerNode_NoNodesIsAnError(t *testing.T) {
 		return nil
 	}
 
-	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil, fakeAuthOpenClient(context.Background()), render, apply); err == nil {
+	err := applyTemplatesPerNode(engine.Options{}, configFile, nil, fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
 		t.Fatal("expected an error for empty nodes list, got nil")
+	}
+	// The error must point the user at the concrete ways to set nodes
+	// so the message survives a cosmetic reword but catches a regression
+	// that drops the guidance entirely.
+	msg := err.Error()
+	for _, want := range []string{"nodes", "--nodes"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q does not mention %q", msg, want)
+		}
 	}
 }
 
