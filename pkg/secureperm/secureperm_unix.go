@@ -58,6 +58,15 @@ func WriteFile(path string, data []byte) error {
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write tmp: %w", err)
 	}
+	// fsync the tmp file before rename so its contents are on stable
+	// storage; otherwise a crash/power-loss between rename and the
+	// delayed disk flush can surface the renamed inode pointing at
+	// zero-length or stale data on reboot — the canonical failure mode
+	// the atomic-rename pattern is meant to avoid. Secrets files are
+	// not reconstructible, so the full fsync is warranted.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync tmp: %w", err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close tmp: %w", err)
 	}
@@ -65,6 +74,13 @@ func WriteFile(path string, data []byte) error {
 		return fmt.Errorf("rename tmp -> %s: %w", path, err)
 	}
 	committed = true
+	// Best-effort fsync of the parent dir so the rename entry itself is
+	// durable. Ignored errors: dir fsync is unsupported on a few
+	// filesystems; the tmp fsync above already protects the payload.
+	if d, openErr := os.Open(dir); openErr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 
