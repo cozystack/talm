@@ -48,6 +48,13 @@ func TestLockDown_Mode0600_Unix(t *testing.T) {
 	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	// os.WriteFile is subject to the process umask; force 0o644 so the
+	// lax-mode precondition is deterministic regardless of the host
+	// umask (a restrictive 0o077 would otherwise make the seed 0o600
+	// and the test pass without proving LockDown tightened anything).
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod seed: %v", err)
+	}
 	if err := secureperm.LockDown(path); err != nil {
 		t.Fatalf("LockDown: %v", err)
 	}
@@ -71,6 +78,12 @@ func TestWriteFile_OverwriteDowngrades_Unix(t *testing.T) {
 
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// Force the seed mode so the lax precondition survives a
+	// restrictive umask; otherwise the test can pass without actually
+	// verifying that WriteFile downgraded 0o644 to 0o600.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod seed: %v", err)
 	}
 	if err := secureperm.WriteFile(path, []byte("new")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
