@@ -260,6 +260,23 @@ func applyTemplatesPerNode(
 	if len(nodes) == 0 {
 		return fmt.Errorf("nodes are not set for the command: please use '--nodes' flag, the node file modeline, or talosconfig context to set the nodes to run the command against")
 	}
+	// A node-file body (hostname, address, VIP, etc.) is a per-node
+	// pin. Replaying it across multiple targets would stamp the same
+	// value onto every machine, so reject this combination early and
+	// ask the user to split the file. Modeline-only files (no body)
+	// are fine — they just carry the target list.
+	if len(nodes) > 1 {
+		hasOverlay, err := engine.NodeFileHasOverlay(configFile)
+		if err != nil {
+			return err
+		}
+		if hasOverlay {
+			return fmt.Errorf(
+				"node file %s targets %d nodes (%v) but carries a non-empty per-node body; the same body would be stamped onto every node. Split it into one file per node, or remove the per-node fields if you want the rendered template alone applied to each",
+				configFile, len(nodes), nodes,
+			)
+		}
+	}
 	for _, node := range nodes {
 		if err := openClient(node, func(ctx context.Context, c *client.Client) error {
 			return renderMergeAndApply(ctx, c, opts, configFile, render, apply)

@@ -245,6 +245,18 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	return merged, nil
 }
 
+// NodeFileHasOverlay reports whether a node file carries a non-empty
+// per-node body below its modeline. The apply path uses this to reject
+// multi-node node files that would otherwise stamp the same pinned
+// hostname/address/VIP onto every target.
+func NodeFileHasOverlay(patchFile string) (bool, error) {
+	data, err := os.ReadFile(patchFile)
+	if err != nil {
+		return false, fmt.Errorf("reading node file %s: %w", patchFile, err)
+	}
+	return !isEffectivelyEmptyYAML(data), nil
+}
+
 // isEffectivelyEmptyYAML reports whether the input contains nothing but
 // YAML comments, document separators, and whitespace. Used by
 // MergeFileAsPatch to detect modeline-only node files that the Talos

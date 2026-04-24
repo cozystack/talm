@@ -1170,6 +1170,59 @@ machine:
 	})
 }
 
+// TestNodeFileHasOverlay pins the classifier used by the apply path to
+// decide whether a multi-node modeline would replay a per-node body
+// onto every target. Modeline-only and comments-only files must
+// classify as no-overlay; any real YAML key must count as an overlay.
+func TestNodeFileHasOverlay(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "modeline only",
+			content: `# talm: nodes=["a","b"]` + "\n",
+			want:    false,
+		},
+		{
+			name:    "empty file",
+			content: "",
+			want:    false,
+		},
+		{
+			name:    "comments and separators",
+			content: "# top\n---\n# middle\n  \n---\n# bottom\n",
+			want:    false,
+		},
+		{
+			name: "real yaml body",
+			content: `# talm: nodes=["a"]
+machine:
+  network:
+    hostname: node0
+`,
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "node.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			got, err := NodeFileHasOverlay(path)
+			if err != nil {
+				t.Fatalf("NodeFileHasOverlay: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("NodeFileHasOverlay = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestRenderFailIfMultiNodes_UsesCommandName guards the contract for
 // Options.CommandName: the multi-node rejection error must reference the
 // calling subcommand the caller passed in, never the historical

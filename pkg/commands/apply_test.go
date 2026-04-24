@@ -384,6 +384,78 @@ func TestApplyTemplatesPerNode_NeverBatchesNodes(t *testing.T) {
 	}
 }
 
+// TestApplyTemplatesPerNode_MultiNodeWithNonEmptyBodyIsRejected pins
+// the guard against stamping a single per-node body (pinned hostname,
+// address, VIP) onto every target. A node file that targets more than
+// one node and carries a body below its modeline is user error; the
+// helper must surface it instead of silently replicating the pin.
+func TestApplyTemplatesPerNode_MultiNodeWithNonEmptyBodyIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	body := `# talm: nodes=["10.0.0.1","10.0.0.2"]
+machine:
+  network:
+    hostname: node0
+`
+	if err := os.WriteFile(configFile, []byte(body), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		t.Fatal("render must not be called when the multi-node overlay guard trips")
+		return nil, nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		t.Fatal("apply must not be called when the multi-node overlay guard trips")
+		return nil
+	}
+
+	err := applyTemplatesPerNode(engine.Options{}, configFile,
+		[]string{"10.0.0.1", "10.0.0.2"},
+		fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
+		t.Fatal("expected an error for multi-node + non-empty body, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"node file", "2 nodes", "per-node body"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed pins that the
+// overlay guard does NOT trip on a modeline-only node file (the common
+// bootstrap shape: one file drives the same template across N nodes
+// without pinning any per-node field).
+func TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte(`# talm: nodes=["10.0.0.1","10.0.0.2"]`+"\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	renderCount := 0
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		renderCount++
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	applyCount := 0
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		applyCount++
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{}, configFile,
+		[]string{"10.0.0.1", "10.0.0.2"},
+		fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+	if renderCount != 2 || applyCount != 2 {
+		t.Errorf("render=%d apply=%d, want 2 each", renderCount, applyCount)
+	}
+}
+
 // TestApplyTemplatesPerNode_NoNodesIsAnError guards against silently
 // short-circuiting when GlobalArgs.Nodes is empty. The previous structure
 // would happily run zero iterations — this pin makes it loud.
