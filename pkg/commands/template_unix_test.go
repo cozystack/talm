@@ -56,6 +56,12 @@ func TestWriteInplaceRendered_OverwriteDowngrades_Unix(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	// os.WriteFile is subject to the process umask, so force 0o644
+	// explicitly — otherwise a restrictive umask (e.g. 0o077) leaves
+	// the seed at 0o600 and the test passes vacuously.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod seed: %v", err)
+	}
 	if err := writeInplaceRendered(path, "new"); err != nil {
 		t.Fatalf("writeInplaceRendered: %v", err)
 	}
