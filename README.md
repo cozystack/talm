@@ -149,6 +149,25 @@ talm template -f nodes/node1.yaml -I
 > survive even when the template auto-generates conflicting values
 > (e.g. `hostname: talos-XXXXX`).
 >
+> **Talos v1.12+ caveat.** The multi-document output format introduced
+> in v1.12 splits network configuration into typed documents
+> (`LinkConfig`, `BondConfig`, `VLANConfig`, `Layer2VIPConfig`,
+> `HostnameConfig`, `ResolverConfig`). Legacy node-body fields under
+> `machine.network.interfaces` have no safe 1:1 mapping to those types,
+> so the multi-doc path does not translate them — if you target a
+> v1.12+ Talos node, pin per-node network settings by patching the
+> typed resources (e.g. a `LinkConfig` document below the modeline)
+> rather than legacy `machine.network.interfaces`. Fields outside the
+> network area (`machine.network.hostname` via `HostnameConfig`,
+> `machine.install.disk`, extra etcd args, etc.) still merge as
+> expected.
+>
+> **One body, one node.** A non-empty body is a per-node pin, so the
+> modeline for that file must target exactly one node. `talm apply`
+> refuses a multi-node modeline when the body is non-empty; modeline-
+> only files (no body) are still allowed and drive the same rendered
+> template on every listed target.
+>
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply
 > the same overlay: its output is the rendered template plus the modeline
 > and the auto-generated warning, byte-identical to what the template
