@@ -341,11 +341,13 @@ vlans:
 {{- end -}}
 {{- end -}}
 
-{{- /* JSON list of non-default routes on the given link. Each entry is a flat
-       map {dst, gateway, family, table, priority} so consumers can
-       fromJsonArray + range + dig. Absent fields are emitted as empty
-       strings; present fields including the integer 0 (e.g. priority: 0)
-       round-trip through toString. */ -}}
+{{- /* JSON list of non-default routes on the given link, across all
+       routing tables (the `table` field is included so callers can
+       filter — gateway_by_link narrows to table=main, this helper does
+       not). Each entry is a flat map {dst, gateway, family, table,
+       priority} so consumers can fromJsonArray + range + dig. Absent
+       fields are emitted as empty strings; present fields including the
+       integer 0 (e.g. priority: 0) round-trip through toString. */ -}}
 {{- define "talm.discovered.routes_by_link" -}}
 {{- $linkName := . -}}
 {{- $routes := list -}}
@@ -366,20 +368,24 @@ vlans:
 {{- toJson $routes -}}
 {{- end -}}
 
-{{- /* Scalar MAC address for the given link, or empty if the link or its
-       spec is missing (test mocks may return {} for unknown ids). */ -}}
+{{- /* Scalar MAC address for the given link, or empty if the link is
+       missing or has no hardwareAddr (virtual links have spec but may
+       lack the field; test mocks may return {} for unknown ids). The
+       field guard prevents `nil | toString` from rendering "<nil>". */ -}}
 {{- define "talm.discovered.mac_by_link" -}}
 {{- $link := lookup "links" "" . -}}
-{{- if and $link $link.spec -}}
+{{- if and $link $link.spec $link.spec.hardwareAddr -}}
 {{- $link.spec.hardwareAddr | toString -}}
 {{- end -}}
 {{- end -}}
 
-{{- /* Scalar PCI / bus path for the given link, or empty if the link or its
-       spec is missing. */ -}}
+{{- /* Scalar PCI / bus path for the given link, or empty if the link is
+       missing or has no busPath (virtual links such as bonds expose a
+       spec without a busPath). The field guard prevents
+       `nil | toString` from rendering "<nil>". */ -}}
 {{- define "talm.discovered.bus_by_link" -}}
 {{- $link := lookup "links" "" . -}}
-{{- if and $link $link.spec -}}
+{{- if and $link $link.spec $link.spec.busPath -}}
 {{- $link.spec.busPath | toString -}}
 {{- end -}}
 {{- end -}}

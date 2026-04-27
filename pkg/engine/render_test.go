@@ -1387,6 +1387,8 @@ gw_eth1={{ include "talm.discovered.gateway_by_link" "eth1" }}
 routes_eth1={{ include "talm.discovered.routes_by_link" "eth1" }}
 mac_eth1={{ include "talm.discovered.mac_by_link" "eth1" }}
 bus_eth1={{ include "talm.discovered.bus_by_link" "eth1" }}
+mac_bond0={{ include "talm.discovered.mac_by_link" "bond0" }}
+bus_bond0={{ include "talm.discovered.bus_by_link" "bond0" }}
 mac_unknown={{ include "talm.discovered.mac_by_link" "doesnotexist" }}
 bus_unknown={{ include "talm.discovered.bus_by_link" "doesnotexist" }}
 selector_eth1=
@@ -1435,6 +1437,12 @@ selector_eth1=
 	assertNotContains(t, output, `\u003cnil\u003e`)
 	assertContains(t, output, "mac_eth1=aa:bb:cc:dd:ee:01")
 	assertContains(t, output, "bus_eth1=pci-0000:00:1f.1")
+	// Virtual link with a present spec but missing busPath: a present-spec
+	// path through bus_by_link must not surface "<nil>" via `nil | toString`.
+	// bond0's fixture has hardwareAddr but no busPath, so mac_bond0 returns
+	// the synthetic MAC and bus_bond0 must be empty.
+	assertContains(t, output, "mac_bond0=aa:bb:cc:dd:ee:ff")
+	assertContains(t, output, "bus_bond0=\n")
 	// Unknown link must yield empty MAC/busPath even when the lookup mock
 	// returns an empty map (real Helm returns nil; defensive on both).
 	assertContains(t, output, "mac_unknown=\n")
