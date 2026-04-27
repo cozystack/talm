@@ -35,6 +35,15 @@ import (
 // so the tmp is already owner-only), write the bytes, then rename
 // over the target. Rename is atomic on POSIX when both paths live on
 // the same filesystem, which they do by construction.
+//
+// Ownership note: tmp + rename produces a file owned by the calling
+// process's uid/gid, which differs from os.WriteFile's open-with-
+// O_TRUNC behaviour where the existing inode's owner is preserved.
+// Running talm under a different uid than a previous invocation
+// (e.g. once via sudo, then as the unprivileged user) will therefore
+// change ownership on the secrets file. The single-user workstation
+// flow this helper targets is unaffected; mixed-uid setups should
+// invoke talm under a consistent identity.
 func WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".secureperm-*")
