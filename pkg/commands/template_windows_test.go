@@ -39,6 +39,8 @@ import (
 // resolves relative against rootDir; template resolves relative
 // against CWD with a templates/<basename> fallback), so covering one
 // does not cover the other.
+//
+// Not safe with t.Parallel — uses os.Chdir, which is process-global.
 func TestResolveEngineTemplatePaths_BackslashInput(t *testing.T) {
 	rootDir := t.TempDir()
 	absRoot, err := filepath.Abs(rootDir)

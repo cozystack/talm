@@ -25,6 +25,8 @@ import (
 // "..templates") is not mistaken for an outside-root path and routed
 // through the templates/<basename> fallback — that would silently
 // substitute a different file when one exists under templates/.
+//
+// Not safe with t.Parallel — uses os.Chdir, which is process-global.
 func TestResolveEngineTemplatePaths_DotDotPrefixedDir(t *testing.T) {
 	// Resolve symlinks so the rootDir and the post-Chdir cwd share the
 	// same canonical form — on macOS, t.TempDir lives under /var/...
