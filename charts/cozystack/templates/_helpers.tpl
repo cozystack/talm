@@ -29,6 +29,17 @@ machine:
     net.ipv4.neigh.default.gc_thresh1: "4096"
     net.ipv4.neigh.default.gc_thresh2: "8192"
     net.ipv4.neigh.default.gc_thresh3: "16384"
+    # TCP orphan handling
+    net.ipv4.tcp_orphan_retries: "3"
+    net.ipv4.tcp_fin_timeout: "30"
+    # Network backlog
+    net.core.netdev_max_backlog: "5000"
+    net.core.netdev_budget: "600"
+    net.core.netdev_budget_usecs: "8000"
+    # TCP keepalive (early detection of dead connections)
+    net.ipv4.tcp_keepalive_time: "600"
+    net.ipv4.tcp_keepalive_intvl: "10"
+    net.ipv4.tcp_keepalive_probes: "6"
   kernel:
     modules:
     - name: openvswitch
@@ -120,6 +131,9 @@ cluster:
   etcd:
     advertisedSubnets:
       {{- toYaml .Values.advertisedSubnets | nindent 6 }}
+    extraArgs:
+      quota-backend-bytes: "8589934592"  # 8GiB - prevent etcd running out of space with large LINSTOR CRD datasets
+      max-request-bytes: "10485760"      # 10MiB - allow larger CRD objects to be stored
   {{- end }}
 {{- end }}
 
