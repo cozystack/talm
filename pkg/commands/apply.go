@@ -118,7 +118,7 @@ func apply(args []string) error {
 			// applyTemplatesPerNode for why the loop is mandatory.
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 			nodes := append([]string(nil), GlobalArgs.Nodes...)
-			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
+			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
 
 			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
@@ -300,6 +300,14 @@ type maintenanceClientFunc func(fingerprints []string, action func(ctx context.C
 // round-robins ApplyConfiguration across them — most nodes never see the
 // config. Narrowing GlobalArgs.Nodes to the current iteration's node and
 // restoring it via defer keeps the wrapper's signature unchanged.
+//
+// Correctness depends on mkClient reading GlobalArgs.Nodes synchronously
+// — i.e. before action returns. WithClientMaintenance does this today
+// (it builds the client with the endpoints and calls action inside the
+// same goroutine). A future Talos refactor that defers endpoint
+// resolution onto a goroutine, or that captures the slice for later
+// use, would silently break this contract; an upstream overload that
+// takes endpoints as a parameter would be the durable fix.
 //
 // mkClient is normally WithClientMaintenance; tests pass a fake that
 // captures the GlobalArgs.Nodes value at the moment WithClientMaintenance
