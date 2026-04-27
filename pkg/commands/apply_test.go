@@ -740,3 +740,33 @@ machine:
 	// itself. The modeline round-trip tests in pkg/modeline surface a
 	// regression that would wire MergeFileAsPatch into generateOutput.
 }
+
+// TestIsOutsideRoot pins the contract that distinguishes a path that
+// truly escapes the project root (".." or a first element of "..")
+// from a path whose first element merely *starts* with ".." but is
+// itself a valid sibling-directory name (e.g. "..templates"). The
+// distinction matters wherever a caller routes inside-root paths
+// differently from outside-root ones; a HasPrefix("..") test
+// silently misclassifies the latter as outside-root.
+func TestIsOutsideRoot(t *testing.T) {
+	cases := []struct {
+		relPath string
+		want    bool
+	}{
+		{"..", true},
+		{".." + string(filepath.Separator) + "foo", true},
+		{".." + string(filepath.Separator) + "foo" + string(filepath.Separator) + "bar", true},
+		{"..foo", false},
+		{"..foo" + string(filepath.Separator) + "bar", false},
+		{"..templates" + string(filepath.Separator) + "controlplane.yaml", false},
+		{"..mykube", false},
+		{"foo", false},
+		{"foo" + string(filepath.Separator) + "..bar", false},
+		{".", false},
+	}
+	for _, c := range cases {
+		if got := isOutsideRoot(c.relPath); got != c.want {
+			t.Errorf("isOutsideRoot(%q) = %v, want %v", c.relPath, got, c.want)
+		}
+	}
+}
