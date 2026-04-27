@@ -1204,6 +1204,16 @@ machine:
 `,
 			want: true,
 		},
+		{
+			// A "---" with leading whitespace is not a YAML document
+			// separator (separators must be at column 0); it's a
+			// scalar inside a parent mapping. Treating it as a
+			// separator would misclassify a real overlay as empty
+			// and let the multi-node guard be bypassed.
+			name:    "indented separator counts as overlay",
+			content: "# talm: nodes=[\"a\",\"b\"]\nmachine:\n  ---\n",
+			want:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

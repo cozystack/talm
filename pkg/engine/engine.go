@@ -261,6 +261,11 @@ func NodeFileHasOverlay(patchFile string) (bool, error) {
 // YAML comments, document separators, and whitespace. Used by
 // MergeFileAsPatch to detect modeline-only node files that the Talos
 // config-patcher misclassifies as empty JSON6902 patches.
+//
+// Document separators must appear at column 0 per the YAML spec; an
+// indented "  ---" is a scalar inside a parent mapping, not a
+// separator, so the comparison is against the line minus only trailing
+// whitespace rather than against the fully trimmed form.
 func isEffectivelyEmptyYAML(data []byte) bool {
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
@@ -270,7 +275,8 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 		if trimmed[0] == '#' {
 			continue
 		}
-		if string(trimmed) == "---" || string(trimmed) == "..." {
+		untrailed := string(bytes.TrimRight(line, " \t\r"))
+		if untrailed == "---" || untrailed == "..." {
 			continue
 		}
 		return false
