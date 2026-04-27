@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/secureperm"
@@ -111,7 +110,7 @@ Otherwise, kubeconfig will be written to PWD.`
 		rootAbs, err := filepath.Abs(Config.RootDir)
 		if err == nil {
 			relPath, err := filepath.Rel(rootAbs, absPath)
-			if err == nil && !strings.HasPrefix(relPath, "..") {
+			if err == nil && !isOutsideRoot(relPath) {
 				// Path is within project root, add to .gitignore
 				fileName := filepath.Base(kubeconfigPath)
 				if fileName == "kubeconfig" {
@@ -139,7 +138,7 @@ Otherwise, kubeconfig will be written to PWD.`
 			rootAbs, err := filepath.Abs(Config.RootDir)
 			if err == nil {
 				relKubeconfigPath, err := filepath.Rel(rootAbs, absPath)
-				if err == nil && !strings.HasPrefix(relKubeconfigPath, "..") {
+				if err == nil && !isOutsideRoot(relKubeconfigPath) {
 					// Path is within project root
 					encryptedKubeconfigPath := relKubeconfigPath + ".encrypted"
 					encryptedKubeconfigFile := filepath.Join(Config.RootDir, encryptedKubeconfigPath)
