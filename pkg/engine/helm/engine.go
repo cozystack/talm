@@ -19,6 +19,7 @@ package engine
 import (
 	"fmt"
 	"log"
+	"net/netip"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -216,6 +217,19 @@ func (e Engine) initFunMap(t *template.Template) {
 		funcMap["getHostByName"] = func(name string) string {
 			return ""
 		}
+	}
+
+	// cidrNetwork canonicalizes a CIDR string to its network form
+	// ("192.168.201.10/24" -> "192.168.201.0/24"), matching what
+	// operators see in Talos docs and upstream examples. Sprig ships
+	// no equivalent; net/netip's ParsePrefix + Masked handles both
+	// IPv4 and IPv6 without any host-bit arithmetic in the template.
+	funcMap["cidrNetwork"] = func(cidr string) (string, error) {
+		p, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return "", fmt.Errorf("cidrNetwork: %w", err)
+		}
+		return p.Masked().String(), nil
 	}
 
 	t.Funcs(funcMap)

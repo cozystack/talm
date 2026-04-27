@@ -1,8 +1,29 @@
-endpoint: "https://192.168.100.10:6443"
+# REQUIRED. Cluster control-plane endpoint. Left empty intentionally
+# so the chart's `required` check fires loudly on a fresh install.
+# A placeholder default would silently embed a broken endpoint in
+# every rendered machine config. No auto-discovery is possible: this
+# is a cluster-wide value that every node's kubelet and kube-proxy
+# dials, not a per-node one. For single-node clusters set it to that
+# node's routable IP; for multi-node set it to a VIP or external LB.
+# Example: endpoint: "https://192.168.0.1:6443"
+endpoint: ""
+
 podSubnets:
 - 10.244.0.0/16
 serviceSubnets:
 - 10.96.0.0/16
-advertisedSubnets:
-- 192.168.100.0/24
+
+# Optional override for machine.kubelet.nodeIP.validSubnets and
+# cluster.etcd.advertisedSubnets. When left empty the chart derives
+# the value from the node's default-gateway-bearing link at render
+# time (via talm.discovered.default_addresses_by_gateway), so the
+# generated machine config matches the node's actual network without
+# any values.yaml edit. Set this only when you want to pin a specific
+# subnet — typically for multi-homed nodes where the default-gateway
+# link is not the subnet you want kubelet/etcd to use.
+# Example:
+#   advertisedSubnets:
+#     - "10.0.0.0/8"
+advertisedSubnets: []
+
 certSANs: []
