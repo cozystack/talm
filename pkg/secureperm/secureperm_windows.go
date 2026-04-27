@@ -145,9 +145,6 @@ func createSecureTmp(dir string) (tmpPath string, handle windows.Handle, err err
 // rename succeeds.
 func WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
-	}
 
 	tmpPath, handle, err := createSecureTmp(dir)
 	if err != nil {
@@ -165,6 +162,17 @@ func WriteFile(path string, data []byte) error {
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write tmp %s: %w", tmpPath, err)
+	}
+	// FlushFileBuffers (the Windows backend for *os.File.Sync) before
+	// rename so the tmp's contents are on stable storage. os.Rename on
+	// Windows uses MoveFileEx without MOVEFILE_WRITE_THROUGH, so a
+	// crash/power-loss between rename and the OS cache flush would
+	// otherwise surface the renamed file pointing at zero-length or
+	// stale data on reboot — the canonical failure mode the atomic-
+	// rename pattern is meant to avoid. Secrets files are not
+	// reconstructible, so the flush is warranted.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync tmp %s: %w", tmpPath, err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close tmp %s: %w", tmpPath, err)
