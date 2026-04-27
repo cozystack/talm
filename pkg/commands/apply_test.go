@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -286,6 +287,13 @@ func nodesFromOutgoingCtx(t *testing.T, ctx context.Context) []string {
 // fakeAuthOpenClient mimics openClientPerNodeAuth for tests: shares one
 // (nil) parent client across iterations and rotates the node via WithNode
 // on a fresh per-iteration context.
+//
+// The action receives a nil *client.Client. Callers are responsible for
+// not dereferencing it; tests that exercise client method calls must
+// inject a real client via a different fake. The nil here is deliberate
+// — it makes any future change inside applyTemplatesPerNode that starts
+// dereferencing the client surface as a panic in CI rather than as
+// silent test coverage of an untouched code path.
 func fakeAuthOpenClient(parentCtx context.Context) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
 		return action(client.WithNode(parentCtx, node), nil)
@@ -586,6 +594,36 @@ func TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes(t *testing.T
 		if !slices.Equal(calls[i].fingerprints, []string{"fp-1"}) {
 			t.Errorf("call %d: fingerprints passed through = %v, want [\"fp-1\"]", i, calls[i].fingerprints)
 		}
+	}
+}
+
+// TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError pins the
+// restore-on-error half of the contract: even when the action returns
+// an error, the deferred restore must put GlobalArgs.Nodes back. The
+// success-path counterpart lives in
+// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes;
+// without this companion, a future refactor that swaps the defer for an
+// explicit restore-after-success block would silently regress the
+// error path.
+func TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError(t *testing.T) {
+	saved := append([]string(nil), GlobalArgs.Nodes...)
+	defer func() { GlobalArgs.Nodes = saved }()
+
+	GlobalArgs.Nodes = []string{"original-A", "original-B"}
+
+	failingMaintenance := func(_ []string, action func(ctx context.Context, c *client.Client) error) error {
+		return action(context.Background(), nil)
+	}
+	openClient := openClientPerNodeMaintenance(nil, failingMaintenance)
+
+	err := openClient("10.0.0.1", func(_ context.Context, _ *client.Client) error {
+		return fmt.Errorf("simulated apply failure")
+	})
+	if err == nil {
+		t.Fatal("expected error from failing action, got nil")
+	}
+	if !slices.Equal(GlobalArgs.Nodes, []string{"original-A", "original-B"}) {
+		t.Errorf("GlobalArgs.Nodes not restored after error: got %v, want [original-A original-B]", GlobalArgs.Nodes)
 	}
 }
 
