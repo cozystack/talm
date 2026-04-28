@@ -135,6 +135,65 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 	return result
 }
 
+// renderChartTemplateWithLookup renders a chart with a custom LookupFunc (or
+// offline empty-map default when nil). Restores the previous LookupFunc on
+// cleanup so tests don't leak state.
+func renderChartTemplateWithLookup(t *testing.T, chartPath string, templateFile string, lookup func(string, string, string) (map[string]any, error), talosVersion ...string) string {
+	t.Helper()
+
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+
+	if lookup != nil {
+		helmEngine.LookupFunc = lookup
+	} else {
+		helmEngine.LookupFunc = func(string, string, string) (map[string]any, error) {
+			return map[string]any{}, nil
+		}
+	}
+
+	chrt, err := loader.LoadDir(chartPath)
+	if err != nil {
+		t.Fatalf("failed to load chart from %s: %v", chartPath, err)
+	}
+
+	tv := ""
+	if len(talosVersion) > 0 {
+		tv = talosVersion[0]
+	}
+
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
+		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	}
+
+	rootValues := chartutil.Values{
+		"Values":       values,
+		"TalosVersion": tv,
+	}
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, rootValues)
+	if err != nil {
+		t.Fatalf("failed to render chart: %v", err)
+	}
+
+	key := path.Join(chrt.Name(), templateFile)
+	result, ok := out[key]
+	if !ok {
+		var keys []string
+		for k := range out {
+			keys = append(keys, k)
+		}
+		t.Fatalf("template %s not found in output, available keys: %v", key, keys)
+	}
+
+	return result
+}
+
 // assertContains checks that the output contains the expected substring.
 func assertContains(t *testing.T, output string, substr string) {
 	t.Helper()
@@ -265,7 +324,7 @@ func TestLegacyGeneric_Worker(t *testing.T) {
 // --- Multi-doc format tests for cozystack (v1.12+) ---
 
 func TestMultiDocCozystack_ControlPlane(t *testing.T) {
-	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12")
+	output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", simpleNicLookup(), "v1.12")
 
 	// Multi-doc: machine section retains non-deprecated fields
 	assertContains(t, output, "machine:")
@@ -336,7 +395,7 @@ func TestMultiDocCozystack_Worker(t *testing.T) {
 
 func TestMultiDocCozystack_LegacyFallback(t *testing.T) {
 	// v1.11 should produce legacy format even for cozystack chart
-	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.11")
+	output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", simpleNicLookup(), "v1.11")
 
 	// Legacy format present
 	assertContains(t, output, "    interfaces:")
@@ -432,7 +491,7 @@ func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 // --- Multi-doc format tests for generic (v1.12+) ---
 
 func TestMultiDocGeneric_ControlPlane(t *testing.T) {
-	output := renderChartTemplate(t, "../../charts/generic", "templates/controlplane.yaml", "v1.12")
+	output := renderChartTemplateWithLookup(t, "../../charts/generic", "templates/controlplane.yaml", simpleNicLookup(), "v1.12")
 
 	// Multi-doc: machine section still present but WITHOUT legacy network fields
 	assertContains(t, output, "machine:")
@@ -460,7 +519,7 @@ func TestMultiDocGeneric_ControlPlane(t *testing.T) {
 }
 
 func TestMultiDocGeneric_Worker(t *testing.T) {
-	output := renderChartTemplate(t, "../../charts/generic", "templates/worker.yaml", "v1.12")
+	output := renderChartTemplateWithLookup(t, "../../charts/generic", "templates/worker.yaml", simpleNicLookup(), "v1.12")
 
 	// Multi-doc: machine section present
 	assertContains(t, output, "machine:")
@@ -1013,6 +1072,418 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	assertContains(t, result, "parent: bond0")
 	assertContains(t, result, "address: 10.0.0.50/24")
 	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+// multiNicMultipleDefaultRoutesLookup emulates a node with two physical NICs,
+// each carrying a default route. eth0 is in `table=main`, eth1 is in a non-main
+// table (e.g. an alternate routing table) and a third interface has a main-table
+// route that should be ignored once the first match is taken. Used to verify
+// `default_link_name_by_gateway` (#108) returns a single deterministic value
+// rather than concatenating link names from every matching route.
+func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	eth2 := map[string]any{
+		"metadata": map[string]any{"id": "eth2"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:02",
+			"busPath":      "pci-0000:00:1f.2",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.99.0.1",
+					"outLinkName": "eth1",
+					"family":      "inet4",
+					"table":       "private",
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.2.1",
+					"outLinkName": "eth2",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, eth1, eth2},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth0",
+					"address":  "192.168.1.10/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth1",
+					"address":  "10.99.0.5/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth2",
+					"address":  "192.168.2.10/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "eth1":
+				return eth1, nil
+			case "eth2":
+				return eth2, nil
+			case "":
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// TestDefaultLinkByGatewayHelpers_MultiNIC is a regression test for #108.
+// When a node has multiple default routes (typical for DHCP on multi-NIC
+// machines), the helpers historically iterated all matches and concatenated
+// the outputs (e.g. `eth0eth1eth2`) and didn't filter by `table=main`.
+// After the fix the helpers must:
+//   - filter routes by table=main
+//   - return exactly one value (the first matching route)
+func TestDefaultLinkByGatewayHelpers_MultiNIC(t *testing.T) {
+	const tmpl = `link={{ include "talm.discovered.default_link_name_by_gateway" . }}
+mac={{ include "talm.discovered.default_link_address_by_gateway" . }}
+bus={{ include "talm.discovered.default_link_bus_by_gateway" . }}
+`
+	chartRoot := createTestChart(t, "tc", "out.yaml", tmpl)
+
+	// Vendor the talm helpers into the test chart so the include resolves.
+	helpersSrc, err := os.ReadFile("../../charts/talm/templates/_helpers.tpl")
+	if err != nil {
+		t.Fatalf("read helpers: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartRoot, "templates", "_helpers.tpl"), helpersSrc, 0o644); err != nil {
+		t.Fatalf("write vendored helpers: %v", err)
+	}
+
+	output := renderChartTemplateWithLookup(t, chartRoot, "templates/out.yaml", multiNicMultipleDefaultRoutesLookup())
+
+	assertContains(t, output, "link=eth0\n")
+	assertContains(t, output, "mac=aa:bb:cc:dd:ee:00\n")
+	// default_link_bus_by_gateway must return the busPath, not the MAC.
+	// Long-standing copy-paste bug from the address helper: see commit log.
+	assertContains(t, output, "bus=pci-0000:00:1f.0\n")
+	assertNotContains(t, output, "bus=aa:bb:cc:dd:ee:00")
+	assertNotContains(t, output, "eth1")
+	assertNotContains(t, output, "eth2")
+}
+
+// secondaryNicLookup emulates a node with two physical NICs (eth0 primary
+// with a default route, eth1 storage with a static subnet route and no
+// default) plus a bond master link. Used to exercise the multi-NIC discovery
+// helpers added for #125.
+func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	bond0 := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":         "bond",
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			// IPv6 default route ordered first so a missing family filter in
+			// gateway_by_link would return fe80::1 instead of the IPv4
+			// gateway. Required for the no-IPv4-family-filter regression.
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "fe80::1",
+					"outLinkName": "eth0",
+					"family":      "inet6",
+					"table":       "main",
+					"priority":    1024,
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "10.0.0.0/24",
+					"gateway":     "",
+					"outLinkName": "eth1",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "10.10.0.0/16",
+					"gateway":     "10.0.0.254",
+					"outLinkName": "eth1",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    200,
+				},
+			},
+			// Route with several fields absent — exercises the kindIs
+			// "invalid" guard in routes_by_link so consumers never see "<nil>".
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "172.16.0.0/12",
+					"outLinkName": "eth1",
+					"table":       "main",
+				},
+			},
+			// Route with priority: 0 — int zero must round-trip through
+			// printf "%v" (the older `default ""` guard collapsed it to "").
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "203.0.113.0/24",
+					"gateway":     "10.0.0.1",
+					"outLinkName": "eth1",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    0,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, eth1, bond0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.1.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.0.0.5/24", "family": "inet4", "scope": "global"}},
+			// IPv6 link-local on a configurable link — addresses_by_link must
+			// filter scope=link out so callers never configure fe80::/64.
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "fe80::aa:bbff:fecc:dd01/64", "family": "inet6", "scope": "link"}},
+			// Address with no scope set at all — must also be filtered out
+			// (defensive: real Talos always emits scope, but missing-field
+			// safety matters for user mocks and future API changes).
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.99.99.99/32", "family": "inet4"}},
+			map[string]any{"spec": map[string]any{"linkName": "lo", "address": "127.0.0.1/8", "family": "inet4", "scope": "host"}},
+		},
+	}
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "eth1":
+				return eth1, nil
+			case "bond0":
+				return bond0, nil
+			case "":
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// TestSecondaryNicHelpers covers the per-link helpers added for #125. They
+// expose every physical NIC (not just the primary one carrying the default
+// route) so user templates can configure secondary uplinks (e.g. storage
+// network on a control-plane).
+func TestSecondaryNicHelpers(t *testing.T) {
+	const tmpl = `physical={{ include "talm.discovered.physical_link_names" . }}
+configurable={{ include "talm.discovered.configurable_link_names" . }}
+addr_eth0={{ include "talm.discovered.addresses_by_link" "eth0" }}
+addr_eth1={{ include "talm.discovered.addresses_by_link" "eth1" }}
+gw_eth0={{ include "talm.discovered.gateway_by_link" "eth0" }}
+gw_eth1={{ include "talm.discovered.gateway_by_link" "eth1" }}
+routes_eth1={{ include "talm.discovered.routes_by_link" "eth1" }}
+mac_eth1={{ include "talm.discovered.mac_by_link" "eth1" }}
+bus_eth1={{ include "talm.discovered.bus_by_link" "eth1" }}
+mac_bond0={{ include "talm.discovered.mac_by_link" "bond0" }}
+bus_bond0={{ include "talm.discovered.bus_by_link" "bond0" }}
+mac_unknown={{ include "talm.discovered.mac_by_link" "doesnotexist" }}
+bus_unknown={{ include "talm.discovered.bus_by_link" "doesnotexist" }}
+selector_eth1=
+{{ include "talm.discovered.link_selector_by_name" "eth1" }}
+`
+	chartRoot := createTestChart(t, "tc", "out.yaml", tmpl)
+	helpersSrc, err := os.ReadFile("../../charts/talm/templates/_helpers.tpl")
+	if err != nil {
+		t.Fatalf("read helpers: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartRoot, "templates", "_helpers.tpl"), helpersSrc, 0o644); err != nil {
+		t.Fatalf("write vendored helpers: %v", err)
+	}
+
+	output := renderChartTemplateWithLookup(t, chartRoot, "templates/out.yaml", secondaryNicLookup())
+
+	assertContains(t, output, `physical=["eth0","eth1"]`)
+	// configurable_link_names must include the bond master too.
+	assertContains(t, output, `configurable=["eth0","eth1","bond0"]`)
+	assertContains(t, output, `addr_eth0=["192.168.1.10/24"]`)
+	// eth1 has 4 raw addresses but only the global one survives the filter:
+	// fe80::/64 (scope=link), 10.99.99.99/32 (no scope), 127.0.0.1/8
+	// (scope=host on lo, different link) — all rejected.
+	assertContains(t, output, `addr_eth1=["10.0.0.5/24"]`)
+	assertNotContains(t, output, "fe80::aa:bbff:fecc:dd01")
+	assertNotContains(t, output, "10.99.99.99")
+	// gateway_by_link returns IPv4 even when an IPv6 default route is also
+	// present on the same link.
+	assertContains(t, output, "gw_eth0=192.168.1.1")
+	assertNotContains(t, output, "gw_eth0=fe80::1")
+	// Storage NIC has no default route.
+	assertContains(t, output, "gw_eth1=\n")
+	// Static routes are exposed; default route is excluded.
+	assertContains(t, output, `"dst":"10.0.0.0/24"`)
+	assertContains(t, output, `"dst":"10.10.0.0/16"`)
+	assertContains(t, output, `"dst":"172.16.0.0/12"`)
+	assertContains(t, output, `"dst":"203.0.113.0/24"`)
+	assertContains(t, output, `"gateway":"10.0.0.254"`)
+	assertNotContains(t, output, `"dst":""`)
+	// priority: 0 must round-trip as "0", not collapse to "" via sprig
+	// `default ""`.
+	assertContains(t, output, `"priority":"0"`)
+	// Missing route fields must render as empty strings, never "<nil>" or
+	// HTML-escaped "\u003cnil\u003e".
+	assertNotContains(t, output, "<nil>")
+	assertNotContains(t, output, `\u003cnil\u003e`)
+	assertContains(t, output, "mac_eth1=aa:bb:cc:dd:ee:01")
+	assertContains(t, output, "bus_eth1=pci-0000:00:1f.1")
+	// Virtual link with a present spec but missing busPath: a present-spec
+	// path through bus_by_link must not surface "<nil>" via `nil | toString`.
+	// bond0's fixture has hardwareAddr but no busPath, so mac_bond0 returns
+	// the synthetic MAC and bus_bond0 must be empty.
+	assertContains(t, output, "mac_bond0=aa:bb:cc:dd:ee:ff")
+	assertContains(t, output, "bus_bond0=\n")
+	// Unknown link must yield empty MAC/busPath even when the lookup mock
+	// returns an empty map (real Helm returns nil; defensive on both).
+	assertContains(t, output, "mac_unknown=\n")
+	assertContains(t, output, "bus_unknown=\n")
+	assertContains(t, output, "busPath: pci-0000:00:1f.1")
+}
+
+// TestNetworkMultidoc_NoDiscovery is a regression test for #58. When discovery
+// returns no default route (offline render, isolated node, custom networking),
+// the multidoc cozystack template must NOT emit a LinkConfig/BondConfig/
+// VLANConfig/Layer2VIPConfig with empty `name:` — Talos v1.12 rejects such
+// documents with `[networking.os.device.interface] required`.
+func TestNetworkMultidoc_NoDiscovery(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12")
+
+	assertNotContains(t, output, "kind: LinkConfig")
+	assertNotContains(t, output, "kind: BondConfig")
+	assertNotContains(t, output, "kind: VLANConfig")
+	assertNotContains(t, output, "kind: Layer2VIPConfig")
+	// HostnameConfig/ResolverConfig still emit (independent of link discovery).
+	assertContains(t, output, "kind: HostnameConfig")
+	assertContains(t, output, "kind: ResolverConfig")
+}
+
+// TestNetworkLegacy_NoDiscovery is a regression test for #58 covering the
+// legacy (Talos < v1.12) path. The `interfaces:` key was unconditionally
+// emitted, producing either an empty list or a `- interface:` block with an
+// empty interface name when discovery found no default route. Either form
+// breaks Talos validation. After the fix, the template must skip both
+// `interfaces:` and the per-interface block entirely.
+func TestNetworkLegacy_NoDiscovery(t *testing.T) {
+	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.11")
+
+	// `    interfaces:` (the YAML key) must not appear; the helper-emitted
+	// `# -- Discovered interfaces:` comment is fine and intentional.
+	assertNotContains(t, output, "    interfaces:")
+	assertNotContains(t, output, "- interface: \n")
+	// Hostname / nameservers should still be rendered — they are independent
+	// of link discovery.
+	assertContains(t, output, "hostname:")
+	assertContains(t, output, "nameservers:")
 }
 
 // TestMergeFileAsPatch pins the contract for the apply-side overlay of a

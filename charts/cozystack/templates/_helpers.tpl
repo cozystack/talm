@@ -183,6 +183,7 @@ nameservers:
   []
 {{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
+{{- if $defaultLinkName }}
 {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
 {{- $parentLinkName := "" }}
 {{- if $isVlan }}
@@ -269,6 +270,7 @@ name: {{ .Values.floatingIP | quote }}
 link: {{ $vipLinkName }}
 {{- end }}
 {{- end }}
+{{- end }}
 
 {{- /* Shared legacy network section for machine.network */ -}}
 {{- define "talos.config.network.legacy" }}
@@ -276,12 +278,13 @@ link: {{ $vipLinkName }}
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
-    interfaces:
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
+    {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
+    {{- if or $existingInterfacesConfiguration $defaultLinkName }}
+    interfaces:
     {{- if $existingInterfacesConfiguration }}
     {{- $existingInterfacesConfiguration | nindent 4 }}
     {{- else }}
-    {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
     {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
     {{- $parentLinkName := "" }}
     {{- if $isVlan }}
@@ -317,6 +320,7 @@ link: {{ $vipLinkName }}
         ip: {{ .Values.floatingIP }}
       {{- end }}
       {{- end }}
+    {{- end }}
     {{- end }}
 {{- end }}
 

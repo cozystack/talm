@@ -69,6 +69,7 @@
 {{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- $linkName = .spec.outLinkName }}
 {{- $family = .spec.family }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- $addresses := list }}
@@ -106,31 +107,34 @@
 
 {{- define "talm.discovered.default_link_name_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- .spec.outLinkName }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_address_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- (lookup "links" "" .spec.outLinkName).spec.hardwareAddr }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_bus_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
-{{- (lookup "links" "" .spec.outLinkName).spec.hardwareAddr }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- (lookup "links" "" .spec.outLinkName).spec.busPath }}
+{{- break }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- define "talm.discovered.default_link_selector_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
 {{- with (lookup "links" "" .spec.outLinkName) }}
 busPath: {{ .spec.busPath }}
 {{- break }}
@@ -264,5 +268,134 @@ true
 {{- if and $link (eq $link.spec.kind "vlan") -}}
 vlans:
   - vlanId: {{ $link.spec.vlan.vlanID }}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Multi-NIC discovery helpers (#125).
+
+  The `default_*_by_gateway` family above resolves only the link carrying the
+  default route (primary). Templates targeting nodes with secondary NICs
+  (storage links on a control-plane, second uplink, etc.) need to enumerate
+  every physical link and read its addresses/routes/MAC by name. The helpers
+  below are the by-name building blocks; existing default_*_by_gateway helpers
+  remain wrappers that resolve the primary link and call into these.
+*/ -}}
+
+{{- /* JSON list of physical link names (raw NICs only — not bond/vlan masters).
+       Renamed from `physical_links` to avoid collision with the older
+       `physical_links_info` helper, which renders YAML comments. */ -}}
+{{- define "talm.discovered.physical_link_names" -}}
+{{- $names := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) -}}
+{{- $names = append $names .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{- /* JSON list of every link a user template can configure: physical NICs
+       plus bond / vlan / bridge top-level links. */ -}}
+{{- define "talm.discovered.configurable_link_names" -}}
+{{- $names := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- $isPhysical := and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) -}}
+{{- $isVirtual := has (.spec.kind | toString) (list "bond" "vlan" "bridge") -}}
+{{- if or $isPhysical $isVirtual -}}
+{{- $names = append $names .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{- /* JSON list of CIDR addresses configured on the given link, excluding
+       kernel-managed scopes (host loopback, link-local, nowhere) and
+       addresses with no scope set at all. Both IPv4 and IPv6 globally-scoped
+       addresses are returned; the caller is responsible for filtering by
+       family or stripping VIPs if needed. */ -}}
+{{- define "talm.discovered.addresses_by_link" -}}
+{{- $linkName := . -}}
+{{- $addresses := list -}}
+{{- range (lookup "addresses" "" "").items -}}
+{{- $hasScope := and .spec.scope (ne (.spec.scope | toString) "") -}}
+{{- $skip := has (.spec.scope | toString) (list "host" "link" "nowhere") -}}
+{{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) -}}
+{{- $addresses = append $addresses .spec.address -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $addresses -}}
+{{- end -}}
+
+{{- /* Scalar IPv4 gateway for the default route (dst="", main table) on the
+       given link. Empty if the link has no IPv4 default route. IPv4-only by
+       convention to avoid family/address mismatch on dual-stack nodes — add
+       a sibling helper for IPv6 if you need it. */ -}}
+{{- define "talm.discovered.gateway_by_link" -}}
+{{- $linkName := . -}}
+{{- range (lookup "routes" "" "").items -}}
+{{- if and (eq .spec.outLinkName $linkName) (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") -}}
+{{- .spec.gateway -}}
+{{- break -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* JSON list of non-default routes on the given link, across all
+       routing tables (the `table` field is included so callers can
+       filter — gateway_by_link narrows to table=main, this helper does
+       not). Each entry is a flat map {dst, gateway, family, table,
+       priority} so consumers can fromJsonArray + range + dig. Absent
+       fields are emitted as empty strings; present fields including the
+       integer 0 (e.g. priority: 0) round-trip through toString. */ -}}
+{{- define "talm.discovered.routes_by_link" -}}
+{{- $linkName := . -}}
+{{- $routes := list -}}
+{{- range (lookup "routes" "" "").items -}}
+{{- if and (eq .spec.outLinkName $linkName) (not (eq .spec.dst "")) -}}
+{{- $gateway := "" -}}
+{{- if not (kindIs "invalid" .spec.gateway) -}}{{- $gateway = printf "%v" .spec.gateway -}}{{- end -}}
+{{- $family := "" -}}
+{{- if not (kindIs "invalid" .spec.family) -}}{{- $family = printf "%v" .spec.family -}}{{- end -}}
+{{- $table := "" -}}
+{{- if not (kindIs "invalid" .spec.table) -}}{{- $table = printf "%v" .spec.table -}}{{- end -}}
+{{- $priority := "" -}}
+{{- if not (kindIs "invalid" .spec.priority) -}}{{- $priority = printf "%v" .spec.priority -}}{{- end -}}
+{{- $entry := dict "dst" .spec.dst "gateway" $gateway "family" $family "table" $table "priority" $priority -}}
+{{- $routes = append $routes $entry -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $routes -}}
+{{- end -}}
+
+{{- /* Scalar MAC address for the given link, or empty if the link is
+       missing or has no hardwareAddr (virtual links have spec but may
+       lack the field; test mocks may return {} for unknown ids). The
+       field guard prevents `nil | toString` from rendering "<nil>". */ -}}
+{{- define "talm.discovered.mac_by_link" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if and $link $link.spec $link.spec.hardwareAddr -}}
+{{- $link.spec.hardwareAddr | toString -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Scalar PCI / bus path for the given link, or empty if the link is
+       missing or has no busPath (virtual links such as bonds expose a
+       spec without a busPath). The field guard prevents
+       `nil | toString` from rendering "<nil>". */ -}}
+{{- define "talm.discovered.bus_by_link" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if and $link $link.spec $link.spec.busPath -}}
+{{- $link.spec.busPath | toString -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* YAML fragment `busPath: <path>` for use as a Talos deviceSelector by
+       link name. Prefer this over emitting `interface:` when you need the
+       config to be portable across renames (e.g. predictable network names). */ -}}
+{{- define "talm.discovered.link_selector_by_name" -}}
+{{- $link := lookup "links" "" . -}}
+{{- if and $link $link.spec.busPath -}}
+busPath: {{ $link.spec.busPath }}
 {{- end -}}
 {{- end -}}
