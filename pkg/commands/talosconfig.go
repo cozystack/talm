@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cozystack/talm/pkg/secureperm"
+
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/mgmt/gen"
 	"github.com/siderolabs/talos/pkg/machinery/client/config"
 	machineconfig "github.com/siderolabs/talos/pkg/machinery/config"
@@ -181,7 +183,7 @@ func regenerateTalosconfig() error {
 		return fmt.Errorf("failed to marshal talosconfig: %w", err)
 	}
 
-	if err := os.WriteFile(talosconfigFile, data, 0o600); err != nil {
+	if err := secureperm.WriteFile(talosconfigFile, data); err != nil {
 		return fmt.Errorf("failed to write talosconfig: %w", err)
 	}
 

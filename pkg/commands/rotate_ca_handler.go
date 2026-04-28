@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/cozystack/talm/pkg/age"
+	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/siderolabs/crypto/x509"
 	"github.com/spf13/cobra"
@@ -363,7 +364,7 @@ func updateSecretsFromCluster(updateTalos, updateKubernetes bool, targetNode str
 		return fmt.Errorf("failed to marshal secrets: %w", err)
 	}
 
-	if err := os.WriteFile(secretsPath, data, 0o600); err != nil {
+	if err := secureperm.WriteFile(secretsPath, data); err != nil {
 		return fmt.Errorf("failed to write secrets.yaml: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "  Updated secrets.yaml\n")

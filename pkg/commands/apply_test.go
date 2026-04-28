@@ -114,6 +114,18 @@ func TestResolveTemplatePaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpRoot, "templates"), 0o755); err != nil {
 		t.Fatalf("failed to create templates dir: %v", err)
 	}
+	// A sibling directory whose name literally starts with "..". A naive
+	// HasPrefix(relPath, "..") check would misclassify it as outside-root;
+	// the resolver must treat ".." as a full path element, not a prefix.
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "..templates"), 0o755); err != nil {
+		t.Fatalf("failed to create ..templates dir: %v", err)
+	}
+
+	// Build a platform-portable absolute path outside tmpRoot.
+	// filepath.VolumeName is "" on POSIX (yielding e.g. "/other/...") and
+	// "C:" on Windows (yielding "C:\other\..."). Both are absolute and
+	// definitely outside tmpRoot (which lives under the user temp dir).
+	absOutside := filepath.Join(filepath.VolumeName(tmpRoot), string(filepath.Separator), "other", "project", "templates", "controlplane.yaml")
 
 	tests := []struct {
 		name      string
@@ -146,10 +158,23 @@ func TestResolveTemplatePaths(t *testing.T) {
 			want:      []string{"templates/controlplane.yaml"},
 		},
 		{
+			// Constructed to be absolute on both POSIX and Windows so the
+			// filepath.IsAbs branch is exercised on both CI runners. The
+			// resolver normalizes outside-root paths via filepath.ToSlash,
+			// so the expected output is the forward-slash form.
 			name:      "path outside rootDir is kept as-is",
-			templates: []string{"/other/project/templates/controlplane.yaml"},
+			templates: []string{absOutside},
 			rootDir:   tmpRoot,
-			want:      []string{"/other/project/templates/controlplane.yaml"},
+			want:      []string{filepath.ToSlash(absOutside)},
+		},
+		{
+			// Directory name literally starting with "..". If the
+			// outside-root check used HasPrefix("..") it would wrongly
+			// drop this path back to the original input.
+			name:      "sibling dir whose name starts with .. is inside rootDir",
+			templates: []string{"..templates/controlplane.yaml"},
+			rootDir:   tmpRoot,
+			want:      []string{"..templates/controlplane.yaml"},
 		},
 	}
 
@@ -714,4 +739,34 @@ machine:
 	// tautological — so the guard lives in the template code path
 	// itself. The modeline round-trip tests in pkg/modeline surface a
 	// regression that would wire MergeFileAsPatch into generateOutput.
+}
+
+// TestIsOutsideRoot pins the contract that distinguishes a path that
+// truly escapes the project root (".." or a first element of "..")
+// from a path whose first element merely *starts* with ".." but is
+// itself a valid sibling-directory name (e.g. "..templates"). The
+// distinction matters wherever a caller routes inside-root paths
+// differently from outside-root ones; a HasPrefix("..") test
+// silently misclassifies the latter as outside-root.
+func TestIsOutsideRoot(t *testing.T) {
+	cases := []struct {
+		relPath string
+		want    bool
+	}{
+		{"..", true},
+		{".." + string(filepath.Separator) + "foo", true},
+		{".." + string(filepath.Separator) + "foo" + string(filepath.Separator) + "bar", true},
+		{"..foo", false},
+		{"..foo" + string(filepath.Separator) + "bar", false},
+		{"..templates" + string(filepath.Separator) + "controlplane.yaml", false},
+		{"..mykube", false},
+		{"foo", false},
+		{"foo" + string(filepath.Separator) + "..bar", false},
+		{".", false},
+	}
+	for _, c := range cases {
+		if got := isOutsideRoot(c.relPath); got != c.want {
+			t.Errorf("isOutsideRoot(%q) = %v, want %v", c.relPath, got, c.want)
+		}
+	}
 }

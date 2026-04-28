@@ -420,6 +420,15 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 	}
 }
 
+// isOutsideRoot reports whether a cleaned relative path escapes the
+// project root. A HasPrefix(".." ) test would misclassify sibling
+// directories whose first path element merely starts with "..", such
+// as "..templates/controlplane.yaml"; we match a full path element
+// instead.
+func isOutsideRoot(relPath string) bool {
+	return relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator))
+}
+
 // resolveTemplatePaths resolves template file paths relative to the project root,
 // normalizing them for the Helm engine (forward slashes).
 // Relative paths from the modeline are resolved against rootDir, not CWD.
@@ -461,7 +470,7 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 			continue
 		}
 		relPath = filepath.Clean(relPath)
-		if strings.HasPrefix(relPath, "..") {
+		if isOutsideRoot(relPath) {
 			// Path goes outside project root — use original path as-is
 			resolved[i] = engine.NormalizeTemplatePath(templatePath)
 			continue

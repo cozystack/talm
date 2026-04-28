@@ -17,6 +17,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/generated"
+	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -344,7 +346,7 @@ var initCmd = &cobra.Command{
 				return fmt.Errorf("failed to marshal config: %+v", err)
 			}
 
-			if err = writeToDestination(data, talosconfigFile, 0o600); err != nil {
+			if err = writeSecureToDestination(data, talosconfigFile); err != nil {
 				return err
 			}
 		}
@@ -454,11 +456,9 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	}
 
 	secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
-	if err = validateFileExists(secretsFile); err != nil {
-		return err
-	}
-
-	return writeToDestination(bundleBytes, secretsFile, 0o600)
+	// validateFileExists is invoked inside writeSecureToDestination;
+	// no need to duplicate the --force / existing-file gate here.
+	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
@@ -861,6 +861,10 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	return keyWasCreated, nil
 }
 
+// createdSink is where "Created <path>" messages go after a successful
+// write. Swappable in tests to assert no message is emitted on failure.
+var createdSink io.Writer = os.Stderr
+
 func writeToDestination(data []byte, destination string, permissions os.FileMode) error {
 	if err := validateFileExists(destination); err != nil {
 		return err
@@ -874,8 +878,33 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 	}
 
 	err := os.WriteFile(destination, data, permissions)
+	if err == nil {
+		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+	}
+	return err
+}
 
-	fmt.Fprintf(os.Stderr, "Created %s\n", destination)
+// writeSecureToDestination writes a secret (talosconfig, secrets.yaml,
+// talm.key) with owner-only permissions. On Windows the NTFS DACL is
+// installed via secureperm so os.WriteFile's ignored mode bits aren't
+// the only defense.
+func writeSecureToDestination(data []byte, destination string) error {
+	if err := validateFileExists(destination); err != nil {
+		return err
+	}
 
+	parentDir := filepath.Dir(destination)
+
+	// Use 0o700 so any newly-created parent dir for secrets is owner-only
+	// even under a permissive umask. MkdirAll is a no-op when the dir
+	// already exists, so this does not override pre-existing dir perms.
+	if err := os.MkdirAll(parentDir, 0o700); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+
+	err := secureperm.WriteFile(destination, data)
+	if err == nil {
+		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+	}
 	return err
 }
