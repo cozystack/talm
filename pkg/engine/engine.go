@@ -40,7 +40,6 @@ import (
 
 // Options encapsulates all parameters necessary for rendering.
 type Options struct {
-	Insecure          bool
 	ValueFiles        []string
 	StringValues      []string
 	Values            []string
@@ -57,6 +56,9 @@ type Options struct {
 	TemplateFiles     []string
 	ClusterName       string
 	Endpoint          string
+	// CommandName names the caller subcommand for error messages such as
+	// the one produced by FailIfMultiNodes. Empty value falls back to "talm".
+	CommandName string
 }
 
 // NormalizeTemplatePath converts OS-specific path separators to forward slash.
@@ -202,6 +204,86 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
 }
 
+// MergeFileAsPatch overlays the YAML body of patchFile onto rendered using
+// Talos's strategic-merge config patcher.
+//
+// patchFile is a node file: its first line is the talm modeline (a YAML
+// comment) followed by an arbitrary Talos config patch (typically machine.*
+// fields the user wants pinned per node). When the file contains only the
+// modeline (or is otherwise empty after stripping comments and whitespace)
+// the function returns rendered unchanged — short-circuiting Talos's
+// configpatcher which would otherwise route the empty patch through
+// JSON6902 and reject any multi-document rendered config (the v1.12+ output
+// format) outright.
+//
+// Note that for non-empty patches the patcher round-trips rendered through
+// its config loader, normalising YAML formatting and dropping comments.
+// This is acceptable for the apply path (the result goes straight to
+// ApplyConfiguration) but unsuitable for human-facing output such as
+// `talm template` — which is why the template subcommand does not call
+// this helper.
+func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
+	patchBytes, err := os.ReadFile(patchFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading patch %s: %w", patchFile, err)
+	}
+	if isEffectivelyEmptyYAML(patchBytes) {
+		return rendered, nil
+	}
+	patch, err := configpatcher.LoadPatch(patchBytes)
+	if err != nil {
+		return nil, fmt.Errorf("loading patch from %s: %w", patchFile, err)
+	}
+	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), []configpatcher.Patch{patch})
+	if err != nil {
+		return nil, fmt.Errorf("applying patch from %s: %w", patchFile, err)
+	}
+	merged, err := out.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("encoding merged config from %s: %w", patchFile, err)
+	}
+	return merged, nil
+}
+
+// NodeFileHasOverlay reports whether a node file carries a non-empty
+// per-node body below its modeline. The apply path uses this to reject
+// multi-node node files that would otherwise stamp the same pinned
+// hostname/address/VIP onto every target.
+func NodeFileHasOverlay(patchFile string) (bool, error) {
+	data, err := os.ReadFile(patchFile)
+	if err != nil {
+		return false, fmt.Errorf("reading node file %s: %w", patchFile, err)
+	}
+	return !isEffectivelyEmptyYAML(data), nil
+}
+
+// isEffectivelyEmptyYAML reports whether the input contains nothing but
+// YAML comments, document separators, and whitespace. Used by
+// MergeFileAsPatch to detect modeline-only node files that the Talos
+// config-patcher misclassifies as empty JSON6902 patches.
+//
+// Document separators must appear at column 0 per the YAML spec; an
+// indented "  ---" is a scalar inside a parent mapping, not a
+// separator, so the comparison is against the line minus only trailing
+// whitespace rather than against the fully trimmed form.
+func isEffectivelyEmptyYAML(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if trimmed[0] == '#' {
+			continue
+		}
+		untrailed := string(bytes.TrimRight(line, " \t\r"))
+		if untrailed == "---" || untrailed == "..." {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // Render executes the rendering of templates based on the provided options.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
 
@@ -216,7 +298,11 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	// Gather facts and enable lookup options
 	if !opts.Offline {
-		if err := helpers.FailIfMultiNodes(ctx, "talm template"); err != nil {
+		cmdName := opts.CommandName
+		if cmdName == "" {
+			cmdName = "talm"
+		}
+		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
 			return nil, err
 		}
 		helmEngine.LookupFunc = newLookupFunction(ctx, c)

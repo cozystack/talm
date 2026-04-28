@@ -2,11 +2,14 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/cozystack/talm/pkg/engine"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"google.golang.org/grpc/metadata"
 )
@@ -15,20 +18,17 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	origTalosVersion := applyCmdFlags.talosVersion
 	origKubeVersion := applyCmdFlags.kubernetesVersion
 	origDebug := applyCmdFlags.debug
-	origInsecure := applyCmdFlags.insecure
 	origRootDir := Config.RootDir
 	defer func() {
 		applyCmdFlags.talosVersion = origTalosVersion
 		applyCmdFlags.kubernetesVersion = origKubeVersion
 		applyCmdFlags.debug = origDebug
-		applyCmdFlags.insecure = origInsecure
 		Config.RootDir = origRootDir
 	}()
 
 	applyCmdFlags.talosVersion = "v1.12"
 	applyCmdFlags.kubernetesVersion = "1.31.0"
 	applyCmdFlags.debug = false
-	applyCmdFlags.insecure = true
 	Config.RootDir = "/project"
 
 	opts := buildApplyRenderOptions(
@@ -42,9 +42,6 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	if opts.Offline {
 		t.Error("expected Offline=false for online template rendering path")
 	}
-	if !opts.Insecure {
-		t.Error("expected Insecure=true to be passed through from flags")
-	}
 	if opts.Root != "/project" {
 		t.Errorf("expected Root=/project, got %s", opts.Root)
 	}
@@ -56,6 +53,28 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	}
 	if len(opts.TemplateFiles) != 1 || opts.TemplateFiles[0] != "templates/controlplane.yaml" {
 		t.Errorf("expected TemplateFiles=[templates/controlplane.yaml], got %v", opts.TemplateFiles)
+	}
+	if opts.CommandName != "talm apply" {
+		t.Errorf("expected CommandName=%q, got %q (engine.Render uses this for FailIfMultiNodes error wording)", "talm apply", opts.CommandName)
+	}
+}
+
+func TestResolveAuthTemplateNodes_CLINodesWin(t *testing.T) {
+	in := []string{"10.0.0.1", "10.0.0.2"}
+	got := resolveAuthTemplateNodes(in, nil)
+	if !slices.Equal(got, in) {
+		t.Errorf("got %v, want %v (CLI nodes must take precedence over talosconfig context)", got, in)
+	}
+}
+
+func TestResolveAuthTemplateNodes_NilClientReturnsNil(t *testing.T) {
+	got := resolveAuthTemplateNodes(nil, nil)
+	if got != nil {
+		t.Errorf("got %v, want nil (no CLI nodes + no client = nothing to iterate, caller must surface the error)", got)
+	}
+	got = resolveAuthTemplateNodes([]string{}, nil)
+	if got != nil {
+		t.Errorf("got %v, want nil on empty slice + nil client", got)
 	}
 }
 
@@ -246,4 +265,453 @@ func TestWrapWithNodeContext_NoNodesNoClient(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when no nodes and no client config context, got nil")
 	}
+}
+
+// nodesFromOutgoingCtx pulls per-iteration node identity out of gRPC
+// outgoing metadata. The Talos client SDK writes single-target metadata to
+// the "node" key (client.WithNode) and multi-target metadata to "nodes"
+// (client.WithNodes) — checking both keys lets the per-node loop tests
+// assert iteration shape regardless of which writer the loop chose.
+func nodesFromOutgoingCtx(t *testing.T, ctx context.Context) []string {
+	t.Helper()
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return nil
+	}
+	if vs := md.Get("node"); len(vs) > 0 {
+		return vs
+	}
+	return md.Get("nodes")
+}
+
+// fakeAuthOpenClient mimics openClientPerNodeAuth for tests: shares one
+// (nil) parent client across iterations and rotates the node via WithNode
+// on a fresh per-iteration context.
+//
+// The action receives a nil *client.Client. Callers are responsible for
+// not dereferencing it; tests that exercise client method calls must
+// inject a real client via a different fake. The nil here is deliberate
+// — it makes any future change inside applyTemplatesPerNode that starts
+// dereferencing the client surface as a panic in CI rather than as
+// silent test coverage of an untouched code path.
+func fakeAuthOpenClient(parentCtx context.Context) openClientFunc {
+	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
+		return action(client.WithNode(parentCtx, node), nil)
+	}
+}
+
+// TestApplyTemplatesPerNode_LoopsOncePerNodeWithSingleNodeContext asserts
+// that applyTemplatesPerNode invokes render and apply exactly once per
+// node and that every per-iteration context carries exactly that one
+// node. The historical regression — batching every node from
+// GlobalArgs.Nodes into a single gRPC context — caused engine.Render's
+// multi-node guard to reject the call before any rendering ran.
+func TestApplyTemplatesPerNode_LoopsOncePerNodeWithSingleNodeContext(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	// Modeline-only file so MergeFileAsPatch is a no-op and the test stays
+	// focused on the loop semantics rather than patch behaviour.
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\",\"b\",\"c\"], templates=[\"templates/controlplane.yaml\"]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	want := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+	var renderCalls, applyCalls []string
+
+	render := func(ctx context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		got := nodesFromOutgoingCtx(t, ctx)
+		if len(got) != 1 {
+			t.Errorf("render: expected single-node ctx, got %v", got)
+		}
+		renderCalls = append(renderCalls, got...)
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	apply := func(ctx context.Context, _ *client.Client, _ []byte) error {
+		got := nodesFromOutgoingCtx(t, ctx)
+		if len(got) != 1 {
+			t.Errorf("apply: expected single-node ctx, got %v", got)
+		}
+		applyCalls = append(applyCalls, got...)
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+
+	if !slices.Equal(renderCalls, want) {
+		t.Errorf("render calls = %v, want %v", renderCalls, want)
+	}
+	if !slices.Equal(applyCalls, want) {
+		t.Errorf("apply calls  = %v, want %v", applyCalls, want)
+	}
+}
+
+// TestApplyTemplatesPerNode_NeverBatchesNodes guarantees no future tweak
+// can revert applyTemplatesPerNode to batching all nodes into a single
+// render call. Phrased against this helper directly, not against
+// engine.Render, so the assertion stays meaningful even if the engine
+// guard moves elsewhere.
+func TestApplyTemplatesPerNode_NeverBatchesNodes(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\",\"b\"]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	want := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+	renderCount := 0
+	applyCount := 0
+
+	render := func(ctx context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		got := nodesFromOutgoingCtx(t, ctx)
+		if len(got) > 1 {
+			t.Fatalf("render must NEVER see a multi-node ctx; got %v", got)
+		}
+		renderCount++
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	apply := func(ctx context.Context, _ *client.Client, _ []byte) error {
+		got := nodesFromOutgoingCtx(t, ctx)
+		if len(got) > 1 {
+			t.Fatalf("apply must NEVER see a multi-node ctx; got %v", got)
+		}
+		applyCount++
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+	if renderCount != len(want) {
+		t.Errorf("render call count = %d, want %d", renderCount, len(want))
+	}
+	if applyCount != len(want) {
+		t.Errorf("apply call count = %d, want %d", applyCount, len(want))
+	}
+}
+
+// TestApplyTemplatesPerNode_MultiNodeWithNonEmptyBodyIsRejected pins
+// the guard against stamping a single per-node body (pinned hostname,
+// address, VIP) onto every target. A node file that targets more than
+// one node and carries a body below its modeline is user error; the
+// helper must surface it instead of silently replicating the pin.
+func TestApplyTemplatesPerNode_MultiNodeWithNonEmptyBodyIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	body := `# talm: nodes=["10.0.0.1","10.0.0.2"]
+machine:
+  network:
+    hostname: node0
+`
+	if err := os.WriteFile(configFile, []byte(body), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		t.Fatal("render must not be called when the multi-node overlay guard trips")
+		return nil, nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		t.Fatal("apply must not be called when the multi-node overlay guard trips")
+		return nil
+	}
+
+	err := applyTemplatesPerNode(engine.Options{}, configFile,
+		[]string{"10.0.0.1", "10.0.0.2"},
+		fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
+		t.Fatal("expected an error for multi-node + non-empty body, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"node file", "2 nodes", "per-node body"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed pins that the
+// overlay guard does NOT trip on a modeline-only node file (the common
+// bootstrap shape: one file drives the same template across N nodes
+// without pinning any per-node field).
+func TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte(`# talm: nodes=["10.0.0.1","10.0.0.2"]`+"\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	renderCount := 0
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		renderCount++
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	applyCount := 0
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		applyCount++
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{}, configFile,
+		[]string{"10.0.0.1", "10.0.0.2"},
+		fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+	if renderCount != 2 || applyCount != 2 {
+		t.Errorf("render=%d apply=%d, want 2 each", renderCount, applyCount)
+	}
+}
+
+// TestApplyTemplatesPerNode_NoNodesIsAnError guards against silently
+// short-circuiting when GlobalArgs.Nodes is empty. The previous structure
+// would happily run zero iterations — this pin makes it loud.
+func TestApplyTemplatesPerNode_NoNodesIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		t.Fatal("render must not be called when there are zero nodes")
+		return nil, nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		t.Fatal("apply must not be called when there are zero nodes")
+		return nil
+	}
+
+	err := applyTemplatesPerNode(engine.Options{}, configFile, nil, fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
+		t.Fatal("expected an error for empty nodes list, got nil")
+	}
+	// The error must point the user at the concrete ways to set nodes
+	// so the message survives a cosmetic reword but catches a regression
+	// that drops the guidance entirely.
+	msg := err.Error()
+	for _, want := range []string{"nodes", "--nodes"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// TestApplyTemplatesPerNode_MaintenanceModeOpensFreshClientPerNode pins
+// the contract for the insecure (maintenance) mode opener: every node
+// must trigger a fresh openClient invocation so each iteration has its
+// own single-endpoint client. Sharing one maintenance client across
+// endpoints sends ApplyConfiguration to a gRPC-balanced endpoint and
+// most nodes never receive the config — the production opener
+// (openClientPerNodeMaintenance) avoids this by narrowing
+// GlobalArgs.Nodes around each WithClientMaintenance call. Recording
+// fake here proves the per-iteration shape; the narrow-and-restore
+// behaviour of the real opener is checked by
+// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes.
+func TestApplyTemplatesPerNode_MaintenanceModeOpensFreshClientPerNode(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\",\"b\"]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	want := []string{"10.0.0.1", "10.0.0.2"}
+	var clientOpenedFor []string
+
+	openClient := func(node string, action func(ctx context.Context, c *client.Client) error) error {
+		// Record that openClient was called for this specific node — i.e. the
+		// maintenance loop creates a separate client per node rather than
+		// reusing one pinned to all endpoints.
+		clientOpenedFor = append(clientOpenedFor, node)
+		// Real production hands the inner action a fresh maintenance client
+		// pinned to one endpoint; the fake just runs it with a clean ctx.
+		return action(context.Background(), nil)
+	}
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, openClient, render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+	if !slices.Equal(clientOpenedFor, want) {
+		t.Errorf("openClient calls = %v, want %v (one per node)", clientOpenedFor, want)
+	}
+}
+
+// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes drives
+// the real openClientPerNodeMaintenance with an injected
+// maintenanceClientFunc fake. The fake captures GlobalArgs.Nodes at the
+// moment a real WithClientMaintenance would have read it for endpoint
+// resolution. The contract: every iteration narrows GlobalArgs.Nodes to
+// exactly the iteration's node, and the prior value is restored after
+// the action returns regardless of success. Without the narrowing, the
+// real WithClientMaintenance would dial every endpoint at once and gRPC
+// would round-robin ApplyConfiguration across them.
+func TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes(t *testing.T) {
+	saved := append([]string(nil), GlobalArgs.Nodes...)
+	defer func() { GlobalArgs.Nodes = saved }()
+
+	GlobalArgs.Nodes = []string{"original-A", "original-B"}
+
+	type call struct {
+		fingerprints []string
+		nodesAtCall  []string
+	}
+	var calls []call
+
+	fakeMaintenance := func(fingerprints []string, action func(ctx context.Context, c *client.Client) error) error {
+		// WithClientMaintenance reads GlobalArgs.Nodes for its endpoints
+		// at this point. Snapshot the value so the test can inspect it.
+		calls = append(calls, call{
+			fingerprints: append([]string(nil), fingerprints...),
+			nodesAtCall:  append([]string(nil), GlobalArgs.Nodes...),
+		})
+		return action(context.Background(), nil)
+	}
+
+	openClient := openClientPerNodeMaintenance([]string{"fp-1"}, fakeMaintenance)
+
+	for _, node := range []string{"10.0.0.1", "10.0.0.2"} {
+		if err := openClient(node, func(_ context.Context, _ *client.Client) error { return nil }); err != nil {
+			t.Fatalf("openClient(%q): %v", node, err)
+		}
+	}
+
+	if !slices.Equal(GlobalArgs.Nodes, []string{"original-A", "original-B"}) {
+		t.Errorf("GlobalArgs.Nodes not restored after maintenance loop: got %v", GlobalArgs.Nodes)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("maintenance fake should have been called twice, got %d times", len(calls))
+	}
+	for i, want := range []string{"10.0.0.1", "10.0.0.2"} {
+		if !slices.Equal(calls[i].nodesAtCall, []string{want}) {
+			t.Errorf("call %d: GlobalArgs.Nodes at WithClientMaintenance time = %v, want [%q]", i, calls[i].nodesAtCall, want)
+		}
+		if !slices.Equal(calls[i].fingerprints, []string{"fp-1"}) {
+			t.Errorf("call %d: fingerprints passed through = %v, want [\"fp-1\"]", i, calls[i].fingerprints)
+		}
+	}
+}
+
+// TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError pins the
+// restore-on-error half of the contract: even when the action returns
+// an error, the deferred restore must put GlobalArgs.Nodes back. The
+// success-path counterpart lives in
+// TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes;
+// without this companion, a future refactor that swaps the defer for an
+// explicit restore-after-success block would silently regress the
+// error path.
+func TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError(t *testing.T) {
+	saved := append([]string(nil), GlobalArgs.Nodes...)
+	defer func() { GlobalArgs.Nodes = saved }()
+
+	GlobalArgs.Nodes = []string{"original-A", "original-B"}
+
+	failingMaintenance := func(_ []string, action func(ctx context.Context, c *client.Client) error) error {
+		return action(context.Background(), nil)
+	}
+	openClient := openClientPerNodeMaintenance(nil, failingMaintenance)
+
+	err := openClient("10.0.0.1", func(_ context.Context, _ *client.Client) error {
+		return fmt.Errorf("simulated apply failure")
+	})
+	if err == nil {
+		t.Fatal("expected error from failing action, got nil")
+	}
+	if !slices.Equal(GlobalArgs.Nodes, []string{"original-A", "original-B"}) {
+		t.Errorf("GlobalArgs.Nodes not restored after error: got %v, want [original-A original-B]", GlobalArgs.Nodes)
+	}
+}
+
+// TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey pins the
+// gRPC metadata key the auth-mode opener writes. WithNode sets "node"
+// (single-target proxy); WithNodes sets "nodes" (apid aggregation).
+// engine.Render's FailIfMultiNodes guard treats len("nodes") > 1 as the
+// multi-node case, so single-target metadata under "node" passes
+// trivially. A future refactor that swaps WithNode back to WithNodes
+// would slip past nodesFromOutgoingCtx (which reads either key) — this
+// assertion catches that regression directly.
+func TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\"]\n"), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	const node = "10.0.0.1"
+	render := func(ctx context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		md, ok := metadata.FromOutgoingContext(ctx)
+		if !ok {
+			t.Fatal("expected outgoing metadata on per-iteration ctx")
+		}
+		if got := md.Get("node"); !slices.Equal(got, []string{node}) {
+			t.Errorf(`metadata key "node" = %v, want [%q]`, got, node)
+		}
+		if got := md.Get("nodes"); len(got) != 0 {
+			t.Errorf(`metadata key "nodes" must be unset for single-target apply, got %v`, got)
+		}
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error { return nil }
+
+	openClient := openClientPerNodeAuth(context.Background(), nil)
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, []string{node}, openClient, render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+}
+
+// TestTemplateAndApplyDiverge_NodeBodyOverlayLimitation pins a known
+// trade-off: `talm apply -f node.yaml` overlays the node file body on the
+// rendered template before sending the result to ApplyConfiguration, but
+// `talm template -f node.yaml` does NOT — its output is the raw rendered
+// template plus the modeline and AUTOGENERATED-warning comment. Applying
+// the same overlay in template would route the output through the Talos
+// config-patcher, which strips every YAML comment (including the modeline)
+// and reorders keys. Subsequent commands that read the file back would
+// lose the modeline metadata.
+//
+// The test asserts the divergence is real and bounded: rendered + modeline
+// passes through template untouched while the apply path produces a
+// merged result. Without this pin, a future "make template match apply"
+// patch will silently break the template subcommand.
+func TestTemplateAndApplyDiverge_NodeBodyOverlayLimitation(t *testing.T) {
+	const rendered = `version: v1alpha1
+machine:
+  type: controlplane
+  network:
+    hostname: talos-abcde
+`
+	dir := t.TempDir()
+	nodeFile := filepath.Join(dir, "node.yaml")
+	const nodeBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  network:
+    hostname: node0
+`
+	if err := os.WriteFile(nodeFile, []byte(nodeBody), 0o644); err != nil {
+		t.Fatalf("write node file: %v", err)
+	}
+
+	// apply path: renders, then overlays.
+	merged, err := engine.MergeFileAsPatch([]byte(rendered), nodeFile)
+	if err != nil {
+		t.Fatalf("MergeFileAsPatch: %v", err)
+	}
+	if !strings.Contains(string(merged), "hostname: node0") {
+		t.Errorf("apply path must overlay hostname: node0; got:\n%s", string(merged))
+	}
+
+	// The template subcommand's no-overlay invariant is structural
+	// rather than runtime: pkg/commands/template.go does not call
+	// engine.MergeFileAsPatch, and a human-facing `talm template`
+	// output going through the patcher would drop every YAML comment
+	// (including the modeline). A runtime assertion here cannot pin
+	// that — any block that reuses the `rendered` constant is
+	// tautological — so the guard lives in the template code path
+	// itself. The modeline round-trip tests in pkg/modeline surface a
+	// regression that would wire MergeFileAsPatch into generateOutput.
 }

@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
+	"github.com/siderolabs/talos/pkg/machinery/client"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 )
@@ -1012,6 +1013,357 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	assertContains(t, result, "parent: bond0")
 	assertContains(t, result, "address: 10.0.0.50/24")
 	assertNotContains(t, result, "kind: LinkConfig")
+}
+
+// TestMergeFileAsPatch pins the contract for the apply-side overlay of a
+// node file's body on top of a rendered template:
+//
+//   - When the node file has Talos config in addition to the modeline,
+//     fields from the file must overlay the rendered template (custom
+//     hostname wins over the auto-generated one; secondary interfaces and
+//     VIPs declared in the file appear in the merged output).
+//   - When the node file is just a modeline, an empty file, or comments
+//     and document separators with no body, the merge must be a true
+//     byte-for-byte identity over rendered. The Talos config-patcher
+//     misclassifies such inputs as empty JSON6902 patches, which then
+//     refuses any multi-document machine config — the v1.12+ default
+//     output format. The empty-detection short-circuit avoids that.
+func TestMergeFileAsPatch(t *testing.T) {
+	const renderedTemplate = `version: v1alpha1
+debug: false
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    hostname: talos-abcde
+    interfaces:
+      - interface: ens3
+        addresses:
+          - 10.0.0.1/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.0.0.254
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/16
+`
+
+	t.Run("overlays hostname and adds secondary interface", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		// First line is the modeline (a YAML comment); the body is a
+		// strategic merge patch.
+		const nodeBody = `# talm: nodes=["10.0.0.1"], endpoints=["10.0.0.1"], templates=["templates/controlplane.yaml"]
+machine:
+  network:
+    hostname: node0
+    interfaces:
+      - interface: ens3
+        addresses:
+          - 10.0.0.1/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.0.0.254
+      - deviceSelector:
+          hardwareAddr: "02:00:17:02:55:aa"
+        addresses:
+          - 10.0.100.11/24
+        vip:
+          ip: 10.0.100.10
+`
+		if err := os.WriteFile(nodeFile, []byte(nodeBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+
+		out := string(merged)
+		if !strings.Contains(out, "hostname: node0") {
+			t.Errorf("merged output missing custom hostname 'node0':\n%s", out)
+		}
+		if strings.Contains(out, "hostname: talos-abcde") {
+			t.Errorf("merged output still contains template hostname 'talos-abcde':\n%s", out)
+		}
+		if !strings.Contains(out, "02:00:17:02:55:aa") {
+			t.Errorf("merged output missing deviceSelector secondary interface:\n%s", out)
+		}
+		if !strings.Contains(out, "10.0.100.10") {
+			t.Errorf("merged output missing VIP from node file:\n%s", out)
+		}
+	})
+
+	t.Run("modeline-only file is a true byte-identity no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# talm: nodes=[\"10.0.0.1\"], templates=[\"templates/controlplane.yaml\"]\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+
+		// Modeline-only node files must short-circuit before the Talos
+		// config-patcher round-trip — the patcher would otherwise reformat
+		// YAML, drop comments, and (worse) reject multi-document rendered
+		// configs via JSON6902. Identity is the contract.
+		if string(merged) != renderedTemplate {
+			t.Errorf("modeline-only merge must return rendered byte-for-byte, got diff:\n%s", string(merged))
+		}
+	})
+
+	t.Run("modeline-only file does not break multi-doc rendered (Talos v1.12+)", func(t *testing.T) {
+		// Default Talos v1.12+ output format is multi-document. A
+		// modeline-only node file used to route through
+		// configpatcher.Apply → JSON6902, which refuses multi-document
+		// machine configs with: `JSON6902 patches are not supported for
+		// multi-document machine configuration`. The empty-content
+		// short-circuit must keep this case working.
+		const multiDocRendered = `version: v1alpha1
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: talos-abcde
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: ens3
+addresses:
+  - address: 10.0.0.1/24
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# talm: nodes=[\"10.0.0.1\"]\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(multiDocRendered), nodeFile)
+		if err != nil {
+			t.Fatalf("multi-doc + modeline-only patch must not error, got: %v", err)
+		}
+		if string(merged) != multiDocRendered {
+			t.Errorf("multi-doc + modeline-only merge must return rendered byte-for-byte, got:\n%s", string(merged))
+		}
+	})
+
+	t.Run("multi-doc rendered + non-empty patch overlays the legacy machine doc", func(t *testing.T) {
+		// The realistic Talos v1.12+ apply scenario: a multi-document
+		// rendered config (legacy `machine:`/`cluster:` doc plus typed
+		// HostnameConfig / LinkConfig docs) plus a node file that pins
+		// hostname/network on the legacy machine doc. The strategic-merge
+		// patcher must accept the multi-doc input, apply the patch to the
+		// legacy machine doc, and leave the typed sibling docs intact.
+		const multiDocRendered = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    hostname: talos-abcde
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: talos-abcde
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: ens3
+addresses:
+  - address: 10.0.0.1/24
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		const patchBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  network:
+    hostname: node0
+    interfaces:
+      - deviceSelector:
+          hardwareAddr: "02:00:17:02:55:aa"
+        addresses:
+          - 10.0.100.11/24
+`
+		if err := os.WriteFile(nodeFile, []byte(patchBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(multiDocRendered), nodeFile)
+		if err != nil {
+			t.Fatalf("multi-doc + non-empty patch must not error, got: %v", err)
+		}
+
+		out := string(merged)
+		if !strings.Contains(out, "hostname: node0") {
+			t.Errorf("merged output must overlay machine.network.hostname with node0:\n%s", out)
+		}
+		if !strings.Contains(out, "02:00:17:02:55:aa") {
+			t.Errorf("merged output must include node-file deviceSelector:\n%s", out)
+		}
+		// The sibling typed documents must not be dropped by the merge.
+		if !strings.Contains(out, "kind: LinkConfig") {
+			t.Errorf("merged output must preserve sibling LinkConfig document:\n%s", out)
+		}
+		if !strings.Contains(out, "name: ens3") {
+			t.Errorf("merged output must preserve LinkConfig name field:\n%s", out)
+		}
+	})
+
+	t.Run("empty file is also a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "empty.yaml")
+		if err := os.WriteFile(nodeFile, []byte(""), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch on empty file: %v", err)
+		}
+		if string(merged) != renderedTemplate {
+			t.Errorf("empty patch must round-trip rendered byte-for-byte")
+		}
+	})
+
+	t.Run("comments-and-separators-only file is a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "comments.yaml")
+		if err := os.WriteFile(nodeFile, []byte("# top\n---\n# middle\n  \n---\n# bottom\n"), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch on comments-only file: %v", err)
+		}
+		if string(merged) != renderedTemplate {
+			t.Errorf("comments-only patch must round-trip rendered byte-for-byte")
+		}
+	})
+}
+
+// TestNodeFileHasOverlay pins the classifier used by the apply path to
+// decide whether a multi-node modeline would replay a per-node body
+// onto every target. Modeline-only and comments-only files must
+// classify as no-overlay; any real YAML key must count as an overlay.
+func TestNodeFileHasOverlay(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "modeline only",
+			content: `# talm: nodes=["a","b"]` + "\n",
+			want:    false,
+		},
+		{
+			name:    "empty file",
+			content: "",
+			want:    false,
+		},
+		{
+			name:    "comments and separators",
+			content: "# top\n---\n# middle\n  \n---\n# bottom\n",
+			want:    false,
+		},
+		{
+			name: "real yaml body",
+			content: `# talm: nodes=["a"]
+machine:
+  network:
+    hostname: node0
+`,
+			want: true,
+		},
+		{
+			// A "---" with leading whitespace is not a YAML document
+			// separator (separators must be at column 0); it's a
+			// scalar inside a parent mapping. Treating it as a
+			// separator would misclassify a real overlay as empty
+			// and let the multi-node guard be bypassed.
+			name:    "indented separator counts as overlay",
+			content: "# talm: nodes=[\"a\",\"b\"]\nmachine:\n  ---\n",
+			want:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "node.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			got, err := NodeFileHasOverlay(path)
+			if err != nil {
+				t.Fatalf("NodeFileHasOverlay: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("NodeFileHasOverlay = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderFailIfMultiNodes_UsesCommandName guards the contract for
+// Options.CommandName: the multi-node rejection error must reference the
+// calling subcommand the caller passed in, never the historical
+// hardcoded literal that pre-dated this option. An empty value falls back
+// to the neutral "talm".
+func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
+	tests := []struct {
+		name        string
+		commandName string
+		wantInError string
+	}{
+		{"talm apply", "talm apply", "talm apply"},
+		{"talm template", "talm template", "talm template"},
+		{"empty falls back to talm", "", "talm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+			opts := Options{
+				Offline:     false,
+				CommandName: tt.commandName,
+			}
+			_, err := Render(ctx, nil, opts)
+			if err == nil {
+				t.Fatalf("Render expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantInError) {
+				t.Errorf("error = %q, expected to contain %q", err.Error(), tt.wantInError)
+			}
+		})
+	}
+
+	t.Run("non-CommandName subcommand names must not leak into the error", func(t *testing.T) {
+		// If a caller passes "talm apply", the error must not carry any
+		// other subcommand name — historically the call site here emitted
+		// "talm template" unconditionally.
+		ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+		opts := Options{Offline: false, CommandName: "talm apply"}
+		_, err := Render(ctx, nil, opts)
+		if err == nil {
+			t.Fatal("Render expected an error, got nil")
+		}
+		if strings.Contains(err.Error(), "talm template") {
+			t.Errorf("error must not mention 'talm template' when CommandName is 'talm apply'; got %q", err.Error())
+		}
+	})
 }
 
 // TestRenderInvalidTalosVersion verifies that malformed TalosVersion values
