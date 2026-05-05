@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -121,6 +122,10 @@ func apply(args []string) error {
 			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
 
 			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
+				// applyTemplatesPerNode rotates ctx via client.WithNode per node,
+				// so ctx here is already single-target and safe for COSI reads.
+				preflightCheckTalosVersion(ctx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
+
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           data,
 					Mode:           applyCmdFlags.Mode.Mode,
@@ -128,7 +133,7 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %w", err)
+					return fmt.Errorf("error applying new configuration: %w", annotateApplyConfigError(err))
 				}
 				helpers.PrintApplyResults(resp)
 				return nil
@@ -163,7 +168,25 @@ func apply(args []string) error {
 			}
 
 			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
-				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
+				// wrapWithNodeContext fills ctx via client.WithNodes from
+				// talosconfig when --nodes is omitted, but does not mutate
+				// GlobalArgs.Nodes. Mirror its resolution here so the log line
+				// and the per-node preflight loop see the actual targets.
+				targetNodes := append([]string(nil), GlobalArgs.Nodes...)
+				if len(targetNodes) == 0 {
+					if cfg := c.GetConfigContext(); cfg != nil {
+						targetNodes = append(targetNodes, cfg.Nodes...)
+					}
+				}
+				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
+
+				// COSI does not support multi-node proxying
+				// (see rotate_ca_handler.go:317). Run preflight per node with
+				// a single-target context.
+				read := cosiVersionReader(c)
+				for _, node := range targetNodes {
+					preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
+				}
 
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           result,
@@ -172,7 +195,7 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %w", err)
+					return fmt.Errorf("error applying new configuration: %w", annotateApplyConfigError(err))
 				}
 
 				helpers.PrintApplyResults(resp)
