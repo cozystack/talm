@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/cozystack/talm/pkg/commands"
@@ -65,6 +66,10 @@ func Execute() error {
 	cmd, err := rootCmd.ExecuteContextC(context.Background())
 	if err != nil && !common.SuppressErrors {
 		fmt.Fprintln(os.Stderr, err.Error())
+
+		for _, hint := range errors.GetAllHints(err) {
+			fmt.Fprintf(os.Stderr, "hint: %s\n", hint)
+		}
 
 		errorString := err.Error()
 		// TODO: this is a nightmare, but arg-flag related validation returns simple `fmt.Errorf`, no way to distinguish
