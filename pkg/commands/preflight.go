@@ -34,8 +34,8 @@ import (
 // node. It does not name a specific Talos version — the warning line itself
 // includes the concrete numbers.
 const preflightVersionMismatchHint = "the generated config may include fields the node's machinery doesn't know; " +
-	"either reboot the node into a maintenance image matching templateOptions.talosVersion, " +
-	"or pin --talos-version to the version reported by the node."
+	"either reboot the node into a maintenance image matching templateOptions.talosVersion / --talos-version, " +
+	"or lower templateOptions.talosVersion / --talos-version to match the running Talos."
 
 // applyConfigDecodeHint is the hint attached when the node's strict decoder
 // rejects the applied config because of an unknown field. It points at the
@@ -44,7 +44,7 @@ const preflightVersionMismatchHint = "the generated config may include fields th
 const applyConfigDecodeHint = "the maintenance Talos parser on the node didn't recognize a field talm injected. " +
 	"this usually means templateOptions.talosVersion / --talos-version is set to a contract " +
 	"newer than the running Talos. reboot the node into a maintenance image matching the configured " +
-	"contract, or lower --talos-version to match what's running."
+	"contract, or lower templateOptions.talosVersion / --talos-version to match what's running."
 
 // annotateApplyConfigError attaches applyConfigDecodeHint when err is a
 // strict-decoder failure from the node side. Returns err unchanged otherwise.
@@ -60,49 +60,76 @@ func annotateApplyConfigError(err error) error {
 	return errors.WithHint(err, applyConfigDecodeHint)
 }
 
-// preflightCheckTalosVersion compares the configured Talos contract against
-// the version actually running on the node and prints a warning to the given
-// writer if the configured contract is strictly newer than the running
-// version.
-//
-// This is best-effort — every error path (no contract configured, COSI read
-// failed, version unparseable) returns silently. The check must never block
-// or alter apply behavior.
-//
-// The Talos version on the node is read from the
-// `Versions.runtime.talos.dev/runtime/version` COSI resource, which is
-// declared NonSensitive and is therefore reachable through a maintenance
-// (--insecure) connection that only carries the Reader role.
-func preflightCheckTalosVersion(ctx context.Context, c *client.Client, configuredVersion string, w io.Writer) {
-	if configuredVersion == "" {
-		return
-	}
+// versionReader fetches the running Talos version from a node. It returns
+// ok=false on any error so callers can treat the result as best-effort. The
+// signature is what makes preflightCheckTalosVersion testable without a live
+// COSI server.
+type versionReader func(ctx context.Context) (version string, ok bool)
 
-	res, err := safe.StateGet[*runtime.Version](
-		ctx,
-		c.COSI,
-		resource.NewMetadata(runtime.NamespaceName, runtime.VersionType, "version", resource.VersionUndefined),
-	)
-	if err != nil {
-		return
-	}
-
-	if warning := evaluateVersionMismatch(configuredVersion, res.TypedSpec().Version); warning != nil {
-		_, _ = fmt.Fprintln(w, "warning:", warning.Error())
-		for _, hint := range errors.GetAllHints(warning) {
-			_, _ = fmt.Fprintf(w, "hint: %s\n", hint)
+// cosiVersionReader returns a versionReader that reads the Talos version from
+// the node's COSI `Versions.runtime.talos.dev/runtime/version` resource. The
+// resource is declared NonSensitive in Talos and is therefore reachable
+// through a maintenance (--insecure) connection that only carries the Reader
+// role. Any read failure (RPC error, NotFound, PermissionDenied, multi-node
+// proxy error) is reported as ok=false.
+func cosiVersionReader(c *client.Client) versionReader {
+	return func(ctx context.Context) (string, bool) {
+		res, err := safe.StateGet[*runtime.Version](
+			ctx,
+			c.COSI,
+			resource.NewMetadata(runtime.NamespaceName, runtime.VersionType, "version", resource.VersionUndefined),
+		)
+		if err != nil {
+			return "", false
 		}
+		return res.TypedSpec().Version, true
+	}
+}
+
+// preflightCheckTalosVersion compares the configured Talos contract against
+// the version reported by `read` and prints a warning + hint to `w` if the
+// configured contract is strictly newer than the running version.
+//
+// Best-effort: any read or parse failure returns silently and never blocks
+// apply. An empty configuredVersion is treated as TalosVersionCurrent (the
+// nil-pointer contract that machinery uses by default), which is the most
+// aggressive contract — this is the documented reproduction case for the
+// "unknown keys found during decoding" error.
+func preflightCheckTalosVersion(ctx context.Context, read versionReader, configuredVersion string, w io.Writer) {
+	runningVersion, ok := read(ctx)
+	if !ok {
+		return
+	}
+
+	warning := evaluateVersionMismatch(configuredVersion, runningVersion)
+	if warning == nil {
+		return
+	}
+
+	_, _ = fmt.Fprintln(w, "warning:", warning.Error())
+	for _, hint := range errors.GetAllHints(warning) {
+		_, _ = fmt.Fprintf(w, "hint: %s\n", hint)
 	}
 }
 
 // evaluateVersionMismatch returns a hint-bearing warning error if the
 // configured contract is strictly newer than the running version. It returns
 // nil when versions agree, when the configured contract isn't newer, or when
-// either side cannot be parsed (best-effort: never block on parse failure).
+// the running version cannot be parsed (best-effort: never block on parse
+// failure).
+//
+// An empty configuredVersion is treated as machinery's TalosVersionCurrent
+// (nil pointer), which compares as strictly greater than every concrete
+// version. This matches what generate.NewInput does when no
+// WithVersionContract option is supplied.
 func evaluateVersionMismatch(configuredVersion, runningVersion string) error {
-	configuredContract, err := machineryconfig.ParseContractFromVersion(configuredVersion)
-	if err != nil {
-		return nil
+	var configuredContract *machineryconfig.VersionContract
+	if configuredVersion != "" {
+		var err error
+		configuredContract, err = machineryconfig.ParseContractFromVersion(configuredVersion)
+		if err != nil {
+			return nil
+		}
 	}
 
 	runningContract, err := machineryconfig.ParseContractFromVersion(runningVersion)

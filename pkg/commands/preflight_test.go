@@ -15,6 +15,8 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -27,15 +29,19 @@ func TestEvaluateVersionMismatch(t *testing.T) {
 		configured  string
 		running     string
 		wantWarning bool
+		wantInMsg   string
 	}{
-		{"configured newer than running", "v1.12", "v1.11.6", true},
-		{"configured equals running minor", "v1.12", "v1.12.6", false},
-		{"configured older than running", "v1.10", "v1.12.6", false},
-		{"configured equal exact", "v1.11", "v1.11.0", false},
-		{"configured empty", "", "v1.12.6", false},
-		{"running unparseable", "v1.12", "garbage", false},
-		{"configured unparseable", "garbage", "v1.12.6", false},
-		{"both empty", "", "", false},
+		{"configured newer than running", "v1.12", "v1.11.6", true, "v1.11.6"},
+		{"configured equals running minor", "v1.12", "v1.12.6", false, ""},
+		{"configured older than running", "v1.10", "v1.12.6", false, ""},
+		{"configured equal exact", "v1.11", "v1.11.0", false, ""},
+		// Empty configured = TalosVersionCurrent (nil contract = newest); the warning
+		// must fire because that's the documented reproduction case in cozystack/talm#132.
+		{"configured empty means current and warns", "", "v1.11.6", true, "current"},
+		{"configured empty equal-modern still warns", "", "v1.12.6", true, "current"},
+		{"running unparseable", "v1.12", "garbage", false, ""},
+		{"configured unparseable", "garbage", "v1.12.6", false, ""},
+		{"both empty silent", "", "", false, ""},
 	}
 
 	for _, tc := range tests {
@@ -51,8 +57,8 @@ func TestEvaluateVersionMismatch(t *testing.T) {
 			if len(hints) == 0 {
 				t.Fatalf("warning has no hint attached")
 			}
-			if !strings.Contains(got.Error(), tc.running) {
-				t.Errorf("warning message %q does not mention running version %q", got.Error(), tc.running)
+			if tc.wantInMsg != "" && !strings.Contains(got.Error(), tc.wantInMsg) {
+				t.Errorf("warning message %q does not contain %q", got.Error(), tc.wantInMsg)
 			}
 		})
 	}
@@ -90,6 +96,87 @@ func TestAnnotateApplyConfigError(t *testing.T) {
 			hasHint := len(hints) > 0
 			if hasHint != tc.wantHint {
 				t.Fatalf("annotateApplyConfigError hint=%v, want %v (hints=%v)", hasHint, tc.wantHint, hints)
+			}
+		})
+	}
+}
+
+// stubReader is a versionReader that returns a fixed value, matching the
+// contract preflightCheckTalosVersion uses (string, ok). Tests use it to
+// drive the function without standing up a live COSI server.
+func stubReader(version string, ok bool) versionReader {
+	return func(context.Context) (string, bool) { return version, ok }
+}
+
+func TestPreflightCheckTalosVersion(t *testing.T) {
+	tests := []struct {
+		name           string
+		configured     string
+		readerVersion  string
+		readerOK       bool
+		wantWarnPrefix string
+		wantHint       bool
+	}{
+		{
+			name:           "configured newer than running emits warning and hint",
+			configured:     "v1.12",
+			readerVersion:  "v1.11.6",
+			readerOK:       true,
+			wantWarnPrefix: "warning: pre-flight: configured talosVersion=v1.12 is newer",
+			wantHint:       true,
+		},
+		{
+			// Reproduction case from cozystack/talm#132: unset talosVersion + older node.
+			name:           "empty configured treated as current and warns",
+			configured:     "",
+			readerVersion:  "v1.11.6",
+			readerOK:       true,
+			wantWarnPrefix: "warning: pre-flight: configured talosVersion=current is newer",
+			wantHint:       true,
+		},
+		{
+			name:           "versions match silently",
+			configured:     "v1.12",
+			readerVersion:  "v1.12.6",
+			readerOK:       true,
+			wantWarnPrefix: "",
+			wantHint:       false,
+		},
+		{
+			name:           "reader failure is silent",
+			configured:     "v1.12",
+			readerVersion:  "",
+			readerOK:       false,
+			wantWarnPrefix: "",
+			wantHint:       false,
+		},
+		{
+			name:           "running unparseable is silent",
+			configured:     "v1.12",
+			readerVersion:  "weird-build-2026-01",
+			readerOK:       true,
+			wantWarnPrefix: "",
+			wantHint:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			preflightCheckTalosVersion(context.Background(), stubReader(tc.readerVersion, tc.readerOK), tc.configured, buf)
+
+			got := buf.String()
+			if tc.wantWarnPrefix == "" {
+				if got != "" {
+					t.Fatalf("expected silent output, got %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantWarnPrefix) {
+				t.Fatalf("output %q does not start with warning prefix %q", got, tc.wantWarnPrefix)
+			}
+			if tc.wantHint && !strings.Contains(got, "hint:") {
+				t.Errorf("expected a hint line in output %q", got)
 			}
 		})
 	}

@@ -122,7 +122,9 @@ func apply(args []string) error {
 			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
 
 			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
-				preflightCheckTalosVersion(ctx, c, applyCmdFlags.talosVersion, os.Stderr)
+				// applyTemplatesPerNode rotates ctx via client.WithNode per node,
+				// so ctx here is already single-target and safe for COSI reads.
+				preflightCheckTalosVersion(ctx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
 
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           data,
@@ -168,7 +170,14 @@ func apply(args []string) error {
 			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
 				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
-				preflightCheckTalosVersion(ctx, c, applyCmdFlags.talosVersion, os.Stderr)
+				// withApplyClient injects all target nodes into ctx via
+				// client.WithNodes; COSI does not support multi-node proxying
+				// (see rotate_ca_handler.go:317). Run preflight per node with
+				// a single-target context.
+				read := cosiVersionReader(c)
+				for _, node := range GlobalArgs.Nodes {
+					preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
+				}
 
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           result,
