@@ -168,14 +168,23 @@ func apply(args []string) error {
 			}
 
 			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
-				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
+				// wrapWithNodeContext fills ctx via client.WithNodes from
+				// talosconfig when --nodes is omitted, but does not mutate
+				// GlobalArgs.Nodes. Mirror its resolution here so the log line
+				// and the per-node preflight loop see the actual targets.
+				targetNodes := append([]string(nil), GlobalArgs.Nodes...)
+				if len(targetNodes) == 0 {
+					if cfg := c.GetConfigContext(); cfg != nil {
+						targetNodes = append(targetNodes, cfg.Nodes...)
+					}
+				}
+				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
 
-				// withApplyClient injects all target nodes into ctx via
-				// client.WithNodes; COSI does not support multi-node proxying
+				// COSI does not support multi-node proxying
 				// (see rotate_ca_handler.go:317). Run preflight per node with
 				// a single-target context.
 				read := cosiVersionReader(c)
-				for _, node := range GlobalArgs.Nodes {
+				for _, node := range targetNodes {
 					preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
 				}
 
