@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -121,6 +122,8 @@ func apply(args []string) error {
 			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
 
 			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
+				preflightCheckTalosVersion(ctx, c, applyCmdFlags.talosVersion, os.Stderr)
+
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           data,
 					Mode:           applyCmdFlags.Mode.Mode,
@@ -128,7 +131,7 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %w", err)
+					return fmt.Errorf("error applying new configuration: %w", annotateApplyConfigError(err))
 				}
 				helpers.PrintApplyResults(resp)
 				return nil
@@ -165,6 +168,8 @@ func apply(args []string) error {
 			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
 				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints)
 
+				preflightCheckTalosVersion(ctx, c, applyCmdFlags.talosVersion, os.Stderr)
+
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 					Data:           result,
 					Mode:           applyCmdFlags.Mode.Mode,
@@ -172,7 +177,7 @@ func apply(args []string) error {
 					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 				})
 				if err != nil {
-					return fmt.Errorf("error applying new configuration: %w", err)
+					return fmt.Errorf("error applying new configuration: %w", annotateApplyConfigError(err))
 				}
 
 				helpers.PrintApplyResults(resp)
