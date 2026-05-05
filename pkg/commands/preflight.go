@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cosi-project/runtime/pkg/resource"
@@ -28,6 +29,13 @@ import (
 	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
+
+// preflightCOSIReadTimeout caps the COSI read latency so a slow or
+// unresponsive node cannot turn a best-effort informational check into a
+// blocker for `apply`. Two seconds is comfortably above any expected
+// roundtrip on a healthy node and short enough to be unnoticeable when the
+// read actually fails.
+const preflightCOSIReadTimeout = 2 * time.Second
 
 // preflightVersionMismatchHint is the hint attached to the warning when the
 // configured talosVersion contract is newer than the version reported by the
@@ -74,6 +82,9 @@ type versionReader func(ctx context.Context) (version string, ok bool)
 // proxy error) is reported as ok=false.
 func cosiVersionReader(c *client.Client) versionReader {
 	return func(ctx context.Context) (string, bool) {
+		ctx, cancel := context.WithTimeout(ctx, preflightCOSIReadTimeout)
+		defer cancel()
+
 		res, err := safe.StateGet[*runtime.Version](
 			ctx,
 			c.COSI,
