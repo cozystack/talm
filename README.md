@@ -150,6 +150,8 @@ cluster:
 > For Talos < v1.12, the output is a single YAML document with `machine.network` and `machine.registries` sections (as shown above).
 > For Talos >= v1.12, the output uses the multi-document format with separate typed documents instead of the deprecated monolithic fields. `HostnameConfig`, `ResolverConfig` and a network interface document (`LinkConfig`, `BondConfig`, or `VLANConfig` — depending on topology) are always emitted; `Layer2VIPConfig` appears on controlplane nodes when `floatingIP` is set; `RegistryMirrorConfig` is emitted only by the cozystack chart.
 
+> **Version compatibility (`templateOptions.talosVersion` / `--talos-version`).** This setting must match the **Talos version actually running on the target node** — i.e. the maintenance ISO/PXE the node booted from for `apply -i`, or the installed Talos for an authenticated apply. It is **not** the same as `install.image`, which only controls what gets written to disk after a successful apply. When the configured contract is newer than the running binary, machinery injects fields (e.g. `machine.install.grubUseUKICmdline` from v1.12) that the running parser does not know, and the apply fails on the node side with `failed to parse config: unknown keys found during decoding: ...`. `talm apply` runs a best-effort pre-flight check against the running version and prints a `warning: pre-flight: ...` line with a hint when it detects this mismatch; if the warning is missed, the same hint is appended to the apply error. Either reboot the node into a maintenance image that matches the configured contract, or lower `templateOptions.talosVersion` / `--talos-version` to match what is running.
+
 Apply config:
 ```bash
 talm apply -f nodes/node1.yaml -i
