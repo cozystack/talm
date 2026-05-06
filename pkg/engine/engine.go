@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
@@ -225,24 +227,630 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	patchBytes, err := os.ReadFile(patchFile)
 	if err != nil {
-		return nil, fmt.Errorf("reading patch %s: %w", patchFile, err)
+		return nil, errors.WithHint(
+			errors.Wrapf(err, "reading patch %s", patchFile),
+			"verify the path is correct and the file is readable by the user running talm",
+		)
 	}
 	if isEffectivelyEmptyYAML(patchBytes) {
 		return rendered, nil
 	}
-	patch, err := configpatcher.LoadPatch(patchBytes)
+	cleanedRendered, renderedDirectivePaths, err := stripAllPatchDeleteDirectives(rendered)
 	if err != nil {
-		return nil, fmt.Errorf("loading patch from %s: %w", patchFile, err)
+		return nil, errors.WithHint(
+			errors.Wrap(err, "stripping $patch:delete directives from rendered"),
+			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		)
 	}
-	out, err := configpatcher.Apply(configpatcher.WithBytes(rendered), []configpatcher.Patch{patch})
+	cleanedPatch, err := stripPatchDeleteDirectivesAtPaths(patchBytes, renderedDirectivePaths)
 	if err != nil {
-		return nil, fmt.Errorf("applying patch from %s: %w", patchFile, err)
+		return nil, errors.WithHintf(
+			errors.Wrapf(err, "stripping redundant $patch:delete directives from %q", patchFile),
+			"the node body did not parse as YAML; verify %q is well-formed",
+			patchFile,
+		)
+	}
+	prunedBytes, allPruned, err := pruneBodyIdentitiesAgainstRendered(cleanedPatch, cleanedRendered)
+	if err != nil {
+		return nil, errors.WithHintf(
+			errors.Wrapf(err, "pruning identity overlap in %q", patchFile),
+			"the prune walk failed; the input is likely malformed YAML or has an unexpected document shape; inspect %q",
+			patchFile,
+		)
+	}
+	if allPruned {
+		return cleanedRendered, nil
+	}
+	patch, err := configpatcher.LoadPatch(prunedBytes)
+	if err != nil {
+		return nil, errors.WithHint(
+			errors.Wrapf(err, "loading patch from %q", patchFile),
+			"the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/",
+		)
+	}
+	out, err := configpatcher.Apply(configpatcher.WithBytes(cleanedRendered), []configpatcher.Patch{patch})
+	if err != nil {
+		return nil, errors.WithHintf(
+			errors.Wrapf(err, "applying patch from %q", patchFile),
+			"the patch references a path the rendered template does not contain; check the output of: talm template -f %q",
+			patchFile,
+		)
 	}
 	merged, err := out.Bytes()
 	if err != nil {
-		return nil, fmt.Errorf("encoding merged config from %s: %w", patchFile, err)
+		return nil, errors.WithHintf(
+			errors.Wrapf(err, "encoding merged config from %q", patchFile),
+			"configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible",
+		)
 	}
 	return merged, nil
+}
+
+// stripAllPatchDeleteDirectives walks every YAML document in `data` and
+// removes every `<key>: {$patch: delete}` pair from mapping nodes,
+// returning the cleaned bytes and the identity-prefixed paths of every
+// removed pair.
+//
+// configpatcher.Apply loads the merge target via configloader.NewFromBytes
+// WITHOUT WithAllowPatchDelete (apply.go: configOrBytes.Config), so the
+// directive-aware decoding pass that would normally extract these pairs
+// (configloader/internal/decoder/delete.go AppendDeletesTo) is never
+// invoked for the target tree. A directive nested in the target therefore
+// reaches the strict v1alpha1.Config decoder unprocessed: when the parent
+// field's declared type is a scalar map (e.g. `machine.nodeLabels` is
+// map[string]string), the directive's `{$patch: delete}` map-shaped value
+// trips the decoder with `cannot construct !!map into string`. Talos's
+// ApplyConfiguration RPC has the same constraint on the receiving side,
+// so we cannot just forward the directive untouched either.
+//
+// Stripping the (key, directive) pair from the target preserves its
+// observable effect — the named key is absent from the merged config that
+// talm sends to Talos — without inventing new merge semantics.
+//
+// The function returns the cleaned bytes and the identity-prefixed
+// paths of every removed pair. The caller uses those paths via
+// stripPatchDeleteDirectivesAtPaths to scrub matching entries from the
+// patch body, leaving any user-intent directive at a path the chart did
+// not own.
+//
+// Multi-document inputs are handled per-document; the document identity
+// tuple (apiVersion+kind+name, or the legacy-root sentinel) is embedded
+// in each path so a body that re-orders typed documents relative to
+// rendered still pairs the directives by content rather than by
+// positional accident.
+func stripAllPatchDeleteDirectives(data []byte) ([]byte, []string, error) {
+	docs, err := decodeAllYAMLDocuments(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(docs) == 0 {
+		return data, nil, nil
+	}
+	var stripped []string
+	for _, doc := range docs {
+		stripped = append(stripped, removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), nil)...)
+	}
+	if len(stripped) == 0 {
+		return data, nil, nil
+	}
+	out, err := encodeAllYAMLDocuments(docs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, stripped, nil
+}
+
+// stripPatchDeleteDirectivesAtPaths walks every YAML document in `data`
+// and removes only those `<key>: {$patch: delete}` pairs whose
+// identity-prefixed path is present in `paths`. Directives at any other
+// path are left intact so configpatcher.LoadPatch can honour them as
+// user-intent (load.go: NewFromBytes with allowPatchDelete=true →
+// AppendDeletesTo extracts them and applies the deletion as a Selector
+// during the merge).
+//
+// `paths` is the slice returned by stripAllPatchDeleteDirectives on the
+// rendered side — i.e. the addresses of every chart-emitted directive,
+// each prefixed by its document's identity tuple. Pairing by identity
+// rather than by document index lets a body that re-orders typed
+// documents relative to rendered still strip the chart-side directives
+// from the matching body documents (and leave user-intent directives at
+// the same nominal path on a different doc untouched).
+//
+// When `paths` is empty (rendered carried no directives), nothing is
+// stripped from the patch body.
+func stripPatchDeleteDirectivesAtPaths(data []byte, paths []string) ([]byte, error) {
+	if len(paths) == 0 {
+		return data, nil
+	}
+	docs, err := decodeAllYAMLDocuments(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return data, nil
+	}
+	pruneSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pruneSet[p] = struct{}{}
+	}
+	stripped := 0
+	for _, doc := range docs {
+		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
+	}
+	if stripped == 0 {
+		return data, nil
+	}
+	return encodeAllYAMLDocuments(docs)
+}
+
+func decodeAllYAMLDocuments(data []byte) ([]*yaml.Node, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var docs []*yaml.Node
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, errors.WithHint(
+				errors.Wrap(err, "decoding YAML before stripping $patch:delete directives"),
+				"the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body",
+			)
+		}
+		docs = append(docs, &doc)
+	}
+	return docs, nil
+}
+
+func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	for _, doc := range docs {
+		if err := enc.Encode(doc); err != nil {
+			return nil, errors.WithHint(
+				errors.Wrap(err, "re-encoding YAML after stripping $patch:delete directives"),
+				"the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it",
+			)
+		}
+	}
+	if err := enc.Close(); err != nil {
+		return nil, errors.WithHint(
+			errors.Wrap(err, "closing YAML encoder after stripping $patch:delete directives"),
+			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+		)
+	}
+	return buf.Bytes(), nil
+}
+
+// removePatchDeleteFromNode recursively walks `node` and removes every
+// (key, value) pair where value is the directive `{$patch: delete}`.
+// When `prunePaths` is nil every directive is removed (rendered-side
+// pass). When non-nil only directives at JSON-Pointer paths in the set
+// are removed; others survive for downstream configpatcher.LoadPatch.
+//
+// Returns the JSON-Pointer paths of every removed pair.
+func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths map[string]struct{}) []string {
+	if node == nil {
+		return nil
+	}
+	var removed []string
+	switch node.Kind {
+	case yaml.DocumentNode:
+		for _, child := range node.Content {
+			removed = append(removed, removePatchDeleteFromNode(child, parentPath, prunePaths)...)
+		}
+	case yaml.MappingNode:
+		kept := make([]*yaml.Node, 0, len(node.Content))
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			keyNode := node.Content[i]
+			valueNode := node.Content[i+1]
+			childPath := parentPath + "/" + jsonPointerEscape(keyNode.Value)
+			if isPatchDeleteDirective(valueNode) {
+				if prunePaths == nil {
+					removed = append(removed, childPath)
+					continue
+				}
+				if _, prune := prunePaths[childPath]; prune {
+					removed = append(removed, childPath)
+					continue
+				}
+			}
+			removed = append(removed, removePatchDeleteFromNode(valueNode, childPath, prunePaths)...)
+			kept = append(kept, keyNode, valueNode)
+		}
+		node.Content = kept
+	case yaml.SequenceNode:
+		for i, child := range node.Content {
+			removed = append(removed, removePatchDeleteFromNode(child, fmt.Sprintf("%s/%d", parentPath, i), prunePaths)...)
+		}
+	}
+	return removed
+}
+
+// jsonPointerEscape encodes a YAML mapping key as a JSON Pointer segment
+// per RFC 6901 (~ → ~0, / → ~1). The encoded form is what JSON Patch
+// implementations expect, but here we use it only to give every directive
+// a unique, comparable identity across the rendered- and body-side
+// strips.
+func jsonPointerEscape(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	s = strings.ReplaceAll(s, "/", "~1")
+	return s
+}
+
+// isPatchDeleteDirective reports whether `n` is exactly the YAML mapping
+// `{$patch: delete}` — a single key/value pair with scalar key "$patch"
+// and scalar value "delete".
+func isPatchDeleteDirective(n *yaml.Node) bool {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return false
+	}
+	if len(n.Content) != 2 {
+		return false
+	}
+	k, v := n.Content[0], n.Content[1]
+	return k.Kind == yaml.ScalarNode && k.Value == "$patch" &&
+		v.Kind == yaml.ScalarNode && v.Value == "delete"
+}
+
+// pruneBodyIdentitiesAgainstRendered removes from body every key whose value
+// is deep-equal to the same key in rendered. Talos's strategic-merge appends
+// to primitive arrays rather than treating them as a set, so a body that
+// re-states an unchanged primitive list (the dominant case after
+// `talm template -I` writes the rendered template back into the node file as
+// the body) would otherwise duplicate every entry on each apply round-trip:
+// every certSAN, every nameserver, every podSubnet doubles per round-trip.
+//
+// Returns (prunedBytes, allPruned, err). When allPruned is true the body
+// carried no semantic change beyond the rendered template and the caller
+// should short-circuit to rendered.
+//
+// Multi-document inputs (Talos v1.12+ output format) are pruned per-document:
+// each body document is matched against a rendered document by its identity
+// tuple (apiVersion + kind + name for typed documents; the empty tuple for
+// the legacy v1alpha1 root config), then pruneIdenticalKeys runs on the
+// pair. Body documents with no matching rendered document survive untouched
+// — they are user additions that the merge needs to see.
+//
+// Re-encoding goes through a fresh yaml.Encoder per kept document. That
+// loses the original key order and any comments (including the
+// modeline) — configpatcher.LoadPatch reads structure, not comments, so
+// this is fine for the apply path; do not feed the output back into a
+// human-facing rendering surface.
+func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, error) {
+	bodyDocs, bodyAllMaps, err := decodeAsMaps(body)
+	if err != nil {
+		return nil, false, errors.WithHint(
+			errors.Wrap(err, "parsing body"),
+			"the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation",
+		)
+	}
+	if !bodyAllMaps {
+		// JSON Patch / YAML patch-list bodies: top-level is a sequence,
+		// not a mapping, so the identity-prune step has no map keys to
+		// compare. Pass through untouched and let configpatcher.LoadPatch
+		// route it through the JSON Patch path (load.go: jsonpatch.DecodePatch).
+		return body, false, nil
+	}
+	renderedDocs, _, err := decodeAsMaps(rendered)
+	if err != nil {
+		// Rendered should always parse — engine.Render produced it from
+		// chart templates this binary owns. Surface the parse error
+		// directly: continuing on to LoadPatch with the original body
+		// would mask the real failure as a downstream configpatcher
+		// error against malformed bytes.
+		return nil, false, errors.WithHint(
+			errors.Wrap(err, "parsing rendered template for identity prune"),
+			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		)
+	}
+	if len(bodyDocs) == 0 {
+		return nil, true, nil
+	}
+
+	renderedByID := make(map[string]map[string]any, len(renderedDocs))
+	for _, doc := range renderedDocs {
+		renderedByID[documentIdentity(doc)] = doc
+	}
+
+	keptDocs := make([]map[string]any, 0, len(bodyDocs))
+	for _, bdoc := range bodyDocs {
+		id := documentIdentity(bdoc)
+		if rdoc, ok := renderedByID[id]; ok {
+			pruneIdenticalKeys(bdoc, rdoc)
+			// Typed multi-doc bodies use apiVersion/kind/name as the
+			// identity tuple configpatcher.LoadPatch routes on. Those
+			// keys are byte-equal between body and rendered when the
+			// user does a partial edit, so the prune deletes them and
+			// the surviving body looks like a bare {field: value} map
+			// that LoadPatch rejects with "missing kind". Re-attach
+			// the identity tuple from rendered when the body kept any
+			// override fields. The legacy v1alpha1 root carries no
+			// apiVersion/kind/name (its top-level identity is the
+			// version field, which is at the same nesting level as the
+			// machine/cluster blocks), so this only fires for the typed
+			// multi-doc shape.
+			if id != legacyRootIdentity && len(bdoc) > 0 {
+				reattachIdentityKeys(bdoc, rdoc)
+			}
+		}
+		if len(bdoc) > 0 {
+			keptDocs = append(keptDocs, bdoc)
+		}
+	}
+	if len(keptDocs) == 0 {
+		return nil, true, nil
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	for _, doc := range keptDocs {
+		if err := enc.Encode(doc); err != nil {
+			return nil, false, errors.WithHint(
+				errors.Wrap(err, "re-encoding pruned body"),
+				"the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it",
+			)
+		}
+	}
+	if err := enc.Close(); err != nil {
+		return nil, false, errors.WithHint(
+			errors.Wrap(err, "closing encoder for pruned body"),
+			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+		)
+	}
+	return buf.Bytes(), false, nil
+}
+
+// pruneIdenticalKeys recursively deletes every body[k] that deep-equals
+// rendered[k] (mutating `body` in place — the caller still holds the
+// reference). When a body sub-map becomes empty after pruning, the whole
+// entry is removed so the encoded output stays minimal. For primitive
+// arrays the function additionally subtracts every element already
+// present in rendered's array, replacing body's slice with the user-add
+// difference (when the diff is empty the entry is deleted) — this
+// neutralises Talos's strategic-merge primitive-array append behaviour
+// for both byte-identical and partial-edit cases — without it, every
+// `talm template -I` round-trip would double every certSAN, nameserver,
+// and podSubnet entry on the next apply.
+//
+// Object arrays (arrays whose elements are maps) are intentionally left
+// alone: configpatcher's StrategicMerge handles them via patchMergeKey
+// semantics that primitive subtraction would silently corrupt.
+func pruneIdenticalKeys(body, rendered map[string]any) {
+	for k, bodyV := range body {
+		renderedV, exists := rendered[k]
+		if !exists {
+			continue
+		}
+		if reflect.DeepEqual(bodyV, renderedV) {
+			delete(body, k)
+			continue
+		}
+		if bodySub, ok := bodyV.(map[string]any); ok {
+			if renderedSub, ok2 := renderedV.(map[string]any); ok2 {
+				// Only delete when the recursive prune actually
+				// removed every child entry. If bodySub was already
+				// empty before the recursion, leave it: a user-intent
+				// empty map (e.g. `key: {}` to clear a section) must
+				// reach the merge as-is, not get silently dropped so
+				// rendered's populated value wins.
+				before := len(bodySub)
+				pruneIdenticalKeys(bodySub, renderedSub)
+				if before > 0 && len(bodySub) == 0 {
+					delete(body, k)
+				}
+				continue
+			}
+		}
+		if bodySlice, ok := bodyV.([]any); ok {
+			if renderedSlice, ok2 := renderedV.([]any); ok2 && isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
+				diff := primitiveSliceDifference(bodySlice, renderedSlice)
+				if len(diff) == 0 {
+					delete(body, k)
+				} else {
+					body[k] = diff
+				}
+			}
+		}
+	}
+}
+
+// isPrimitiveSlice reports whether every element of `s` is a YAML scalar
+// (string, number, bool, nil) — i.e. a value Talos's strategic-merge
+// would append rather than merge by key. Object arrays return false and
+// are left to the configpatcher's patchMergeKey handling. Narrow integer
+// widths are listed defensively: yaml.v3 returns `int` and `float64` for
+// numbers in practice, but if a future caller hands us a body decoded
+// by a different unmarshaller, an `[]int8` (or similar) would otherwise
+// fall through to the default branch and skip the dedup pass.
+func isPrimitiveSlice(s []any) bool {
+	for _, e := range s {
+		switch e.(type) {
+		case nil, string, bool,
+			int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64,
+			float32, float64:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// primitiveSliceDifference returns body \ rendered — every element of
+// body whose deep-equal counterpart is not in rendered. Order from
+// body is preserved on the elements that survive. Used to strip out
+// rendered-side prefix entries from a partial-edit body so the
+// strategic-merge append step does not duplicate them.
+//
+// Trade-off: this loses any user-side reordering of primitive arrays.
+// If body is `[b, a]` and rendered is `[a, b]`, both elements match
+// and the difference is `[]`, so the caller deletes the body's value
+// and rendered's `[a, b]` order survives untouched. Strategic-merge's
+// own primitive-array semantics already cannot replace, only append,
+// so a body cannot impose a new order on a rendered list anyway —
+// even without this prune, the merge result would have been
+// `[a, b, b, a]` (rendered prepended, body appended in body order).
+// The dedup makes the silent-undo more visible because it now reaches
+// the partial-edit case, but the underlying constraint is upstream.
+// Callers that need ordered overrides have to model the field as a
+// non-primitive merge target (e.g. patchMergeKey on an object array)
+// or reach for a JSON Patch body, which the engine forwards through
+// LoadPatch unchanged.
+func primitiveSliceDifference(body, rendered []any) []any {
+	out := make([]any, 0, len(body))
+	for _, b := range body {
+		found := false
+		for _, r := range rendered {
+			if reflect.DeepEqual(b, r) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// decodeAsMaps parses every YAML document in `data` into a generic map.
+// Returns the decoded documents, a flag indicating whether every
+// document unmarshalled into map[string]any, and any error.
+//
+// allMaps == false signals that at least one document had a non-mapping
+// top level — typically a JSON Patch list or YAML patch-list body, both
+// of which are sequence-shaped at the root. The caller must NOT consume
+// `docs` in that case; the right thing to do is bypass identity-keyed
+// pruning entirely and forward the original bytes to configpatcher.LoadPatch.
+//
+// Returns (nil, true, nil) for empty input — vacuously "all maps".
+func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
+	if len(data) == 0 {
+		return nil, true, nil
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var docs []map[string]any
+	allMaps := true
+	for {
+		var doc any
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, false, err
+		}
+		if doc == nil {
+			continue
+		}
+		asMap, ok := doc.(map[string]any)
+		if !ok {
+			allMaps = false
+			continue
+		}
+		docs = append(docs, asMap)
+	}
+	return docs, allMaps, nil
+}
+
+// legacyRootIdentity is the sentinel documentIdentity returns for the
+// legacy v1alpha1 root config (no apiVersion/kind/name fields). The
+// per-document identity prune skips identity-key reattachment for this
+// shape because the legacy root carries no identity tuple to begin
+// with — its only top-level identifier is `version`, which is at the
+// same nesting level as the machine/cluster blocks rather than peer
+// to a routable apiVersion/kind/name.
+const legacyRootIdentity = "__legacy_root__"
+
+// documentIdentity returns a stable string identifying a Talos config
+// document. The legacy v1alpha1 root config (a single document with
+// `version: v1alpha1` at the top and no apiVersion/kind/name fields)
+// collapses to a fixed sentinel so that legacy bodies match legacy
+// renders. Typed documents (HostnameConfig, LinkConfig, RegistryMirrorConfig,
+// Layer2VIPConfig, …) identify by `apiVersion/kind` plus `/name` when a
+// name is present.
+//
+// The shape mirrors configpatcher's StrategicMerge documentID
+// (machinery/config/configpatcher/strategic.go: documentID), with one
+// deliberate difference: upstream omits the trailing `/name` segment
+// when the document does not implement NamedDocument; this function
+// follows the same rule via the empty-name shortcut so a typed doc
+// without a `name` field collides with itself across body and rendered
+// streams instead of with every other unnamed doc of the same kind.
+func documentIdentity(doc map[string]any) string {
+	apiVersion, _ := doc["apiVersion"].(string)
+	kind, _ := doc["kind"].(string)
+	if apiVersion == "" && kind == "" {
+		return legacyRootIdentity
+	}
+	id := apiVersion + "/" + kind
+	if name, _ := doc["name"].(string); name != "" {
+		id += "/" + name
+	}
+	return id
+}
+
+// documentIdentityFromNode returns the same identity tuple as
+// documentIdentity, but operates on a *yaml.Node instead of a decoded
+// map[string]any. The strip/prune-by-path passes work on yaml.Node
+// trees (so they can preserve comments and key order on round-trip),
+// so they need an identity helper that does not require a parallel
+// map decode. The output is byte-for-byte equal to documentIdentity's
+// output for the same logical document.
+func documentIdentityFromNode(doc *yaml.Node) string {
+	root := doc
+	if root != nil && root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	if root == nil || root.Kind != yaml.MappingNode {
+		return legacyRootIdentity
+	}
+	var apiVersion, kind, name string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		k := root.Content[i]
+		v := root.Content[i+1]
+		if k.Kind != yaml.ScalarNode || v.Kind != yaml.ScalarNode {
+			continue
+		}
+		switch k.Value {
+		case "apiVersion":
+			apiVersion = v.Value
+		case "kind":
+			kind = v.Value
+		case "name":
+			name = v.Value
+		}
+	}
+	if apiVersion == "" && kind == "" {
+		return legacyRootIdentity
+	}
+	id := apiVersion + "/" + kind
+	if name != "" {
+		id += "/" + name
+	}
+	return id
+}
+
+// reattachIdentityKeys copies apiVersion / kind / name from rendered
+// onto body when body's prune dropped them. Only intended for typed
+// multi-doc bodies — the legacy v1alpha1 root carries no identity
+// tuple to reattach. Each key is reattached only when missing, so a
+// body that explicitly overrides one (rare, but possible — e.g. an
+// operator pinning a different name on a Layer2VIPConfig) keeps its
+// override.
+func reattachIdentityKeys(body, rendered map[string]any) {
+	for _, k := range []string{"apiVersion", "kind", "name"} {
+		if _, has := body[k]; has {
+			continue
+		}
+		if v, ok := rendered[k]; ok {
+			body[k] = v
+		}
+	}
 }
 
 // NodeFileHasOverlay reports whether a node file carries a non-empty
