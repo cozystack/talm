@@ -29,6 +29,26 @@ clusterDomain: cozy.local
 # Single-node clusters and external-LB topologies leave it blank.
 # Example: floatingIP: 192.168.0.1
 floatingIP: ""
+
+# Optional override for the link Layer2VIPConfig is pinned to. When
+# left empty the chart picks the default-gateway-bearing link the
+# node already has (the VLAN sub-interface if one carries the
+# default route, otherwise the physical NIC). Set this when the
+# target link does not yet exist on the live system at first apply
+# -- typically a VLAN sub-interface that the same template is about
+# to bring up. Without an override the chart would derive the link
+# from discovery on the bare-metal NIC, pin the VIP there, and the
+# VIP would land on the wrong link once the VLAN comes up.
+# When set, Layer2VIPConfig is emitted unconditionally, even on a
+# totally fresh node where discovery has not yet resolved a default-
+# gateway link. The chart does NOT auto-emit a LinkConfig/VLANConfig
+# for the override link; the operator is responsible for ensuring
+# the link comes up — typically by adding a LinkConfig or VLANConfig
+# document for that link to the per-node body overlay. If no such
+# document brings vipLink up, Layer2VIPConfig will dangle on a
+# non-existent link and the cluster endpoint will be unreachable.
+# Example: vipLink: eth0.4000
+vipLink: ""
 image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
 podSubnets:
 - 10.244.0.0/16

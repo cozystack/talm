@@ -182,6 +182,19 @@ nameservers:
 {{- else }}
   []
 {{- end }}
+{{- /* Operator-declared vipLink override: emit Layer2VIPConfig
+       regardless of discovery state. Useful when the target link
+       does not yet exist on the live system at first apply (typical
+       case: a VLAN sub-interface this template is about to bring up).
+       The discovery-derived block below skips its own Layer2VIPConfig
+       when this branch fires, so we never emit duplicates. */}}
+{{- if and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") }}
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ .Values.floatingIP | quote }}
+link: {{ .Values.vipLink }}
+{{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
 {{- if $defaultLinkName }}
 {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
@@ -258,11 +271,15 @@ addresses:
 routes:
   - gateway: {{ include "talm.discovered.default_gateway" . }}
 {{- end }}
+{{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
+       has set .Values.vipLink, since the override-path block above
+       has already emitted the document with the operator's chosen
+       link. */}}
+{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") }}
 {{- $vipLinkName := $interfaceName }}
 {{- if $isVlan }}
 {{- $vipLinkName = $defaultLinkName }}
 {{- end }}
-{{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
