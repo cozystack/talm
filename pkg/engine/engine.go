@@ -228,7 +228,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	patchBytes, err := os.ReadFile(patchFile)
 	if err != nil {
 		return nil, errors.WithHint(
-			errors.Wrapf(err, "reading patch %s", patchFile),
+			errors.Wrapf(err, "reading patch %q", patchFile),
 			"verify the path is correct and the file is readable by the user running talm",
 		)
 	}
