@@ -2108,6 +2108,319 @@ cluster:
 		}
 	})
 
+	t.Run("podSubnets partial edit preserves rendered entry", func(t *testing.T) {
+		// cluster.network.podSubnets is tagged `merge:"replace"`
+		// upstream — the patcher overwrites rendered's slice with
+		// body's slice verbatim (unless body is the zero value, in
+		// which case rendered survives). The primitive-subtract
+		// dedup must NOT fire on this path: if body re-states
+		// rendered's entry plus a user-add, subtracting rendered
+		// would strip rendered's entry from the body, the upstream
+		// replace then writes only the user-add, and rendered's
+		// pod CIDR would silently vanish from the merged config.
+		// Pin the post-fix contract: a partial edit on podSubnets
+		// must reach upstream unchanged so the replace produces
+		// the expected union.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+      - 172.16.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.244.0.0/16") {
+			t.Errorf("rendered podSubnet 10.244.0.0/16 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "172.16.0.0/16") {
+			t.Errorf("user-added podSubnet 172.16.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("serviceSubnets partial edit preserves rendered entry", func(t *testing.T) {
+		// Same `merge:"replace"` semantics as podSubnets — the
+		// primitive-subtract dedup would strip rendered's entry,
+		// the upstream replace would then leave only the user-add,
+		// and rendered's service CIDR would vanish.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    serviceSubnets:
+      - 10.96.0.0/12
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    serviceSubnets:
+      - 10.96.0.0/12
+      - 192.168.16.0/20
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.96.0.0/12") {
+			t.Errorf("rendered serviceSubnet 10.96.0.0/12 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.16.0/20") {
+			t.Errorf("user-added serviceSubnet 192.168.16.0/20 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig ingress partial edit preserves rendered rule", func(t *testing.T) {
+		// NetworkRuleConfig is a typed v1.12+ document. Its `ingress`
+		// field is tagged `merge:"replace"` upstream. The prune walks
+		// the typed doc with path starting at the doc root, so the
+		// child path is the bare "ingress". Without that path in
+		// replaceSemanticPaths, the object-array branch's deep-equal
+		// fallback would drop body's restated rule, the upstream
+		// replace would write only the new rule, and rendered's rule
+		// would silently vanish from the merged firewall config.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+  - subnet: 192.168.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.0.0.0/8") {
+			t.Errorf("rendered ingress subnet 10.0.0.0/8 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.0.0/16") {
+			t.Errorf("user-added ingress subnet 192.168.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig portSelector.ports partial edit preserves rendered port", func(t *testing.T) {
+		// portSelector.ports is the second `merge:"replace"`-tagged
+		// field on NetworkRuleConfig. The typed-doc walk reaches it
+		// at path "portSelector/ports". Without the entry in
+		// replaceSemanticPaths the primitive-subtract branch would
+		// strip rendered's port from body; the upstream replace would
+		// then leave only the user-add and the rendered port would
+		// disappear from the firewall rule.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+    - 50000
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "9999") {
+			t.Errorf("rendered port 9999 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "50000") {
+			t.Errorf("user-added port 50000 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("auditPolicy partial edit preserves rendered map keys", func(t *testing.T) {
+		// cluster.apiServer.auditPolicy is an Unstructured map tagged
+		// `merge:"replace"`: upstream overwrites the entire map with
+		// body's value (unless body is the zero value). The map-recursion
+		// branch of pruneIdenticalKeysAt would deep-equal-strip rendered's
+		// matching keys (apiVersion, kind, the unmodified rules), the
+		// body's map would then carry only the user's edit, and the
+		// upstream replace would land that minimal map as the final
+		// auditPolicy — the typed-doc identity keys and the unmodified
+		// rules vanish. Pin the post-fix contract: a partial edit on
+		// auditPolicy reaches upstream verbatim.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    auditPolicy:
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      rules:
+        - level: Metadata
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    auditPolicy:
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      rules:
+        - level: Metadata
+        - level: RequestResponse
+          users:
+            - alice
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "apiVersion: audit.k8s.io/v1") {
+			t.Errorf("auditPolicy apiVersion silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "kind: Policy") {
+			t.Errorf("auditPolicy kind silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "RequestResponse") {
+			t.Errorf("user-added auditPolicy rule RequestResponse missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "alice") {
+			t.Errorf("user-added auditPolicy rule user alice missing from merged output:\n%s", out)
+		}
+	})
+
 	t.Run("interface identity selection mirrors upstream body-driven switch", func(t *testing.T) {
 		// Talos's NetworkDeviceList.mergeDevice picks the identity
 		// field from the BODY element being merged: if body sets
