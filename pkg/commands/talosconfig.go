@@ -43,7 +43,7 @@ This command:
 4. Re-encrypts if encryption is used
 
 Use this command when your client certificate has expired.`,
-	Args:  cobra.NoArgs,
+	Args: cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		// Ensure project root is detected
 		if !Config.RootDirExplicit {
@@ -190,8 +190,19 @@ func regenerateTalosconfig() error {
 	return nil
 }
 
-// getClusterNameFromChart reads the cluster name from Chart.yaml
+// getClusterNameFromChart reads the cluster name from values.yaml or Chart.yaml
 func getClusterNameFromChart() string {
+	valuesYamlPath := filepath.Join(Config.RootDir, "values.yaml")
+	if data, err := os.ReadFile(valuesYamlPath); err == nil {
+		var valuesData struct {
+			ClusterName string `yaml:"clusterName"`
+		}
+
+		if err = yaml.Unmarshal(data, &valuesData); err == nil && valuesData.ClusterName != "" {
+			return valuesData.ClusterName
+		}
+	}
+
 	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
@@ -208,4 +219,3 @@ func getClusterNameFromChart() string {
 
 	return chartData.Name
 }
-

@@ -45,13 +45,14 @@ machine:
 
 {{- /* Shared cluster section */ -}}
 {{- define "talos.config.cluster" }}
+
 cluster:
   network:
     podSubnets:
       {{- toYaml .Values.podSubnets | nindent 6 }}
     serviceSubnets:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
-  clusterName: "{{ .Chart.Name }}"
+  clusterName: {{ .Values.clusterName | default .Chart.Name | regexFind "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" | required "clusterName must be a valid DNS-1123 label" | quote }}
   controlPlane:
     endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
   {{- if eq .MachineType "controlplane" }}

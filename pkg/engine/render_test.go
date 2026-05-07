@@ -228,7 +228,7 @@ func TestLegacyCozystack_ControlPlane(t *testing.T) {
 
 	// Legacy format: cluster section present
 	assertContains(t, output, "cluster:")
-	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "clusterName: \"cozystack\"")
 	assertContains(t, output, "controlPlane:")
 	assertContains(t, output, "endpoint:")
 
@@ -289,7 +289,7 @@ func TestLegacyGeneric_ControlPlane(t *testing.T) {
 
 	// Legacy format: cluster section present
 	assertContains(t, output, "cluster:")
-	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "clusterName: \"generic\"")
 	assertContains(t, output, "controlPlane:")
 	assertContains(t, output, "endpoint:")
 
@@ -342,7 +342,7 @@ func TestMultiDocCozystack_ControlPlane(t *testing.T) {
 
 	// Multi-doc: cluster section unchanged
 	assertContains(t, output, "cluster:")
-	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "clusterName: \"cozystack\"")
 	assertContains(t, output, "controlPlane:")
 	assertContains(t, output, "allowSchedulingOnControlPlanes:")
 	assertContains(t, output, "etcd:")
@@ -504,7 +504,7 @@ func TestMultiDocGeneric_ControlPlane(t *testing.T) {
 
 	// Multi-doc: cluster section still present
 	assertContains(t, output, "cluster:")
-	assertContains(t, output, "clusterName:")
+	assertContains(t, output, "clusterName: \"generic\"")
 	assertContains(t, output, "controlPlane:")
 	assertContains(t, output, "endpoint:")
 
@@ -4105,6 +4105,84 @@ func TestMultiDocCozystack_EndpointRequired(t *testing.T) {
 	if !strings.Contains(err.Error(), "endpoint") {
 		t.Errorf("error should mention 'endpoint'; got: %v", err)
 	}
+}
+
+// TestMultiDocCozystack_InvalidClusterNameOverride ensures invalid
+// clusterName overrides are rejected
+func TestMultiDocCozystack_InvalidClusterNameOverride(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = simpleNicLookup()
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["clusterName"] = "InvalidClusterName"
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err == nil {
+		t.Fatal("expected render to fail with required() error when clusterName is invalid")
+	}
+	if !strings.Contains(err.Error(), "clusterName") {
+		t.Errorf("error should mention 'clusterName'; got: %v", err)
+	}
+}
+
+// TestMultiDocCozystack_ValidClusterNameOverride ensures clusterName
+// overrides make it through to the result.
+func TestMultiDocCozystack_ValidClusterNameOverride(t *testing.T) {
+	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"clusterName": "differentclustername",
+	})
+
+	assertContains(t, result, "clusterName: \"differentclustername\"")
+}
+
+// TestMultiDocGeneric_InvalidSubnetsFallsBackToDiscovery mirrors the
+// cozystack-side smoke test for ensuring invalid clusterName
+// overrides are rejected.
+func TestMultiDocGeneric_InvalidClusterNameOverride(t *testing.T) {
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = simpleNicLookup()
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := make(map[string]any)
+	maps.Copy(values, chrt.Values)
+	values["clusterName"] = "InvalidClusterName"
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err == nil {
+		t.Fatal("expected render to fail with required() error when clusterName is invalid")
+	}
+	if !strings.Contains(err.Error(), "clusterName") {
+		t.Errorf("error should mention 'clusterName'; got: %v", err)
+	}
+}
+
+// TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery mirrors the
+// cozystack-side smoke test for ensuring clusterName overrides make
+// it through to the result.
+func TestMultiDocGeneric_ValidClusterNameOverride(t *testing.T) {
+	result := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"clusterName": "differentclustername",
+	})
+
+	assertContains(t, result, "clusterName: \"differentclustername\"")
 }
 
 // TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery mirrors the
