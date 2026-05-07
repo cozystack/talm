@@ -91,11 +91,19 @@
 {{- end }}
 {{- end }}
 
+{{- /* JSON list of IPv4 addresses on the link carrying the IPv4
+       default route. Filters routes to family=inet4 because consumers
+       (cozystack and generic chart helpers) pair the returned addresses
+       with a hardcoded IPv4 destination route — selecting the first
+       default route regardless of family on a dual-stack node would
+       cascade into the IPv6 family being applied to the address filter,
+       and the node's IPv4 addresses would silently disappear from the
+       rendered config. Mirrors gateway_by_link's IPv4-only convention. */ -}}
 {{- define "talm.discovered.default_addresses_by_gateway" }}
 {{- $linkName := "" }}
 {{- $family := "" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- $linkName = .spec.outLinkName }}
 {{- $family = .spec.family }}
 {{- break }}
@@ -134,9 +142,20 @@
 {{- end }}
 {{- end }}
 
+{{- /* All four default_link_*_by_gateway helpers below are IPv4-only.
+       They identify the link that carries the chart's primary uplink, and
+       that uplink is the same one default_gateway / default_addresses_by_gateway
+       configure — selecting a different link here would produce a config
+       where LinkConfig.name attaches to one NIC while LinkConfig.routes /
+       addresses describe a different NIC, leaving both unconfigured.
+       Picking the IPv4 default route's outLinkName keeps the whole
+       chain pointed at the same NIC on multi-NIC dual-stack nodes
+       (typical Hetzner shape: management NIC on IPv4, public NIC on
+       IPv6, default routes on different links). Symmetric with
+       gateway_by_link / default_gateway / default_addresses_by_gateway. */ -}}
 {{- define "talm.discovered.default_link_name_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- .spec.outLinkName }}
 {{- break }}
 {{- end }}
@@ -145,7 +164,7 @@
 
 {{- define "talm.discovered.default_link_address_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- (lookup "links" "" .spec.outLinkName).spec.hardwareAddr }}
 {{- break }}
 {{- end }}
@@ -154,7 +173,7 @@
 
 {{- define "talm.discovered.default_link_bus_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- (lookup "links" "" .spec.outLinkName).spec.busPath }}
 {{- break }}
 {{- end }}
@@ -163,7 +182,7 @@
 
 {{- define "talm.discovered.default_link_selector_by_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- with (lookup "links" "" .spec.outLinkName) }}
 busPath: {{ .spec.busPath }}
 {{- break }}
@@ -176,9 +195,20 @@ busPath: {{ .spec.busPath }}
 {{ printf "enx%s" (lookup "links" "" . | dig "spec" "hardwareAddr" . | replace ":" "") }}
 {{- end }}
 
+{{- /* Scalar IPv4 default-route gateway (dst="", main table, family=inet4).
+       Empty if the node has no IPv4 default route. IPv4-only by convention
+       so the helper stays symmetric with gateway_by_link and so consumers
+       that pair the returned gateway with an IPv4 destination
+       (`network: 0.0.0.0/0` on the legacy schema, or no `network:` field
+       on the typed RouteConfig schema) never end up with a malformed
+       IPv4-dst + IPv6-gateway route on a dual-stack node. Talos derives
+       the route family from the gateway literal at validation time, so a
+       RouteConfig with gateway `fe80::1` and no `network:` field is
+       rejected outright — silently breaking Layer2 VIP and any other
+       feature that depends on the chart-emitted route entry. */ -}}
 {{- define "talm.discovered.default_gateway" }}
 {{- range (lookup "routes" "" "").items }}
-{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") }}
+{{- if and (eq .spec.dst "") (not (eq .spec.gateway "")) (eq .spec.table "main") (eq (.spec.family | toString) "inet4") }}
 {{- .spec.gateway }}
 {{- break }}
 {{- end }}
