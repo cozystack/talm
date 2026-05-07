@@ -700,3 +700,324 @@ func TestPrimitiveSliceDifference_ReorderCollapsesToEmpty(t *testing.T) {
 		t.Errorf("expected empty diff for reordered-but-identical-set slices, got %v", got)
 	}
 }
+
+// TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey
+// pins that pruneIdenticalKeysAt descends into object-array elements
+// matched by their identity key (here `interface:` for the
+// machine/network/interfaces path) and dedupes nested primitive
+// arrays inside the matched pair. Without this descent,
+// configpatcher.Apply matches the outer object-array element by
+// `interface:` upstream, recurses into it, and appends the inner
+// primitive list (`addresses`) — silently doubling every rendered
+// address on every apply round-trip when the body re-states the
+// rendered values plus a partial edit.
+func TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26", "10.0.0.99/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice, got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected one interface item retained for the partial edit, got %d: %#v", len(ifaces), ifaces)
+	}
+	iface, ok := ifaces[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected interface item to be a map, got %#v", ifaces[0])
+	}
+	if iface["interface"] != "enp0s31f6" {
+		t.Errorf("identity key `interface` must survive the prune so the upstream merge can match the element, got %#v", iface["interface"])
+	}
+	addrs, ok := iface["addresses"].([]any)
+	if !ok {
+		t.Fatalf("expected addresses to remain as a slice (only the user-add 10.0.0.99/24 should survive), got %#v", iface["addresses"])
+	}
+	if len(addrs) != 1 || addrs[0] != "10.0.0.99/24" {
+		t.Errorf("expected addresses to be pruned to just [10.0.0.99/24], got %#v", addrs)
+	}
+}
+
+// TestPruneIdenticalKeysAt_DropsObjectArrayItemReducedToIdentity pins
+// that an object-array body item whose payload reduces to nothing
+// after recursion is dropped entirely. Leaving an item that only
+// carries its identity key would force configpatcher.Apply into a
+// no-op match round, and (when the only rendered-side payload was a
+// primitive list) re-trigger the strategic-merge append the prune is
+// the entire reason for existing.
+func TestPruneIdenticalKeysAt_DropsObjectArrayItemReducedToIdentity(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+				"routes": []any{
+					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+				},
+			},
+			map[string]any{
+				"interface": "eth1",
+				"addresses": []any{"10.0.0.5/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+				"routes": []any{
+					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+				},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice (eth1 is a user-add), got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected the matched-and-emptied enp0s31f6 to be dropped, leaving only the eth1 user-add, got %d items: %#v", len(ifaces), ifaces)
+	}
+	if iface := ifaces[0].(map[string]any); iface["interface"] != "eth1" {
+		t.Errorf("expected the surviving interface item to be eth1 (the user-add), got %#v", iface["interface"])
+	}
+}
+
+// TestPruneIdenticalKeysAt_ObjectArrayDeepEqualFallback pins the
+// fallback behaviour for object arrays whose path is not in the
+// known-merge-keys table: items that deep-equal a rendered item are
+// dropped, even though the helper has no field name to match on.
+// This catches the routes case (no single primary key in the Talos
+// schema) and gracefully handles any future schema field that
+// objectArrayMergeKeys forgets to enumerate.
+func TestPruneIdenticalKeysAt_ObjectArrayDeepEqualFallback(t *testing.T) {
+	body := map[string]any{
+		"opaqueArray": []any{
+			map[string]any{"a": "1", "b": "2"},
+			map[string]any{"a": "3", "b": "4"},
+		},
+	}
+	rendered := map[string]any{
+		"opaqueArray": []any{
+			map[string]any{"a": "1", "b": "2"},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "unknown/path")
+
+	arr, ok := body["opaqueArray"].([]any)
+	if !ok {
+		t.Fatalf("expected opaqueArray to remain as a slice, got %#v", body["opaqueArray"])
+	}
+	if len(arr) != 1 {
+		t.Fatalf("expected the deep-equal duplicate to be pruned, got %d items: %#v", len(arr), arr)
+	}
+	if got, want := arr[0].(map[string]any)["a"], "3"; got != want {
+		t.Errorf("expected the surviving item to be the user-add (a=3), got a=%v", got)
+	}
+}
+
+// TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd pins the
+// regression-safety property: an object-array item present only in
+// body (no rendered counterpart by identity key) must reach the
+// merge intact. The dedup must never drop user-add entries — the
+// whole point is to neutralise the strategic-merge append for
+// repeated values, not to replace it with silent drop-on-write.
+func TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "eth1",
+				"addresses": []any{"10.0.0.5/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice, got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected the user-add interface to be preserved, got %d items: %#v", len(ifaces), ifaces)
+	}
+	iface := ifaces[0].(map[string]any)
+	if iface["interface"] != "eth1" {
+		t.Errorf("expected user-add interface eth1 to survive, got %#v", iface["interface"])
+	}
+}
+
+// TestHasIdentityValue pins the boundary cases of the body-driven
+// identity selector. Upstream's NetworkDeviceList.mergeDevice falls
+// through `case device.DeviceInterface != "":` to
+// `case device.DeviceSelector != nil:` when the first identity is the
+// zero value of its type. matchObjectArrayItem must reject empty/zero
+// identity fields the same way; otherwise an `interface: ""` body
+// would chosen-key on `interface`, find no match in rendered, and
+// preserve a body element that should have been matched via
+// `deviceSelector` instead.
+func TestHasIdentityValue(t *testing.T) {
+	tests := []struct {
+		name string
+		v    any
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty string", "", false},
+		{"non-empty string", "eth0", true},
+		{"empty map", map[string]any{}, false},
+		{"non-empty map", map[string]any{"hardwareAddr": "aa:bb:cc:dd:ee:ff"}, true},
+		{"empty slice", []any{}, false},
+		{"non-empty slice", []any{"a"}, true},
+		{"int zero", 0, true},
+		{"int non-zero", 4000, true},
+		{"bool false", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasIdentityValue(tc.v); got != tc.want {
+				t.Errorf("hasIdentityValue(%v) = %v, want %v", tc.v, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestObjectArrayMergeKeysMatchesUpstreamMergerSurface pins that the
+// table covers exactly the upstream List types whose custom Merge
+// method matches by identity AND whose elements would mishandle
+// inner-primitive append on partial edit. A new entry to the table
+// adds risk; a missing entry leaves the inner-primitive append
+// regression reachable. Either drift surfaces here so a maintainer
+// reconciles the table against the upstream merger surface
+// deliberately.
+//
+// Upstream surface (verified against the cozystack/talos fork pinned
+// in go.mod):
+//
+//   - NetworkDeviceList — yaml path `machine.network.interfaces`,
+//     identity `interface` or `deviceSelector` (body-driven switch).
+//   - VlanList — yaml path `machine.network.interfaces[].vlans`,
+//     identity `vlanId`.
+//   - AdmissionPluginConfigList — yaml path
+//     `cluster.apiServer.admissionControl`, identity `name`.
+//   - ConfigFileList (typed ExtensionServiceConfig.configFiles) —
+//     intentionally OMITTED: ConfigFile carries only string fields
+//     (hostPath, mountPath, content), so the upstream merge.Merge
+//     field-by-field already produces the right result and the
+//     deep-equal fallback in matchObjectArrayItem covers
+//     full-restate idempotence. Adding it would not change
+//     correctness; listing it would mislead readers about which
+//     types are at risk for inner-primitive append.
+func TestObjectArrayMergeKeysMatchesUpstreamMergerSurface(t *testing.T) {
+	expected := map[string][]string{
+		"machine/network/interfaces":         {"interface", "deviceSelector"},
+		"machine/network/interfaces/vlans":   {"vlanId"},
+		"cluster/apiServer/admissionControl": {"name"},
+	}
+	if len(objectArrayMergeKeys) != len(expected) {
+		t.Fatalf("table size drift: have %d entries, want %d (verify against upstream merger surface in pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and config/types/runtime/extensions/service_config.go)\nhave: %#v\nwant: %#v",
+			len(objectArrayMergeKeys), len(expected), objectArrayMergeKeys, expected)
+	}
+	for path, wantKeys := range expected {
+		gotKeys, ok := objectArrayMergeKeys[path]
+		if !ok {
+			t.Errorf("missing entry for %q", path)
+			continue
+		}
+		if len(gotKeys) != len(wantKeys) {
+			t.Errorf("entry for %q: got %d keys, want %d (got=%v want=%v)", path, len(gotKeys), len(wantKeys), gotKeys, wantKeys)
+			continue
+		}
+		for i, want := range wantKeys {
+			if gotKeys[i] != want {
+				t.Errorf("entry for %q at index %d: got %q, want %q", path, i, gotKeys[i], want)
+			}
+		}
+	}
+}
+
+// TestReplaceSemanticPathsMatchesUpstreamReplaceTags pins that the
+// table covers exactly the upstream fields tagged `merge:"replace"`.
+// A `merge:"replace"` field reachable through the prune that is
+// missing from this table will silently drop rendered-side entries
+// on a partial edit; a stray entry will skip otherwise-valid prune
+// work. Either drift surfaces here.
+//
+// Upstream surface (verified against the cozystack/talos fork pinned
+// in go.mod):
+//
+//   - cluster/network/podSubnets — v1alpha1 PodSubnet
+//   - cluster/network/serviceSubnets — v1alpha1 ServiceSubnet
+//   - cluster/apiServer/auditPolicy — v1alpha1 AuditPolicyConfig
+//   - ingress — typed NetworkRuleConfig Ingress
+//   - portSelector/ports — typed NetworkRuleConfig Ports
+func TestReplaceSemanticPathsMatchesUpstreamReplaceTags(t *testing.T) {
+	expected := map[string]struct{}{
+		"cluster/network/podSubnets":     {},
+		"cluster/network/serviceSubnets": {},
+		"cluster/apiServer/auditPolicy":  {},
+		"ingress":                        {},
+		"portSelector/ports":             {},
+	}
+	if len(replaceSemanticPaths) != len(expected) {
+		t.Fatalf("table size drift: have %d entries, want %d (re-grep upstream for `merge:\"replace\"` and reconcile)\nhave: %#v\nwant: %#v",
+			len(replaceSemanticPaths), len(expected), replaceSemanticPaths, expected)
+	}
+	for path := range expected {
+		if _, ok := replaceSemanticPaths[path]; !ok {
+			t.Errorf("missing entry for %q", path)
+		}
+	}
+}
+
+// TestJoinYAMLPath pins joinYAMLPath's contract: the document root
+// (empty parent) joins without a leading separator so the path lookup
+// in objectArrayMergeKeys matches the documented form ("machine/...");
+// every other join inserts exactly one slash.
+func TestJoinYAMLPath(t *testing.T) {
+	tests := []struct {
+		parent string
+		key    string
+		want   string
+	}{
+		{"", "machine", "machine"},
+		{"machine", "network", "machine/network"},
+		{"machine/network", "interfaces", "machine/network/interfaces"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.parent+"+"+tc.key, func(t *testing.T) {
+			if got := joinYAMLPath(tc.parent, tc.key); got != tc.want {
+				t.Errorf("joinYAMLPath(%q, %q) = %q, want %q", tc.parent, tc.key, got, tc.want)
+			}
+		})
+	}
+}

@@ -1914,6 +1914,928 @@ machine:
 		}
 	})
 
+	t.Run("network interface partial edit does not duplicate addresses or routes", func(t *testing.T) {
+		// rendered already populates machine.network.interfaces[interface=X]
+		// with addresses and routes; the user's body re-states the same
+		// interface with one extra address (a typical per-node edit).
+		// Talos's strategic merge matches interfaces by `interface:` and
+		// recurses into the matched element, but the inner primitive list
+		// (addresses) and the routes object array both append rather than
+		// replace — every apply round-trip thus duplicates the rendered
+		// entries once more, accumulating linearly with the number of
+		// applies. Without object-array recursion in pruneIdenticalKeys,
+		// the body's interfaces value reaches configpatcher.Apply with
+		// the rendered-side entries still present and triggers the append.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        addresses:
+          - 88.99.249.47/26
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 88.99.249.1
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        addresses:
+          - 88.99.249.47/26
+          - 10.0.0.99/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 88.99.249.1
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if got := strings.Count(out, "88.99.249.47/26"); got != 1 {
+			t.Errorf("rendered interface address 88.99.249.47/26 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
+		}
+		if got := strings.Count(out, "88.99.249.1"); got != 1 {
+			t.Errorf("rendered route gateway 88.99.249.1 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
+		}
+		if !strings.Contains(out, "10.0.0.99/24") {
+			t.Errorf("user-added address 10.0.0.99/24 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("nested vlan addresses do not duplicate", func(t *testing.T) {
+		// Same shape as the interface-addresses regression but one
+		// level deeper: machine.network.interfaces[interface=X]
+		// .vlans[vlanId=Y].addresses. Both the parent interface and
+		// the vlan are matched by their identity keys upstream, then
+		// the inner primitive `addresses` list appends. Pin the
+		// post-fix contract: identical inner primitives must not
+		// duplicate when the outer object arrays are matched.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        vlans:
+          - vlanId: 4000
+            addresses:
+              - 192.168.100.2/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        vlans:
+          - vlanId: 4000
+            addresses:
+              - 192.168.100.2/24
+              - 192.168.100.3/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if got := strings.Count(out, "192.168.100.2/24"); got != 1 {
+			t.Errorf("rendered vlan address 192.168.100.2/24 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
+		}
+		if !strings.Contains(out, "192.168.100.3/24") {
+			t.Errorf("user-added vlan address 192.168.100.3/24 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("admissionControl exemption namespaces do not duplicate", func(t *testing.T) {
+		// cluster.apiServer.admissionControl[name=PodSecurity]
+		// .configuration.exemptions.namespaces accumulates duplicates of
+		// `kube-system` on every apply round-trip. The admissionControl
+		// element is matched by its `name:` key upstream, then the
+		// nested primitive list under exemptions.namespaces appends.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    admissionControl:
+      - name: PodSecurity
+        configuration:
+          apiVersion: pod-security.admission.config.k8s.io/v1alpha1
+          kind: PodSecurityConfiguration
+          exemptions:
+            namespaces:
+              - kube-system
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    admissionControl:
+      - name: PodSecurity
+        configuration:
+          apiVersion: pod-security.admission.config.k8s.io/v1alpha1
+          kind: PodSecurityConfiguration
+          exemptions:
+            namespaces:
+              - kube-system
+              - my-namespace
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if got := strings.Count(out, "kube-system"); got != 1 {
+			t.Errorf("rendered admissionControl exemption namespace kube-system duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
+		}
+		if !strings.Contains(out, "my-namespace") {
+			t.Errorf("user-added exemption namespace my-namespace missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("podSubnets partial edit preserves rendered entry", func(t *testing.T) {
+		// cluster.network.podSubnets is tagged `merge:"replace"`
+		// upstream — the patcher overwrites rendered's slice with
+		// body's slice verbatim (unless body is the zero value, in
+		// which case rendered survives). The primitive-subtract
+		// dedup must NOT fire on this path: if body re-states
+		// rendered's entry plus a user-add, subtracting rendered
+		// would strip rendered's entry from the body, the upstream
+		// replace then writes only the user-add, and rendered's
+		// pod CIDR would silently vanish from the merged config.
+		// Pin the post-fix contract: a partial edit on podSubnets
+		// must reach upstream unchanged so the replace produces
+		// the expected union.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+      - 172.16.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.244.0.0/16") {
+			t.Errorf("rendered podSubnet 10.244.0.0/16 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "172.16.0.0/16") {
+			t.Errorf("user-added podSubnet 172.16.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("serviceSubnets partial edit preserves rendered entry", func(t *testing.T) {
+		// Same `merge:"replace"` semantics as podSubnets — the
+		// primitive-subtract dedup would strip rendered's entry,
+		// the upstream replace would then leave only the user-add,
+		// and rendered's service CIDR would vanish.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    serviceSubnets:
+      - 10.96.0.0/12
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  network:
+    serviceSubnets:
+      - 10.96.0.0/12
+      - 192.168.16.0/20
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.96.0.0/12") {
+			t.Errorf("rendered serviceSubnet 10.96.0.0/12 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.16.0/20") {
+			t.Errorf("user-added serviceSubnet 192.168.16.0/20 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig ingress partial edit preserves rendered rule", func(t *testing.T) {
+		// NetworkRuleConfig is a typed v1.12+ document. Its `ingress`
+		// field is tagged `merge:"replace"` upstream. The prune walks
+		// the typed doc with path starting at the doc root, so the
+		// child path is the bare "ingress". Without that path in
+		// replaceSemanticPaths, the object-array branch's deep-equal
+		// fallback would drop body's restated rule, the upstream
+		// replace would write only the new rule, and rendered's rule
+		// would silently vanish from the merged firewall config.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+  - subnet: 192.168.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "10.0.0.0/8") {
+			t.Errorf("rendered ingress subnet 10.0.0.0/8 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.0.0/16") {
+			t.Errorf("user-added ingress subnet 192.168.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig portSelector.ports partial edit preserves rendered port", func(t *testing.T) {
+		// portSelector.ports is the second `merge:"replace"`-tagged
+		// field on NetworkRuleConfig. The typed-doc walk reaches it
+		// at path "portSelector/ports". Without the entry in
+		// replaceSemanticPaths the primitive-subtract branch would
+		// strip rendered's port from body; the upstream replace would
+		// then leave only the user-add and the rendered port would
+		// disappear from the firewall rule.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+    - 50000
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "9999") {
+			t.Errorf("rendered port 9999 silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "50000") {
+			t.Errorf("user-added port 50000 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("auditPolicy partial edit preserves rendered map keys", func(t *testing.T) {
+		// cluster.apiServer.auditPolicy is an Unstructured map tagged
+		// `merge:"replace"`: upstream overwrites the entire map with
+		// body's value (unless body is the zero value). The map-recursion
+		// branch of pruneIdenticalKeysAt would deep-equal-strip rendered's
+		// matching keys (apiVersion, kind, the unmodified rules), the
+		// body's map would then carry only the user's edit, and the
+		// upstream replace would land that minimal map as the final
+		// auditPolicy — the typed-doc identity keys and the unmodified
+		// rules vanish. Pin the post-fix contract: a partial edit on
+		// auditPolicy reaches upstream verbatim.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    auditPolicy:
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      rules:
+        - level: Metadata
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    auditPolicy:
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      rules:
+        - level: Metadata
+        - level: RequestResponse
+          users:
+            - alice
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "apiVersion: audit.k8s.io/v1") {
+			t.Errorf("auditPolicy apiVersion silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "kind: Policy") {
+			t.Errorf("auditPolicy kind silently lost on replace-tagged partial edit:\n%s", out)
+		}
+		if !strings.Contains(out, "RequestResponse") {
+			t.Errorf("user-added auditPolicy rule RequestResponse missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "alice") {
+			t.Errorf("user-added auditPolicy rule user alice missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkDefaultActionConfig.ingress is harmless under replace-skip", func(t *testing.T) {
+		// NetworkDefaultActionConfig is a separate typed v1.12+ doc
+		// kind that also has a top-level `ingress:` key — but in this
+		// type ingress is a SCALAR (accept/block), not an object slice.
+		// Both NetworkRuleConfig and NetworkDefaultActionConfig walks
+		// see path "ingress" at their respective doc roots, so the
+		// flat replaceSemanticPaths lookup hits both. Pin that this
+		// collision is harmless: the deep-equal short-circuit catches
+		// the body-equals-rendered case, and the replace-skip on a
+		// scalar simply preserves body's value verbatim — same outcome
+		// as the existing scalar-edit code path. If the upstream
+		// schema later changes ingress to a structured field on this
+		// kind, this test will surface the regression so a kind-aware
+		// scope can be added before correctness drifts.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: accept
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: block
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "ingress: block") {
+			t.Errorf("user's ingress=block override silently lost on the scalar collision path:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig multi-doc pairs body and rendered by name identity", func(t *testing.T) {
+		// pruneBodyIdentitiesAgainstRendered keys typed-doc body docs
+		// against rendered docs by `apiVersion + kind + name`. Two
+		// NetworkRuleConfig docs sharing apiVersion/kind but differing
+		// `name:` are distinct documents — the prune must NOT collapse
+		// them. Body's user-add doc must reach the merge unmodified;
+		// only the body doc whose name matches a rendered doc gets
+		// paired and pruned.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 192.168.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		// Body's matching api-ingress should round-trip without
+		// duplicating; user-add kubelet-ingress reaches the merge
+		// intact.
+		if !strings.Contains(out, "api-ingress") {
+			t.Errorf("rendered NetworkRuleConfig api-ingress missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "kubelet-ingress") {
+			t.Errorf("user-added NetworkRuleConfig kubelet-ingress missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "10250") {
+			t.Errorf("user-added kubelet-ingress port 10250 missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.0.0/16") {
+			t.Errorf("user-added kubelet-ingress subnet 192.168.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("interface body without identity field reaches merge intact", func(t *testing.T) {
+		// Upstream NetworkDeviceList.mergeDevice falls through both
+		// switch cases when body has neither `interface:` nor
+		// `deviceSelector:` set, then appends body verbatim (the
+		// patched element will fail upstream validation; the prune
+		// layer's job is only to not consume it). The prune mirrors
+		// this: hasIdentityValue rejects empty/zero-valued identity
+		// fields, matchObjectArrayItem returns nil, the body item is
+		// preserved unchanged. Pin that contract so a future change
+		// to keys-driven matching does not silently collapse a body
+		// without identity onto the first rendered element.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: eth0
+        addresses:
+          - 10.0.0.1/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - addresses:
+          - 10.0.0.5/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		// Body's identity-less item must reach the merge with its
+		// addresses intact (upstream will then reject it at validation,
+		// but that's not the prune's concern). The prune must not
+		// silently consume it onto rendered's eth0.
+		if !strings.Contains(out, "10.0.0.5/24") {
+			t.Errorf("body item without identity field silently consumed onto rendered's eth0:\n%s", out)
+		}
+		if !strings.Contains(out, "10.0.0.1/24") {
+			t.Errorf("rendered eth0 address 10.0.0.1/24 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("interface identity selection mirrors upstream body-driven switch", func(t *testing.T) {
+		// Talos's NetworkDeviceList.mergeDevice picks the identity
+		// field from the BODY element being merged: if body sets
+		// `interface:` (non-empty), upstream matches rendered ONLY by
+		// `interface:`; otherwise upstream falls back to
+		// `deviceSelector:`. The prune must mirror that selection or
+		// it can silently drop a user-add.
+		//
+		// Concrete trap: body has interface=eth0 + a deviceSelector;
+		// rendered has interface=eth1 with the SAME deviceSelector.
+		// Upstream picks body.DeviceInterface (non-empty), looks for
+		// `eth0` in rendered, finds none, appends body verbatim — the
+		// user gets two interfaces. A prune that fell back to
+		// deviceSelector would match body[0] to rendered[0], recurse,
+		// drop everything, and ship a body that the upstream merge
+		// could not append meaningfully — eth0 and its addresses
+		// would never reach the node.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: eth1
+        deviceSelector:
+          hardwareAddr: 'aa:bb:cc:dd:ee:ff'
+        addresses:
+          - 10.0.0.5/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: eth0
+        deviceSelector:
+          hardwareAddr: 'aa:bb:cc:dd:ee:ff'
+        addresses:
+          - 10.0.0.5/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		// User's eth0 must survive with its addresses intact. Both
+		// items share addresses by accident; if the prune consumed
+		// body[0] via the deviceSelector fallback it would strip the
+		// addresses (deep-equal to rendered's), re-attach
+		// deviceSelector, and ship `{interface: eth0, deviceSelector}`
+		// — which the upstream merge then appends as a NEW element
+		// because eth0 != eth1. Result: a stranded eth0 with no
+		// addresses, no routes — silent data loss.
+		if !strings.Contains(out, "interface: eth0") {
+			t.Errorf("user-added interface eth0 silently lost (deviceSelector fallback consumed it):\n%s", out)
+		}
+		if got := strings.Count(out, "10.0.0.5/24"); got != 2 {
+			t.Errorf("expected 10.0.0.5/24 to appear twice (once under each interface), got %d:\n%s", got, out)
+		}
+		// rendered's eth1 must remain.
+		if !strings.Contains(out, "interface: eth1") {
+			t.Errorf("rendered interface eth1 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("object array without upstream merge dedupes by deep-equal fallback", func(t *testing.T) {
+		// Talos's v1alpha1 schema has many object arrays (extraVolumes,
+		// inlineManifests, kernel.modules, wireguard.peers, ...) where
+		// the upstream patcher has no custom Merge method matching by
+		// identity — it simply appends body's elements to rendered's.
+		// Adding such a path to objectArrayMergeKeys would re-attach an
+		// identity field on partial edits and the upstream append would
+		// then leave behind a duplicate next to rendered's element. The
+		// safer contract: leave such paths to the deep-equal fallback in
+		// matchObjectArrayItem, which still drops body items that
+		// byte-equal a rendered item — covering the dominant
+		// `talm template -I` round-trip scenario.
+		//
+		// Pin that contract here for cluster.apiServer.extraVolumes
+		// (one of the deliberately unlisted paths): a body that
+		// re-states rendered's volume verbatim and adds a new one must
+		// NOT duplicate the restated volume in the merged output.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    extraVolumes:
+      - hostPath: /var/lib/auth
+        mountPath: /etc/kubernetes/auth
+        readonly: true
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+  apiServer:
+    extraVolumes:
+      - hostPath: /var/lib/auth
+        mountPath: /etc/kubernetes/auth
+        readonly: true
+      - hostPath: /var/lib/audit
+        mountPath: /etc/kubernetes/audit
+        readonly: false
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if got := strings.Count(out, "/var/lib/auth"); got != 1 {
+			t.Errorf("rendered extraVolumes hostPath /var/lib/auth duplicated by user-add round-trip (count=%d):\n%s", got, out)
+		}
+		if !strings.Contains(out, "/var/lib/audit") {
+			t.Errorf("user-added extraVolume /var/lib/audit missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("body adding a new interface preserves rendered interfaces", func(t *testing.T) {
+		// Regression-safety probe for the user-add path: when the body
+		// adds an interface absent from rendered, the new interface
+		// must reach the merge intact. Object-array dedup must not
+		// over-prune body items that have no rendered counterpart.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        addresses:
+          - 88.99.249.47/26
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: enp0s31f6
+        addresses:
+          - 88.99.249.47/26
+      - interface: eth1
+        addresses:
+          - 10.0.0.5/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "enp0s31f6") {
+			t.Errorf("rendered interface enp0s31f6 missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "eth1") {
+			t.Errorf("user-added interface eth1 missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "10.0.0.5/24") {
+			t.Errorf("user-added address 10.0.0.5/24 missing from merged output:\n%s", out)
+		}
+		if got := strings.Count(out, "88.99.249.47/26"); got != 1 {
+			t.Errorf("rendered address 88.99.249.47/26 duplicated when body adds a new interface (count=%d):\n%s", got, out)
+		}
+	})
+
 	t.Run("JSON Patch body is forwarded to LoadPatch unchanged", func(t *testing.T) {
 		// MergeFileAsPatch's documented contract (and the existing
 		// LoadPatch error hint) advertises support for JSON Patch and
