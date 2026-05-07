@@ -343,7 +343,11 @@ vlans:
 
 {{- /* JSON list of physical link names (raw NICs only — not bond/vlan masters).
        Renamed from `physical_links` to avoid collision with the older
-       `physical_links_info` helper, which renders YAML comments. */ -}}
+       `physical_links_info` helper, which renders YAML comments.
+       Bond slaves are NOT filtered by this helper — callers that need to
+       skip slaves (e.g. the multi-doc renderer that already emits the
+       master's BondConfig) must filter on spec.slaveKind themselves, or
+       use configurable_link_names below which already filters them. */ -}}
 {{- define "talm.discovered.physical_link_names" -}}
 {{- $names := list -}}
 {{- range (lookup "links" "" "").items -}}
@@ -355,13 +359,21 @@ vlans:
 {{- end -}}
 
 {{- /* JSON list of every link a user template can configure: physical NICs
-       plus bond / vlan / bridge top-level links. */ -}}
+       plus bond / vlan / bridge top-level links. Bond slaves (physical NICs
+       enrolled into a bond master) are excluded — emitting a standalone
+       LinkConfig for a slave alongside the master's BondConfig produces
+       conflicting declarations Talos will reject during controller
+       convergence. The slave-membership fact comes from spec.slaveKind
+       (set by the link controller when a physical NIC is attached to a
+       bond / bridge / team), so filtering on it covers slaves regardless
+       of whether the master is bond, bridge, or future kinds. */ -}}
 {{- define "talm.discovered.configurable_link_names" -}}
 {{- $names := list -}}
 {{- range (lookup "links" "" "").items -}}
 {{- $isPhysical := and .spec.busPath (regexMatch "^(eno|eth|enp|enx|ens)" (.metadata.id | toString)) -}}
 {{- $isVirtual := has (.spec.kind | toString) (list "bond" "vlan" "bridge") -}}
-{{- if or $isPhysical $isVirtual -}}
+{{- $isSlave := and .spec.slaveKind (ne (.spec.slaveKind | toString) "") -}}
+{{- if and (or $isPhysical $isVirtual) (not $isSlave) -}}
 {{- $names = append $names .metadata.id -}}
 {{- end -}}
 {{- end -}}
@@ -370,9 +382,14 @@ vlans:
 
 {{- /* JSON list of CIDR addresses configured on the given link, excluding
        kernel-managed scopes (host loopback, link-local, nowhere) and
-       addresses with no scope set at all. Both IPv4 and IPv6 globally-scoped
-       addresses are returned; the caller is responsible for filtering by
-       family or stripping VIPs if needed. */ -}}
+       addresses with no scope set at all. Both IPv4 and IPv6 globally-
+       scoped addresses are returned — chart consumers (cozystack /
+       generic multi-doc renderer) emit them verbatim into LinkConfig /
+       VLANConfig / BondConfig.addresses, dropping the operator-declared
+       floatingIP via an inline filter to keep the leader's transient VIP
+       out of the static config. Add a per-family helper if a future
+       caller needs IPv4- or IPv6-only output rather than tightening this
+       one. */ -}}
 {{- define "talm.discovered.addresses_by_link" -}}
 {{- $linkName := . -}}
 {{- $addresses := list -}}
