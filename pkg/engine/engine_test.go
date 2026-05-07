@@ -700,3 +700,201 @@ func TestPrimitiveSliceDifference_ReorderCollapsesToEmpty(t *testing.T) {
 		t.Errorf("expected empty diff for reordered-but-identical-set slices, got %v", got)
 	}
 }
+
+// TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey
+// pins that pruneIdenticalKeysAt descends into object-array elements
+// matched by their identity key (here `interface:` for the
+// machine/network/interfaces path) and dedupes nested primitive
+// arrays inside the matched pair. Without this descent,
+// configpatcher.Apply matches the outer object-array element by
+// `interface:` upstream, recurses into it, and appends the inner
+// primitive list (`addresses`) — silently doubling every rendered
+// address on every apply round-trip when the body re-states the
+// rendered values plus a partial edit.
+func TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26", "10.0.0.99/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice, got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected one interface item retained for the partial edit, got %d: %#v", len(ifaces), ifaces)
+	}
+	iface, ok := ifaces[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected interface item to be a map, got %#v", ifaces[0])
+	}
+	if iface["interface"] != "enp0s31f6" {
+		t.Errorf("identity key `interface` must survive the prune so the upstream merge can match the element, got %#v", iface["interface"])
+	}
+	addrs, ok := iface["addresses"].([]any)
+	if !ok {
+		t.Fatalf("expected addresses to remain as a slice (only the user-add 10.0.0.99/24 should survive), got %#v", iface["addresses"])
+	}
+	if len(addrs) != 1 || addrs[0] != "10.0.0.99/24" {
+		t.Errorf("expected addresses to be pruned to just [10.0.0.99/24], got %#v", addrs)
+	}
+}
+
+// TestPruneIdenticalKeysAt_DropsObjectArrayItemReducedToIdentity pins
+// that an object-array body item whose payload reduces to nothing
+// after recursion is dropped entirely. Leaving an item that only
+// carries its identity key would force configpatcher.Apply into a
+// no-op match round, and (when the only rendered-side payload was a
+// primitive list) re-trigger the strategic-merge append the prune is
+// the entire reason for existing.
+func TestPruneIdenticalKeysAt_DropsObjectArrayItemReducedToIdentity(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+				"routes": []any{
+					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+				},
+			},
+			map[string]any{
+				"interface": "eth1",
+				"addresses": []any{"10.0.0.5/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+				"routes": []any{
+					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+				},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice (eth1 is a user-add), got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected the matched-and-emptied enp0s31f6 to be dropped, leaving only the eth1 user-add, got %d items: %#v", len(ifaces), ifaces)
+	}
+	if iface := ifaces[0].(map[string]any); iface["interface"] != "eth1" {
+		t.Errorf("expected the surviving interface item to be eth1 (the user-add), got %#v", iface["interface"])
+	}
+}
+
+// TestPruneIdenticalKeysAt_ObjectArrayDeepEqualFallback pins the
+// fallback behaviour for object arrays whose path is not in the
+// known-merge-keys table: items that deep-equal a rendered item are
+// dropped, even though the helper has no field name to match on.
+// This catches the routes case (no single primary key in the Talos
+// schema) and gracefully handles any future schema field that
+// objectArrayMergeKeys forgets to enumerate.
+func TestPruneIdenticalKeysAt_ObjectArrayDeepEqualFallback(t *testing.T) {
+	body := map[string]any{
+		"opaqueArray": []any{
+			map[string]any{"a": "1", "b": "2"},
+			map[string]any{"a": "3", "b": "4"},
+		},
+	}
+	rendered := map[string]any{
+		"opaqueArray": []any{
+			map[string]any{"a": "1", "b": "2"},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "unknown/path")
+
+	arr, ok := body["opaqueArray"].([]any)
+	if !ok {
+		t.Fatalf("expected opaqueArray to remain as a slice, got %#v", body["opaqueArray"])
+	}
+	if len(arr) != 1 {
+		t.Fatalf("expected the deep-equal duplicate to be pruned, got %d items: %#v", len(arr), arr)
+	}
+	if got, want := arr[0].(map[string]any)["a"], "3"; got != want {
+		t.Errorf("expected the surviving item to be the user-add (a=3), got a=%v", got)
+	}
+}
+
+// TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd pins the
+// regression-safety property: an object-array item present only in
+// body (no rendered counterpart by identity key) must reach the
+// merge intact. The dedup must never drop user-add entries — the
+// whole point is to neutralise the strategic-merge append for
+// repeated values, not to replace it with silent drop-on-write.
+func TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd(t *testing.T) {
+	body := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "eth1",
+				"addresses": []any{"10.0.0.5/24"},
+			},
+		},
+	}
+	rendered := map[string]any{
+		"interfaces": []any{
+			map[string]any{
+				"interface": "enp0s31f6",
+				"addresses": []any{"88.99.249.47/26"},
+			},
+		},
+	}
+
+	pruneIdenticalKeysAt(body, rendered, "machine/network")
+
+	ifaces, ok := body["interfaces"].([]any)
+	if !ok {
+		t.Fatalf("expected body[interfaces] to remain as a slice, got %#v", body["interfaces"])
+	}
+	if len(ifaces) != 1 {
+		t.Fatalf("expected the user-add interface to be preserved, got %d items: %#v", len(ifaces), ifaces)
+	}
+	iface := ifaces[0].(map[string]any)
+	if iface["interface"] != "eth1" {
+		t.Errorf("expected user-add interface eth1 to survive, got %#v", iface["interface"])
+	}
+}
+
+// TestJoinYAMLPath pins joinYAMLPath's contract: the document root
+// (empty parent) joins without a leading separator so the path lookup
+// in objectArrayMergeKeys matches the documented form ("machine/...");
+// every other join inserts exactly one slash.
+func TestJoinYAMLPath(t *testing.T) {
+	tests := []struct {
+		parent string
+		key    string
+		want   string
+	}{
+		{"", "machine", "machine"},
+		{"machine", "network", "machine/network"},
+		{"machine/network", "interfaces", "machine/network/interfaces"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.parent+"+"+tc.key, func(t *testing.T) {
+			if got := joinYAMLPath(tc.parent, tc.key); got != tc.want {
+				t.Errorf("joinYAMLPath(%q, %q) = %q, want %q", tc.parent, tc.key, got, tc.want)
+			}
+		})
+	}
+}

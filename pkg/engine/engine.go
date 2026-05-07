@@ -604,6 +604,55 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 	return buf.Bytes(), false, nil
 }
 
+// objectArrayMergeKeys lists the identity fields Talos's upstream
+// strategic-merge layer uses to match elements of an object array at
+// the given YAML path. Each entry mirrors a custom Merge method on the
+// corresponding v1alpha1 List type: when upstream merges-by-identity at
+// a path, this prune must too, or partial edits would re-attach
+// identity-bearing fields onto a body element that the patcher would
+// then RE-merge in place — appending the inner primitive arrays
+// (addresses, nested vlan addresses, exemption namespaces) and
+// duplicating every rendered entry on every apply round-trip.
+//
+// Paths are slash-joined relative to the document root, with no leading
+// slash and no array-index suffix — array elements share the parent's
+// path. The list per path is checked in order against BODY only: the
+// first key body sets to a non-empty value (in declaration order,
+// mirroring upstream's switch enumeration) is used as the SOLE match
+// key against rendered. matchObjectArrayItem does the body-driven
+// selection — see its doc comment for why an "any-key-both-have"
+// intersection would silently drop user-adds.
+//
+// Only the three paths below have a confirmed custom upstream Merge:
+//
+//   - machine.network.interfaces — NetworkDeviceList.Merge matches by
+//     DeviceInterface (`interface`) or DeviceSelector (`deviceSelector`).
+//   - machine.network.interfaces[].vlans — VlanList.Merge matches by
+//     VlanID (`vlanId`).
+//   - cluster.apiServer.admissionControl — AdmissionPluginConfigList.Merge
+//     matches by PluginName (`name`).
+//
+// Other object arrays in the v1alpha1 schema (extraVolumes,
+// seccompProfiles, inlineManifests, kernel.modules, wireguard.peers,
+// authorizationConfig, ...) have no custom upstream Merge — the patcher
+// simply appends body's elements to rendered's. Re-attaching an identity
+// key on those would not avoid the upstream append; it would just leave
+// behind a body element that lands as a duplicate next to rendered's.
+// For those paths the deep-equal fallback in matchObjectArrayItem still
+// drops body items that byte-equal a rendered item (the dominant case
+// after `talm template -I` writes the rendered template back as the body),
+// preserving idempotence on full restates without inventing identity
+// where the upstream layer recognises none.
+//
+// Routes (machine.network.interfaces[].routes) sit in this same fallback
+// bucket: the schema declares no single primary key for a route, so the
+// only "same item" semantic available is byte-equality across all fields.
+var objectArrayMergeKeys = map[string][]string{
+	"machine/network/interfaces":         {"interface", "deviceSelector"},
+	"machine/network/interfaces/vlans":   {"vlanId"},
+	"cluster/apiServer/admissionControl": {"name"},
+}
+
 // pruneIdenticalKeys recursively deletes every body[k] that deep-equals
 // rendered[k] (mutating `body` in place — the caller still holds the
 // reference). When a body sub-map becomes empty after pruning, the whole
@@ -616,10 +665,33 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // `talm template -I` round-trip would double every certSAN, nameserver,
 // and podSubnet entry on the next apply.
 //
-// Object arrays (arrays whose elements are maps) are intentionally left
-// alone: configpatcher's StrategicMerge handles them via patchMergeKey
-// semantics that primitive subtraction would silently corrupt.
+// For object arrays the function descends into elements matched by
+// their identity field (the per-path table above, with deep-equal as
+// fallback), recurses, drops items that fully reduce to nothing, and
+// re-attaches the identity-bearing keys on items that retained payload
+// so the upstream merge can still match the element. Without this
+// descent, configpatcher.Apply matches elements by identity field
+// upstream and then appends the rendered-side primitive arrays nested
+// inside them — duplicating every interface address, route, vlan
+// address, and admission-control exemption namespace per apply
+// round-trip.
+//
+// pruneIdenticalKeys is the document-root entry point; pruneIdenticalKeysAt
+// threads the YAML path so the object-array descent can look up the
+// identity key for the current location.
 func pruneIdenticalKeys(body, rendered map[string]any) {
+	pruneIdenticalKeysAt(body, rendered, "")
+}
+
+// pruneIdenticalKeysAt is pruneIdenticalKeys's recursive workhorse.
+// yamlPath is a slash-joined YAML path from the document root (e.g.
+// "machine/network/interfaces"), used to look up the configured
+// identity field for an object-array branch. The empty path is the
+// document root.
+//
+// The parameter is named yamlPath rather than path to avoid shadowing
+// the stdlib path package imported elsewhere in this file.
+func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 	for k, bodyV := range body {
 		renderedV, exists := rendered[k]
 		if !exists {
@@ -629,6 +701,7 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 			delete(body, k)
 			continue
 		}
+		childPath := joinYAMLPath(yamlPath, k)
 		if bodySub, ok := bodyV.(map[string]any); ok {
 			if renderedSub, ok2 := renderedV.(map[string]any); ok2 {
 				// Only delete when the recursive prune actually
@@ -638,7 +711,7 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 				// reach the merge as-is, not get silently dropped so
 				// rendered's populated value wins.
 				before := len(bodySub)
-				pruneIdenticalKeys(bodySub, renderedSub)
+				pruneIdenticalKeysAt(bodySub, renderedSub, childPath)
 				if before > 0 && len(bodySub) == 0 {
 					delete(body, k)
 				}
@@ -646,16 +719,163 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 			}
 		}
 		if bodySlice, ok := bodyV.([]any); ok {
-			if renderedSlice, ok2 := renderedV.([]any); ok2 && isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
-				diff := primitiveSliceDifference(bodySlice, renderedSlice)
-				if len(diff) == 0 {
+			if renderedSlice, ok2 := renderedV.([]any); ok2 {
+				if isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
+					diff := primitiveSliceDifference(bodySlice, renderedSlice)
+					if len(diff) == 0 {
+						delete(body, k)
+					} else {
+						body[k] = diff
+					}
+					continue
+				}
+				pruned := pruneObjectArrayItems(bodySlice, renderedSlice, childPath)
+				if len(pruned) == 0 {
 					delete(body, k)
 				} else {
-					body[k] = diff
+					body[k] = pruned
 				}
 			}
 		}
 	}
+}
+
+// pruneObjectArrayItems iterates body's object-array elements, matches
+// each to a rendered element by the registered identity key (or
+// deep-equal fallback), recurses into matched pairs, and drops items
+// whose payload reduced to nothing after recursion. Re-attaches the
+// identity keys from rendered when the body item retained payload but
+// the inner deep-equal pass stripped its identity-bearing fields, so
+// the upstream strategic-merge can still match the element it belongs
+// to.
+//
+// Body items that the recursion fully consumed are dropped — leaving
+// behind an item that only carries its identity key would force
+// configpatcher.Apply into a no-op match round and (when the only
+// rendered-side payload was a primitive list) re-trigger the
+// strategic-merge append we are trying to neutralise. Items with no
+// rendered counterpart are user-adds and are kept verbatim.
+func pruneObjectArrayItems(body, rendered []any, yamlPath string) []any {
+	keys := objectArrayMergeKeys[yamlPath]
+	out := make([]any, 0, len(body))
+	for _, bElem := range body {
+		bMap, ok := bElem.(map[string]any)
+		if !ok {
+			out = append(out, bElem)
+			continue
+		}
+		rMap := matchObjectArrayItem(bMap, rendered, keys)
+		if rMap == nil {
+			out = append(out, bElem)
+			continue
+		}
+		before := len(bMap)
+		pruneIdenticalKeysAt(bMap, rMap, yamlPath)
+		if before > 0 && len(bMap) == 0 {
+			continue
+		}
+		for _, idKey := range keys {
+			if _, hasInBody := bMap[idKey]; hasInBody {
+				continue
+			}
+			if v, ok := rMap[idKey]; ok {
+				bMap[idKey] = v
+			}
+		}
+		out = append(out, bMap)
+	}
+	return out
+}
+
+// matchObjectArrayItem returns the rendered map sharing an identity
+// field value with body. keys lists the allowed identity fields for
+// the current YAML path. When keys is non-empty the helper mirrors
+// upstream's body-driven selection: it picks the first identity key
+// the body sets non-empty (in the table's declaration order, matching
+// upstream's switch/case enumeration) and then matches ONLY on that
+// key. Falling back to a different key when the chosen one does not
+// match would group items the upstream patcher considers distinct —
+// e.g. body's interface=eth0 vs rendered's interface=eth1 both with
+// the same deviceSelector: upstream's NetworkDeviceList.mergeDevice
+// picks body.DeviceInterface (non-empty) and finds no match, so it
+// appends body verbatim; if the prune fell back to deviceSelector it
+// would consume body's element and silently drop the user's eth0.
+//
+// When keys is empty (no entry in objectArrayMergeKeys for the path)
+// the helper falls back to deep-equal: that catches schema fields with
+// no single primary key — most notably machine.network.interfaces[]
+// .routes — where two items are the "same" only if every field
+// matches, which is the right semantic for dedup at this layer. A
+// no-match returns nil so the caller can treat unknown items as
+// user-adds.
+func matchObjectArrayItem(body map[string]any, rendered []any, keys []string) map[string]any {
+	if len(keys) > 0 {
+		var (
+			chosenKey string
+			chosenVal any
+		)
+		for _, k := range keys {
+			if v, ok := body[k]; ok && hasIdentityValue(v) {
+				chosenKey = k
+				chosenVal = v
+				break
+			}
+		}
+		if chosenKey == "" {
+			return nil
+		}
+		for _, rElem := range rendered {
+			rMap, ok := rElem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if rv, hasR := rMap[chosenKey]; hasR && reflect.DeepEqual(rv, chosenVal) {
+				return rMap
+			}
+		}
+		return nil
+	}
+	for _, rElem := range rendered {
+		if reflect.DeepEqual(rElem, body) {
+			rMap, _ := rElem.(map[string]any)
+			return rMap
+		}
+	}
+	return nil
+}
+
+// hasIdentityValue reports whether v is a non-empty identity value —
+// the analogue of upstream's `DeviceInterface != ""` and
+// `DeviceSelector != nil` predicates against a decoded map. A zero
+// string or empty map at an identity slot signals "the user did not
+// pick this identity"; the upstream switch falls through to the next
+// case in that situation, and matchObjectArrayItem must do the same
+// or it will collapse a user-add onto the wrong rendered element.
+func hasIdentityValue(v any) bool {
+	if v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case string:
+		return x != ""
+	case map[string]any:
+		return len(x) > 0
+	case []any:
+		return len(x) > 0
+	default:
+		return true
+	}
+}
+
+// joinYAMLPath returns parent + "/" + key, dropping the separator when
+// parent is the document root (the empty string). Used by the
+// object-array descent to look up the configured identity field for
+// the current location in objectArrayMergeKeys.
+func joinYAMLPath(parent, key string) string {
+	if parent == "" {
+		return key
+	}
+	return parent + "/" + key
 }
 
 // isPrimitiveSlice reports whether every element of `s` is a YAML scalar
