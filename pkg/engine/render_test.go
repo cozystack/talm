@@ -2421,6 +2421,210 @@ cluster:
 		}
 	})
 
+	t.Run("NetworkDefaultActionConfig.ingress is harmless under replace-skip", func(t *testing.T) {
+		// NetworkDefaultActionConfig is a separate typed v1.12+ doc
+		// kind that also has a top-level `ingress:` key — but in this
+		// type ingress is a SCALAR (accept/block), not an object slice.
+		// Both NetworkRuleConfig and NetworkDefaultActionConfig walks
+		// see path "ingress" at their respective doc roots, so the
+		// flat replaceSemanticPaths lookup hits both. Pin that this
+		// collision is harmless: the deep-equal short-circuit catches
+		// the body-equals-rendered case, and the replace-skip on a
+		// scalar simply preserves body's value verbatim — same outcome
+		// as the existing scalar-edit code path. If the upstream
+		// schema later changes ingress to a structured field on this
+		// kind, this test will surface the regression so a kind-aware
+		// scope can be added before correctness drifts.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: accept
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: block
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if !strings.Contains(out, "ingress: block") {
+			t.Errorf("user's ingress=block override silently lost on the scalar collision path:\n%s", out)
+		}
+	})
+
+	t.Run("NetworkRuleConfig multi-doc pairs body and rendered by name identity", func(t *testing.T) {
+		// pruneBodyIdentitiesAgainstRendered keys typed-doc body docs
+		// against rendered docs by `apiVersion + kind + name`. Two
+		// NetworkRuleConfig docs sharing apiVersion/kind but differing
+		// `name:` are distinct documents — the prune must NOT collapse
+		// them. Body's user-add doc must reach the merge unmodified;
+		// only the body doc whose name matches a rendered doc gets
+		// paired and pruned.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: api-ingress
+portSelector:
+  ports:
+    - 9999
+  protocol: tcp
+ingress:
+  - subnet: 10.0.0.0/8
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubelet-ingress
+portSelector:
+  ports:
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 192.168.0.0/16
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		// Body's matching api-ingress should round-trip without
+		// duplicating; user-add kubelet-ingress reaches the merge
+		// intact.
+		if !strings.Contains(out, "api-ingress") {
+			t.Errorf("rendered NetworkRuleConfig api-ingress missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "kubelet-ingress") {
+			t.Errorf("user-added NetworkRuleConfig kubelet-ingress missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "10250") {
+			t.Errorf("user-added kubelet-ingress port 10250 missing from merged output:\n%s", out)
+		}
+		if !strings.Contains(out, "192.168.0.0/16") {
+			t.Errorf("user-added kubelet-ingress subnet 192.168.0.0/16 missing from merged output:\n%s", out)
+		}
+	})
+
+	t.Run("interface body without identity field reaches merge intact", func(t *testing.T) {
+		// Upstream NetworkDeviceList.mergeDevice falls through both
+		// switch cases when body has neither `interface:` nor
+		// `deviceSelector:` set, then appends body verbatim (the
+		// patched element will fail upstream validation; the prune
+		// layer's job is only to not consume it). The prune mirrors
+		// this: hasIdentityValue rejects empty/zero-valued identity
+		// fields, matchObjectArrayItem returns nil, the body item is
+		// preserved unchanged. Pin that contract so a future change
+		// to keys-driven matching does not silently collapse a body
+		// without identity onto the first rendered element.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - interface: eth0
+        addresses:
+          - 10.0.0.1/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  network:
+    interfaces:
+      - addresses:
+          - 10.0.0.5/24
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		// Body's identity-less item must reach the merge with its
+		// addresses intact (upstream will then reject it at validation,
+		// but that's not the prune's concern). The prune must not
+		// silently consume it onto rendered's eth0.
+		if !strings.Contains(out, "10.0.0.5/24") {
+			t.Errorf("body item without identity field silently consumed onto rendered's eth0:\n%s", out)
+		}
+		if !strings.Contains(out, "10.0.0.1/24") {
+			t.Errorf("rendered eth0 address 10.0.0.1/24 missing from merged output:\n%s", out)
+		}
+	})
+
 	t.Run("interface identity selection mirrors upstream body-driven switch", func(t *testing.T) {
 		// Talos's NetworkDeviceList.mergeDevice picks the identity
 		// field from the BODY element being merged: if body sets

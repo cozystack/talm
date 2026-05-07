@@ -876,6 +876,129 @@ func TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd(t *testing.T) {
 	}
 }
 
+// TestHasIdentityValue pins the boundary cases of the body-driven
+// identity selector. Upstream's NetworkDeviceList.mergeDevice falls
+// through `case device.DeviceInterface != "":` to
+// `case device.DeviceSelector != nil:` when the first identity is the
+// zero value of its type. matchObjectArrayItem must reject empty/zero
+// identity fields the same way; otherwise an `interface: ""` body
+// would chosen-key on `interface`, find no match in rendered, and
+// preserve a body element that should have been matched via
+// `deviceSelector` instead.
+func TestHasIdentityValue(t *testing.T) {
+	tests := []struct {
+		name string
+		v    any
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty string", "", false},
+		{"non-empty string", "eth0", true},
+		{"empty map", map[string]any{}, false},
+		{"non-empty map", map[string]any{"hardwareAddr": "aa:bb:cc:dd:ee:ff"}, true},
+		{"empty slice", []any{}, false},
+		{"non-empty slice", []any{"a"}, true},
+		{"int zero", 0, true},
+		{"int non-zero", 4000, true},
+		{"bool false", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasIdentityValue(tc.v); got != tc.want {
+				t.Errorf("hasIdentityValue(%v) = %v, want %v", tc.v, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestObjectArrayMergeKeysMatchesUpstreamMergerSurface pins that the
+// table covers exactly the upstream List types whose custom Merge
+// method matches by identity AND whose elements would mishandle
+// inner-primitive append on partial edit. A new entry to the table
+// adds risk; a missing entry leaves the inner-primitive append
+// regression reachable. Either drift surfaces here so a maintainer
+// reconciles the table against the upstream merger surface
+// deliberately.
+//
+// Upstream surface (verified against the cozystack/talos fork pinned
+// in go.mod):
+//
+//   - NetworkDeviceList — yaml path `machine.network.interfaces`,
+//     identity `interface` or `deviceSelector` (body-driven switch).
+//   - VlanList — yaml path `machine.network.interfaces[].vlans`,
+//     identity `vlanId`.
+//   - AdmissionPluginConfigList — yaml path
+//     `cluster.apiServer.admissionControl`, identity `name`.
+//   - ConfigFileList (typed ExtensionServiceConfig.configFiles) —
+//     intentionally OMITTED: ConfigFile carries only string fields
+//     (hostPath, mountPath, content), so the upstream merge.Merge
+//     field-by-field already produces the right result and the
+//     deep-equal fallback in matchObjectArrayItem covers
+//     full-restate idempotence. Adding it would not change
+//     correctness; listing it would mislead readers about which
+//     types are at risk for inner-primitive append.
+func TestObjectArrayMergeKeysMatchesUpstreamMergerSurface(t *testing.T) {
+	expected := map[string][]string{
+		"machine/network/interfaces":         {"interface", "deviceSelector"},
+		"machine/network/interfaces/vlans":   {"vlanId"},
+		"cluster/apiServer/admissionControl": {"name"},
+	}
+	if len(objectArrayMergeKeys) != len(expected) {
+		t.Fatalf("table size drift: have %d entries, want %d (verify against upstream merger surface in pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and config/types/runtime/extensions/service_config.go)\nhave: %#v\nwant: %#v",
+			len(objectArrayMergeKeys), len(expected), objectArrayMergeKeys, expected)
+	}
+	for path, wantKeys := range expected {
+		gotKeys, ok := objectArrayMergeKeys[path]
+		if !ok {
+			t.Errorf("missing entry for %q", path)
+			continue
+		}
+		if len(gotKeys) != len(wantKeys) {
+			t.Errorf("entry for %q: got %d keys, want %d (got=%v want=%v)", path, len(gotKeys), len(wantKeys), gotKeys, wantKeys)
+			continue
+		}
+		for i, want := range wantKeys {
+			if gotKeys[i] != want {
+				t.Errorf("entry for %q at index %d: got %q, want %q", path, i, gotKeys[i], want)
+			}
+		}
+	}
+}
+
+// TestReplaceSemanticPathsMatchesUpstreamReplaceTags pins that the
+// table covers exactly the upstream fields tagged `merge:"replace"`.
+// A `merge:"replace"` field reachable through the prune that is
+// missing from this table will silently drop rendered-side entries
+// on a partial edit; a stray entry will skip otherwise-valid prune
+// work. Either drift surfaces here.
+//
+// Upstream surface (verified against the cozystack/talos fork pinned
+// in go.mod):
+//
+//   - cluster/network/podSubnets — v1alpha1 PodSubnet
+//   - cluster/network/serviceSubnets — v1alpha1 ServiceSubnet
+//   - cluster/apiServer/auditPolicy — v1alpha1 AuditPolicyConfig
+//   - ingress — typed NetworkRuleConfig Ingress
+//   - portSelector/ports — typed NetworkRuleConfig Ports
+func TestReplaceSemanticPathsMatchesUpstreamReplaceTags(t *testing.T) {
+	expected := map[string]struct{}{
+		"cluster/network/podSubnets":     {},
+		"cluster/network/serviceSubnets": {},
+		"cluster/apiServer/auditPolicy":  {},
+		"ingress":                        {},
+		"portSelector/ports":             {},
+	}
+	if len(replaceSemanticPaths) != len(expected) {
+		t.Fatalf("table size drift: have %d entries, want %d (re-grep upstream for `merge:\"replace\"` and reconcile)\nhave: %#v\nwant: %#v",
+			len(replaceSemanticPaths), len(expected), replaceSemanticPaths, expected)
+	}
+	for path := range expected {
+		if _, ok := replaceSemanticPaths[path]; !ok {
+			t.Errorf("missing entry for %q", path)
+		}
+	}
+}
+
 // TestJoinYAMLPath pins joinYAMLPath's contract: the document root
 // (empty parent) joins without a leading separator so the path lookup
 // in objectArrayMergeKeys matches the documented form ("machine/...");
