@@ -8,27 +8,15 @@ Talm is just like Helm, but for Talos Linux
 
 While developing Talm, we aimed to achieve the following goals:
 
-- **Automatic Discovery**: In a bare-metal environment, each server may vary
-slightly in aspects such as disks and network interfaces.
-Talm enables discovery of node information, which is then used to generate patches.
+- **Automatic Discovery**: In a bare-metal environment, each server may vary slightly in aspects such as disks and network interfaces. Talm enables discovery of node information, which is then used to generate patches.
 
-- **Ease of Customization**: You can customize templates to create your unique
-configuration based on your environment. The templates use the standard
-Go templates syntax, enhanced with widely-known Helm templating logic.
+- **Ease of Customization**: You can customize templates to create your unique configuration based on your environment. The templates use the standard Go templates syntax, enhanced with widely-known Helm templating logic.
 
-- **GitOps Friendly**: The patches generated do not contain sensitive data,
-allowing them to be stored in Git in an unencrypted, open format. For scenarios
-requiring complete configurations, the `--full` option allows the obtain
-a complete config that can be used for matchbox and other solutions.
+- **GitOps Friendly**: The patches generated do not contain sensitive data, allowing them to be stored in Git in an unencrypted, open format. For scenarios requiring complete configurations, the `--full` option allows the obtain a complete config that can be used for matchbox and other solutions.
 
-- **Simplicity of Use**: You no longer need to pass connection options for each
-specific server; they are saved along with the templating results into
-a separate file. This allows you to easily apply one or multiple files in batch
-using a syntax similar to `kubectl apply -f node1.yaml -f node2.yaml`.
+- **Simplicity of Use**: You no longer need to pass connection options for each specific server; they are saved along with the templating results into a separate file. This allows you to easily apply one or multiple files in batch using a syntax similar to `kubectl apply -f node1.yaml -f node2.yaml`.
 
-- **Compatibility with talosctl**: We strive to maintain compatibility with the upstream
-project in patches and configurations. The configurations you obtain can be used
-with the official tools like talosctl and Omni.
+- **Compatibility with talosctl**: We strive to maintain compatibility with the upstream project in patches and configurations. The configurations you obtain can be used with the official tools like talosctl and Omni.
 
 
 ## Installation
@@ -52,14 +40,7 @@ curl -sSL https://github.com/cozystack/talm/raw/refs/heads/main/hack/install.sh 
 
 ### Windows
 
-Windows is supported. Download the `talm-windows-*.zip` archive from the
-[releases page](https://github.com/cozystack/talm/releases/latest) and
-extract `talm.exe`. On Windows, template paths passed to the `-t` /
-`--template` flag accept either `\` or `/` separators, so
-`-t templates\controlplane.yaml` and `-t templates/controlplane.yaml`
-are equivalent. Other path flags (`--talosconfig`, `-f` / `--file`)
-are delegated to the underlying OS file loader and follow standard
-Windows path rules.
+Windows is supported. Download the `talm-windows-*.zip` archive from the [releases page](https://github.com/cozystack/talm/releases/latest) and extract `talm.exe`. On Windows, template paths passed to the `-t` / `--template` flag accept either `\` or `/` separators, so `-t templates\controlplane.yaml` and `-t templates/controlplane.yaml` are equivalent. Other path flags (`--talosconfig`, `-f` / `--file`) are delegated to the underlying OS file loader and follow standard Windows path rules.
 
 ## Getting Started
 
@@ -70,28 +51,7 @@ cd newcluster
 talm init -p cozystack -N myawesomecluster
 ```
 
-Edit `values.yaml` to set your cluster's control-plane endpoint. This
-is the URL every node's kubelet and kube-proxy will dial. The chart
-leaves it empty on purpose so a missed override fails loudly instead
-of silently embedding a placeholder. For cozystack VIP setups set
-`endpoint` and `floatingIP` together (same IP, single shared VIP);
-for single-node clusters use that node's routable IP and leave
-`floatingIP` blank; for multi-node with an external load balancer
-use the LB URL and leave `floatingIP` blank. When the VIP must sit
-on a link that does not yet exist on the live system at first apply
-(typically a VLAN sub-interface), set `vipLink` to that link name —
-the chart pins `Layer2VIPConfig.link` to it instead of the default-
-gateway link that discovery would otherwise pick, and emits the
-document even on a totally fresh node where no default-gateway link
-has been discovered yet. The chart does not auto-emit a `LinkConfig`
-or `VLANConfig` for the override link; the operator is responsible
-for ensuring the link comes up, typically by adding a `LinkConfig`
-or `VLANConfig` for that link to the per-node body overlay alongside
-`vipLink`. Subnet-selector fields
-(`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived
-automatically from the node's default-gateway-bearing link, so no
-override is needed unless you have a multi-homed node that requires
-a specific subnet pinned.
+Edit `values.yaml` to set your cluster's control-plane endpoint. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty on purpose so a missed override fails loudly instead of silently embedding a placeholder. For cozystack VIP setups set `endpoint` and `floatingIP` together (same IP, single shared VIP); for single-node clusters use that node's routable IP and leave `floatingIP` blank; for multi-node with an external load balancer use the LB URL and leave `floatingIP` blank. When the VIP must sit on a link that does not yet exist on the live system at first apply (typically a VLAN sub-interface), set `vipLink` to that link name — the chart pins `Layer2VIPConfig.link` to it instead of the default-gateway link that discovery would otherwise pick, and emits the document even on a totally fresh node where no default-gateway link has been discovered yet. The chart does not auto-emit a `LinkConfig` or `VLANConfig` for the override link; the operator is responsible for ensuring the link comes up, typically by adding a `LinkConfig` or `VLANConfig` for that link to the per-node body overlay alongside `vipLink`. Subnet-selector fields (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived automatically from the node's default-gateway-bearing link, so no override is needed unless you have a multi-homed node that requires a specific subnet pinned.
 
 Boot Talos Linux node, let's say it has address `192.0.2.4`. Then:
 
@@ -156,9 +116,7 @@ cluster:
         endpoint: https://192.0.2.4:6443
 ```
 
-> **Note:** The output format depends on the Talos version configured in `Chart.yaml` (`templateOptions.talosVersion`) or via the `--talos-version` CLI flag.
-> For Talos < v1.12, the output is a single YAML document with `machine.network` and `machine.registries` sections (as shown above).
-> For Talos >= v1.12, the output uses the multi-document format with separate typed documents instead of the deprecated monolithic fields. `HostnameConfig`, `ResolverConfig` and a network interface document (`LinkConfig`, `BondConfig`, or `VLANConfig` — depending on topology) are always emitted; `Layer2VIPConfig` appears on controlplane nodes when `floatingIP` is set; `RegistryMirrorConfig` is emitted only by the cozystack chart.
+> **Note:** The output format depends on the Talos version configured in `Chart.yaml` (`templateOptions.talosVersion`) or via the `--talos-version` CLI flag. For Talos < v1.12, the output is a single YAML document with `machine.network` and `machine.registries` sections (as shown above). For Talos >= v1.12, the output uses the multi-document format with separate typed documents instead of the deprecated monolithic fields. `HostnameConfig` and `ResolverConfig` are always emitted; one network interface document is emitted per configurable link on the node (`LinkConfig` for physical NICs, `BondConfig` for bond masters, `VLANConfig` for VLAN sub-interfaces) — multi-NIC nodes therefore produce one document per NIC, not one document total. The link carrying the IPv4 default route gets the gateway entry on its document; every other link is emitted gateway-less. Both IPv4 and IPv6 global-scope addresses on a link are surfaced in its document. Bond slaves are filtered out so they do not collide with the master's `BondConfig`. Bridges are deliberately not auto-emitted as `BridgeConfig` yet — a non-gateway bridge is skipped (declare it via a per-node body overlay if needed); a bridge that carries the default route fails the render with a clear migration hint. The operator-declared `floatingIP` is stripped from per-link addresses so the VIP currently held by a leader does not leak into the static `LinkConfig`. `Layer2VIPConfig` appears on controlplane nodes when `floatingIP` is set; `RegistryMirrorConfig` is emitted only by the cozystack chart.
 
 > **Version compatibility (`templateOptions.talosVersion` / `--talos-version`).** This setting must match the **Talos version actually running on the target node** — i.e. the maintenance ISO/PXE the node booted from for `apply -i`, or the installed Talos for an authenticated apply. It is **not** the same as `install.image`, which only controls what gets written to disk after a successful apply. When the configured contract is newer than the running binary, machinery injects fields (e.g. `machine.install.grubUseUKICmdline` from v1.12) that the running parser does not know, and the apply fails on the node side with `failed to parse config: unknown keys found during decoding: ...`. `talm apply` runs a best-effort pre-flight check against the running version and prints a `warning: pre-flight: ...` line with a hint when it detects this mismatch; if the warning is missed, the same hint is appended to the apply error. Either reboot the node into a maintenance image that matches the configured contract, or lower `templateOptions.talosVersion` / `--talos-version` to match what is running.
 
@@ -182,67 +140,21 @@ Re-template and update generated file in place (this will overwrite it):
 talm template -f nodes/node1.yaml -I
 ```
 
-> **Per-node patches inside node files.** A node file can carry Talos config
-> below its modeline (for example, a custom `hostname`, secondary
-> interfaces with `deviceSelector`, VIP placement, or extra etcd args).
-> When `talm apply -f node.yaml` runs the template-rendering branch, that
-> body is applied as a strategic merge patch on top of the rendered
-> template before the result is sent to the node — so per-node fields
-> survive even when the template auto-generates conflicting values
-> (e.g. `hostname: talos-XXXXX`).
+> **Per-node patches inside node files.** A node file can carry Talos config below its modeline (for example, a custom `hostname`, secondary interfaces with `deviceSelector`, VIP placement, or extra etcd args). When `talm apply -f node.yaml` runs the template-rendering branch, that body is applied as a strategic merge patch on top of the rendered template before the result is sent to the node — so per-node fields survive even when the template auto-generates conflicting values (e.g. `hostname: talos-XXXXX`).
 >
-> **Talos v1.12+ caveat.** The multi-document output format introduced
-> in v1.12 splits network configuration into typed documents
-> (`LinkConfig`, `BondConfig`, `VLANConfig`, `Layer2VIPConfig`,
-> `HostnameConfig`, `ResolverConfig`). Legacy node-body fields under
-> `machine.network.interfaces` have no safe 1:1 mapping to those types,
-> so the multi-doc path does not translate them — if you target a
-> v1.12+ Talos node, pin per-node network settings by patching the
-> typed resources (e.g. a `LinkConfig` document below the modeline)
-> rather than legacy `machine.network.interfaces`. Fields outside the
-> network area (`machine.network.hostname` via `HostnameConfig`,
-> `machine.install.disk`, extra etcd args, etc.) still merge as
-> expected.
+> **Talos v1.12+ caveat.** The multi-document output format introduced in v1.12 splits network configuration into typed documents (`LinkConfig`, `BondConfig`, `VLANConfig`, `Layer2VIPConfig`, `HostnameConfig`, `ResolverConfig`). Legacy node-body fields under `machine.network.interfaces` have no safe 1:1 mapping to those types and the chart cannot translate them yet — pin per-node network settings by patching the typed resources (e.g. a `LinkConfig` document below the modeline) rather than legacy `machine.network.interfaces`. Fields outside the network area (`machine.network.hostname` via `HostnameConfig`, `machine.install.disk`, extra etcd args, etc.) still merge as expected.
 >
-> **One body, one node.** A non-empty body is a per-node pin, so the
-> modeline for that file must target exactly one node. `talm apply`
-> refuses a multi-node modeline when the body is non-empty; modeline-
-> only files (no body) are still allowed and drive the same rendered
-> template on every listed target.
+> **Upgrade-from-legacy guardrail.** Nodes originally bootstrapped on a chart that emitted the legacy schema still carry `machine.network.interfaces[]` in their running `MachineConfig`. On v1.12 multi-doc rendering the chart cannot reconstruct equivalent typed documents from those entries automatically, and silently dropping them on the next apply would erase the user's network declarations. The renderer therefore fails the render with `talm: the multi-doc renderer cannot translate legacy machine.network.interfaces[] from the running MachineConfig...`, spelling out the migration path: move the interfaces, vlans, and addresses into per-node body overlays as v1.12 typed documents (`LinkConfig`, `VLANConfig`, `BondConfig`, `RouteConfig`) before re-running `talm apply`, or pin `templateOptions.talosVersion: "v1.11"` in `Chart.yaml` until the translator lands.
 >
-> **Idempotent applies.** Repeated `talm apply` runs against an
-> already-configured node do not duplicate entries. Before the strategic
-> merge runs, the engine prunes from the body every primitive-list
-> entry the rendered template already carries (e.g. certSANs,
-> nameservers, validSubnets). For object arrays the upstream patcher
-> merges by identity (machine.network.interfaces by `interface:` or
-> `deviceSelector:`, vlans by `vlanId:`, apiServer admissionControl by
-> `name:`), the prune descends into matched pairs and dedupes the inner
-> primitive lists too — so re-applying after `talm template -I` does not
-> double interface addresses, vlan addresses, or admission-control
-> exemption namespaces. For object arrays without an upstream identity
-> merge (extraVolumes, kernel.modules, wireguard.peers, ...), body items
-> that deep-equal a rendered counterpart are dropped, covering the
-> dominant full-restate case. Fields tagged `merge:"replace"` upstream
-> are passed through verbatim — pruning them would let the upstream
-> replace silently drop the rendered entries on a partial edit. This
-> covers v1alpha1 root paths `cluster.network.podSubnets`,
-> `cluster.network.serviceSubnets`, `cluster.apiServer.auditPolicy`,
-> and the typed `NetworkRuleConfig` paths `ingress` and
-> `portSelector.ports`.
+> **One body, one node.** A non-empty body is a per-node pin, so the modeline for that file must target exactly one node. `talm apply` refuses a multi-node modeline when the body is non-empty; modeline-only files (no body) are still allowed and drive the same rendered template on every listed target.
 >
-> `talm template -f node.yaml` (with or without `-I`) does **not** apply
-> the same overlay: its output is the rendered template plus the modeline
-> and the auto-generated warning, byte-identical to what the template
-> alone would produce. Routing it through the patcher would drop every
-> YAML comment (including the modeline) and re-sort keys, breaking
-> downstream commands that read the file back. Use `apply --dry-run` if
-> you want to preview the exact bytes that will be sent to the node.
+> **Idempotent applies.** Repeated `talm apply` runs against an already-configured node do not duplicate entries. Before the strategic merge runs, the engine prunes from the body every primitive-list entry the rendered template already carries (e.g. certSANs, nameservers, validSubnets). For object arrays the upstream patcher merges by identity (machine.network.interfaces by `interface:` or `deviceSelector:`, vlans by `vlanId:`, apiServer admissionControl by `name:`), the prune descends into matched pairs and dedupes the inner primitive lists too — so re-applying after `talm template -I` does not double interface addresses, vlan addresses, or admission-control exemption namespaces. For object arrays without an upstream identity merge (extraVolumes, kernel.modules, wireguard.peers, ...), body items that deep-equal a rendered counterpart are dropped, covering the dominant full-restate case. Fields tagged `merge:"replace"` upstream are passed through verbatim — pruning them would let the upstream replace silently drop the rendered entries on a partial edit. This covers v1alpha1 root paths `cluster.network.podSubnets`, `cluster.network.serviceSubnets`, `cluster.apiServer.auditPolicy`, and the typed `NetworkRuleConfig` paths `ingress` and `portSelector.ports`.
+>
+> `talm template -f node.yaml` (with or without `-I`) does **not** apply the same overlay: its output is the rendered template plus the modeline and the auto-generated warning, byte-identical to what the template alone would produce. Routing it through the patcher would drop every YAML comment (including the modeline) and re-sort keys, breaking downstream commands that read the file back. Use `apply --dry-run` if you want to preview the exact bytes that will be sent to the node.
 
 ## Using talosctl commands
 
-Talm offers a similar set of commands to those provided by talosctl.
-However, you can specify the --file option for them.
+Talm offers a similar set of commands to those provided by talosctl. However, you can specify the --file option for them.
 
 For example, to run a dashboard for three nodes:
 
