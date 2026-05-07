@@ -2822,6 +2822,117 @@ func TestMultiDocCozystack_VIPLinkOverrideOnFreshNode(t *testing.T) {
 	}
 }
 
+// renderLegacyChart renders the controlplane template of the supplied
+// chart against a "legacy" Talos config (TalosVersion=""), routing
+// through talos.config.legacy. Mirrors the multidoc render helpers
+// above but exercises the legacy code path that pre-1.12 Talos still
+// uses by default. Returns the rendered controlplane document.
+func renderLegacyChart(t *testing.T, chartDir, templateName string, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir(chartDir)
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+	out, err := eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return out[templateName]
+}
+
+// TestLegacyCozystack_VIPLinkOverride pins the legacy-schema mirror
+// of TestMultiDocCozystack_VIPLinkOverride. The legacy Talos config
+// shape has no Layer2VIPConfig document — VIPs live at
+// machine.network.interfaces[].vip — so the override is expressed as
+// a separate vip-only top-level interfaces[] entry. Without this
+// fix, fresh `talm init -p cozystack` users on the default
+// `talosVersion: ""` chart setting silently lose the override.
+func TestLegacyCozystack_VIPLinkOverride(t *testing.T) {
+	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"floatingIP": "192.168.201.5",
+		"vipLink":    "eth0.4000",
+	})
+
+	// Override entry: a top-level interfaces[] entry with the
+	// operator's link name and only the vip block.
+	assertContains(t, result, "- interface: eth0.4000")
+	assertContains(t, result, "ip: 192.168.201.5")
+	// Inline (discovery-derived) vip on the bare NIC must be
+	// suppressed when vipLink redirects the VIP.
+	assertNotContains(t, result, "interface: eth0\n      addresses: [\"192.168.201.10/24\"]\n      routes:\n        - network: 0.0.0.0/0\n          gateway: 192.168.201.1\n      vip:")
+	// Legacy schema has no Layer2VIPConfig kind.
+	assertNotContains(t, result, "kind: Layer2VIPConfig")
+}
+
+// TestLegacyGeneric_VIPLinkOverride mirrors the cozystack-side legacy
+// override test for the generic preset. The generic chart ships
+// `talosVersion: ""` by default, so the legacy branch is the path a
+// fresh `talm init -p generic` user actually takes.
+func TestLegacyGeneric_VIPLinkOverride(t *testing.T) {
+	result := renderLegacyChart(t, "../../charts/generic", "generic/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"floatingIP": "192.168.201.5",
+		"vipLink":    "eth0.4000",
+	})
+
+	assertContains(t, result, "- interface: eth0.4000")
+	assertContains(t, result, "ip: 192.168.201.5")
+	assertNotContains(t, result, "interface: eth0\n      addresses: [\"192.168.201.10/24\"]\n      routes:\n        - network: 0.0.0.0/0\n          gateway: 192.168.201.1\n      vip:")
+	assertNotContains(t, result, "kind: Layer2VIPConfig")
+}
+
+// TestLegacyCozystack_VIPLinkOverrideOnFreshNode pins the
+// chicken-and-egg case for legacy: a node where discovery returns no
+// default-gateway link must still emit the override entry. Without
+// this the override would silently no-op on the exact case it was
+// added for — the operator wants the VIP on a VLAN sub-interface
+// this same template is about to bring up.
+func TestLegacyCozystack_VIPLinkOverrideOnFreshNode(t *testing.T) {
+	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", freshNicLookup(), map[string]any{
+		"floatingIP":        "192.168.201.5",
+		"vipLink":           "eth0.4000",
+		"advertisedSubnets": []any{"192.168.201.0/24"},
+	})
+
+	assertContains(t, result, "interfaces:")
+	assertContains(t, result, "- interface: eth0.4000")
+	assertContains(t, result, "ip: 192.168.201.5")
+}
+
+// TestLegacyCozystack_VIPLinkMatchesDiscovery pins the no-op case:
+// when vipLink names the same link discovery already picked, the
+// chart must NOT emit a duplicate interfaces[] entry — Talos legacy
+// validation rejects duplicate interface names. The inline vip block
+// on the discovered interface must remain, since it already pins the
+// VIP on the right link.
+func TestLegacyCozystack_VIPLinkMatchesDiscovery(t *testing.T) {
+	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"floatingIP": "192.168.201.5",
+		"vipLink":    "eth0",
+	})
+
+	// Exactly one interface entry for eth0 — not a duplicate.
+	if c := strings.Count(result, "- interface: eth0"); c != 1 {
+		t.Errorf("expected exactly one - interface: eth0 entry, got %d:\n%s", c, result)
+	}
+	// Inline vip is preserved on the discovered entry.
+	assertContains(t, result, "vip:")
+	assertContains(t, result, "ip: 192.168.201.5")
+}
+
 // TestMergeFileAsPatch_TypedDocPartialEditPreservesIdentityKeys pins
 // the regression that the multi-doc identity prune introduced: a
 // typed multi-doc body where the user changes one field but keeps

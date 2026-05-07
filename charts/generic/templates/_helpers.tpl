@@ -220,11 +220,21 @@ link: {{ $vipLinkName }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
     {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
-    {{- if or $existingInterfacesConfiguration $defaultLinkName }}
+    {{- /* vipLink override on the legacy schema: legacy Talos has no
+       Layer2VIPConfig document, so the override is expressed as a
+       top-level interfaces[] entry that carries only the vip block.
+       When vipLink == $defaultLinkName the inline vip below already
+       lands on the right link, so no override entry is needed. */}}
+    {{- $vipOverride := and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
+    {{- /* Suppress the inline (discovery-derived) vip when the operator
+       has redirected it to a different link; otherwise the VIP would
+       be pinned twice on different interfaces. */}}
+    {{- $suppressInlineVip := and .Values.vipLink (ne .Values.vipLink $defaultLinkName) }}
+    {{- if or $existingInterfacesConfiguration $defaultLinkName $vipOverride }}
     interfaces:
     {{- if $existingInterfacesConfiguration }}
     {{- $existingInterfacesConfiguration | nindent 4 }}
-    {{- else }}
+    {{- else if $defaultLinkName }}
     {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
     {{- $parentLinkName := "" }}
     {{- if $isVlan }}
@@ -246,7 +256,7 @@ link: {{ $vipLinkName }}
           routes:
             - network: 0.0.0.0/0
               gateway: {{ include "talm.discovered.default_gateway" . }}
-          {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+          {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
           vip:
             ip: {{ .Values.floatingIP }}
           {{- end }}
@@ -255,11 +265,16 @@ link: {{ $vipLinkName }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+      {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
       vip:
         ip: {{ .Values.floatingIP }}
       {{- end }}
       {{- end }}
+    {{- end }}
+    {{- if $vipOverride }}
+    - interface: {{ .Values.vipLink }}
+      vip:
+        ip: {{ .Values.floatingIP }}
     {{- end }}
     {{- end }}
 {{- end }}
