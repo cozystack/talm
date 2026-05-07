@@ -15,7 +15,12 @@
 package engine
 
 import (
+	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -24,6 +29,149 @@ import (
 
 	"github.com/cockroachdb/errors"
 )
+
+// committedTextFiles returns absolute paths of every git-tracked file
+// under root whose extension is in exts. Untracked working-tree
+// artefacts (notes, build scratch, generated YAML, plan files) are
+// excluded so a repo-wide scan stays hermetic with respect to working-
+// tree state — `go test ./...` should be a function of committed
+// source, not of whatever happens to be sitting in the user's checkout.
+//
+// Uses `git ls-files -z` to get the index-tracked file list. Returns
+// an error if the command fails (no git, not a git repo). Empty or
+// non-matching extensions yield an empty list, not an error.
+func committedTextFiles(root string, exts map[string]bool) ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "-z")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, errors.Wrapf(err, "git ls-files in %s", root)
+	}
+	var files []string
+	for _, rel := range bytes.Split(out, []byte{0}) {
+		if len(rel) == 0 {
+			continue
+		}
+		path := filepath.Join(root, string(rel))
+		if !exts[filepath.Ext(path)] {
+			continue
+		}
+		files = append(files, path)
+	}
+	return files, nil
+}
+
+// danglingSubtestRef carries a flagged citation along with the file
+// it was found in, so the consumer test can point a maintainer at the
+// exact source location instead of forcing a grep across the package.
+type danglingSubtestRef struct {
+	Ref  string
+	File string
+}
+
+// findDanglingSubtestReferences scans testFiles for prose citations
+// of the shape TestParentName followed by a slash and a subtest slug
+// (e.g. cited inline in a doc comment) and returns those whose
+// parent+slug pair has no matching t.Run literal inside the same
+// parent's function body. The previous flat-slug collector accepted
+// any citation whose slug matched a subtest under ANY parent in the
+// package — exactly the wrong-parent drift the guard claims to catch.
+//
+// Parent scopes are extracted via go/parser so a t.Run inside a
+// helper called by TestParent does not leak into TestOther's scope.
+// Slug matching mirrors Go's testing rewrite (spaces become
+// underscores) and accepts an exact match or a prefix match within
+// the same parent (a citation is allowed to truncate the subtest
+// name in prose).
+//
+// Caveat: the t.Run regex captures only LITERAL subtest names. The
+// table-driven pattern `t.Run(tt.name, func(...){...})` with the
+// slug coming from a runtime variable is invisible to the collector
+// — citations of those subtests would be flagged as dangling even
+// though the runtime t.Run does match. If a maintainer adds such a
+// citation, lift the slug into a literal at the t.Run call site or
+// extend the collector to walk tt.name resolutions.
+func findDanglingSubtestReferences(testFiles []string) ([]danglingSubtestRef, error) {
+	subtestRe := regexp.MustCompile(`t\.Run\("([^"\\]+)"`)
+	refRe := regexp.MustCompile(`Test[A-Z][A-Za-z0-9_]+/[A-Za-z0-9_$.:\-]+`)
+	parentSubtests := make(map[string]map[string]struct{})
+	collectSubtest := func(parent, raw string) {
+		slug := strings.ReplaceAll(raw, " ", "_")
+		if parentSubtests[parent] == nil {
+			parentSubtests[parent] = make(map[string]struct{})
+		}
+		parentSubtests[parent][slug] = struct{}{}
+	}
+	bodies := make(map[string][]byte, len(testFiles))
+	for _, path := range testFiles {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return nil, errors.Wrapf(err, "parse %s", path)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, errors.Wrapf(err, "read %s", path)
+		}
+		bodies[path] = body
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			if !strings.HasPrefix(fn.Name.Name, "Test") {
+				continue
+			}
+			parent := fn.Name.Name
+			start := fset.Position(fn.Body.Pos()).Offset
+			end := fset.Position(fn.Body.End()).Offset
+			if start < 0 || end > len(body) || start >= end {
+				continue
+			}
+			for _, m := range subtestRe.FindAllSubmatch(body[start:end], -1) {
+				collectSubtest(parent, string(m[1]))
+			}
+		}
+	}
+	var dangling []danglingSubtestRef
+	type seenKey struct{ ref, file string }
+	seen := make(map[seenKey]struct{})
+	for _, path := range testFiles {
+		data := bodies[path]
+		for _, m := range refRe.FindAllSubmatch(data, -1) {
+			ref := string(m[0])
+			key := seenKey{ref: ref, file: path}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			parts := strings.SplitN(ref, "/", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			parent, slug := parts[0], parts[1]
+			subs, ok := parentSubtests[parent]
+			if !ok {
+				dangling = append(dangling, danglingSubtestRef{Ref: ref, File: path})
+				continue
+			}
+			if _, exact := subs[slug]; exact {
+				continue
+			}
+			matched := false
+			for known := range subs {
+				if strings.HasPrefix(known, slug) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				dangling = append(dangling, danglingSubtestRef{Ref: ref, File: path})
+			}
+		}
+	}
+	return dangling, nil
+}
 
 func TestIsTalosConfigPatch(t *testing.T) {
 	tests := []struct {
@@ -430,6 +578,125 @@ func TestDocumentIdentityHelpersAgree(t *testing.T) {
 	}
 }
 
+// TestCommittedTextFilesIgnoresUntrackedArtefacts pins the
+// hermeticity property of committedTextFiles: a banned-phrase-bearing
+// file that exists in the working tree but has not been added to the
+// git index must not appear in the returned list. Without this, the
+// repo-wide workflow-leakage scan fails on transient working-tree
+// state (notes, build scratch, generated YAML), turning `go test
+// ./...` into a function of the user's working directory rather than
+// of committed source.
+//
+// The test creates a self-contained temporary git repository with one
+// tracked file and one untracked file, both containing a banned
+// phrase. committedTextFiles must return only the tracked file.
+func TestCommittedTextFilesIgnoresUntrackedArtefacts(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		// Disable any user gitconfig that could interfere with the
+		// minimal test repo (commit signing, hooks, etc.).
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@example.invalid",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@example.invalid",
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-b", "main")
+	tracked := filepath.Join(repo, "tracked.md")
+	untracked := filepath.Join(repo, "untracked.md")
+	if err := os.WriteFile(tracked, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write tracked: %v", err)
+	}
+	runGit("add", "tracked.md")
+	runGit("commit", "-m", "init", "--no-gpg-sign")
+	if err := os.WriteFile(untracked, []byte("untracked artefact\n"), 0o644); err != nil {
+		t.Fatalf("write untracked: %v", err)
+	}
+
+	files, err := committedTextFiles(repo, map[string]bool{".md": true})
+	if err != nil {
+		t.Fatalf("committedTextFiles: %v", err)
+	}
+	have := make(map[string]bool, len(files))
+	for _, f := range files {
+		have[filepath.Base(f)] = true
+	}
+	if !have["tracked.md"] {
+		t.Errorf("expected tracked.md in result, got %v", files)
+	}
+	if have["untracked.md"] {
+		t.Errorf("untracked.md leaked into result; the helper must filter the working tree against git ls-files: %v", files)
+	}
+}
+
+// TestFindDanglingSubtestReferencesIsParentAware pins the
+// parent-keyed lookup contract: a citation TestX/slug must resolve
+// only to a subtest declared inside TestX itself, not to a same-slug
+// subtest under any other parent. The flat-map collector that
+// preceded the fix accepted TestX/wrong as long as ANY test in the
+// package had a subtest named "wrong", which was exactly the
+// wrong-parent drift the guard claims to catch.
+//
+// The synthetic source is assembled via string concatenation so
+// engine_test.go itself does not embed Test<Name>/slug literals
+// that the production scanner (TestNoDanglingSubtestReferencesInSource)
+// would then flag against this package's real test list.
+func TestFindDanglingSubtestReferencesIsParentAware(t *testing.T) {
+	dir := t.TempDir()
+	// `tag` splits the Test prefix so the production-side `refRe`
+	// scanner does not flag `Test<Name>/slug` literals from this
+	// synthetic source against the real package; `runFn` does the
+	// same for the t.Run call literal so the production-side
+	// `subtestRe` collector does not register the synthetic
+	// "alpha_extended" / "beta" subtests under the enclosing real
+	// parent (this test function).
+	tag := "Tes" + "t"
+	runFn := "t.Ru" + "n"
+	src := "package x\n" +
+		"import \"testing\"\n" +
+		"func " + tag + "Right(t *testing.T) { " + runFn + "(\"alpha_extended\", func(t *testing.T) {}) }\n" +
+		"func " + tag + "Other(t *testing.T) { " + runFn + "(\"beta\", func(t *testing.T) {}) }\n" +
+		"// Reference inside a comment: " + tag + "Right/alpha_extended (good — exact same-parent match).\n" +
+		"// Reference inside a comment: " + tag + "Right/alpha (good — citation is a prefix of the same parent's alpha_extended subtest).\n" +
+		"// Reference inside a comment: " + tag + "Right/beta (bad — beta is under " + tag + "Other, not " + tag + "Right).\n"
+	path := filepath.Join(dir, "sample_test.go")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatalf("write sample: %v", err)
+	}
+
+	dangling, err := findDanglingSubtestReferences([]string{path})
+	if err != nil {
+		t.Fatalf("findDanglingSubtestReferences: %v", err)
+	}
+	have := make(map[string]bool, len(dangling))
+	for _, d := range dangling {
+		have[d.Ref] = true
+	}
+	if have[tag+"Right/alpha_extended"] {
+		t.Errorf("%sRight/alpha_extended was flagged as dangling; the exact same-parent reference is valid", tag)
+	}
+	if have[tag+"Right/alpha"] {
+		t.Errorf("%sRight/alpha was flagged as dangling; the citation is a prefix of the same parent's alpha_extended subtest and must be accepted", tag)
+	}
+	if !have[tag+"Right/beta"] {
+		t.Errorf("%sRight/beta should be flagged as dangling: beta is a subtest under %sOther, not %sRight; got %v", tag, tag, tag, dangling)
+	}
+	for _, d := range dangling {
+		if d.Ref == tag+"Right/beta" && d.File != path {
+			t.Errorf("dangling ref records the wrong file: got %q, want %q", d.File, path)
+		}
+	}
+}
+
 // TestNoWorkflowLeakageInRepoSource walks every committed text file
 // in the module and fails on phrases that describe the iteration
 // process that produced the change rather than the change itself.
@@ -448,6 +715,14 @@ func TestNoWorkflowLeakageInRepoSource(t *testing.T) {
 	moduleRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("resolve module root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moduleRoot, ".git")); err != nil {
+		// The hermeticity scan shells out to `git ls-files`, which
+		// requires a working tree backed by a git index. Source
+		// release tarballs and vendored copies do not ship `.git`,
+		// so skip rather than fatal — the scan is a developer-side
+		// guard, not a property the published artefact must satisfy.
+		t.Skipf("no .git directory at %s; hermeticity scan requires git ls-files", moduleRoot)
 	}
 	selfPath, err := filepath.Abs("engine_test.go")
 	if err != nil {
@@ -475,31 +750,17 @@ func TestNoWorkflowLeakageInRepoSource(t *testing.T) {
 		".yml":  true,
 		".md":   true,
 	}
-	skipDirs := map[string]bool{
-		".git":         true,
-		"vendor":       true,
-		"node_modules": true,
-		".claude":      true, // worktrees, plans, memory — not committed source
+	files, err := committedTextFiles(moduleRoot, scanExt)
+	if err != nil {
+		t.Fatalf("list committed files: %v", err)
 	}
-	if err := filepath.WalkDir(moduleRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	for _, path := range files {
 		if path == selfPath {
-			return nil
-		}
-		if !scanExt[filepath.Ext(path)] {
-			return nil
+			continue
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			t.Fatalf("read %s: %v", path, err)
 		}
 		src := string(data)
 		rel, _ := filepath.Rel(moduleRoot, path)
@@ -508,9 +769,6 @@ func TestNoWorkflowLeakageInRepoSource(t *testing.T) {
 				t.Errorf("workflow-leaky phrase %q found in %s; committed content must read as self-contained, with no references to the iteration process that produced it", phrase, rel)
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk module root: %v", err)
 	}
 }
 
@@ -537,51 +795,12 @@ func TestNoDanglingSubtestReferencesInSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-
-	// Collect every slugified subtest name seen in any t.Run literal.
-	subtestRe := regexp.MustCompile(`t\.Run\("([^"\\]+)"`)
-	subtests := map[string]struct{}{}
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		for _, m := range subtestRe.FindAllSubmatch(data, -1) {
-			slug := strings.ReplaceAll(string(m[1]), " ", "_")
-			subtests[slug] = struct{}{}
-		}
+	dangling, err := findDanglingSubtestReferences(files)
+	if err != nil {
+		t.Fatalf("findDanglingSubtestReferences: %v", err)
 	}
-
-	// Find every parent-plus-subtest-slug citation in any test file.
-	// Conservative pattern: Test prefix followed by an identifier,
-	// then slash, then a slug of non-whitespace/non-quote chars.
-	refRe := regexp.MustCompile(`Test[A-Z][A-Za-z0-9_]+/[A-Za-z0-9_$.:\-]+`)
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		for _, m := range refRe.FindAllSubmatch(data, -1) {
-			ref := string(m[0])
-			parts := strings.SplitN(ref, "/", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			slug := parts[1]
-			if _, ok := subtests[slug]; ok {
-				continue
-			}
-			matched := false
-			for known := range subtests {
-				if strings.HasPrefix(known, slug) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				t.Errorf("dangling subtest reference in %s: %q has no matching t.Run subtest in this package", f, ref)
-			}
-		}
+	for _, d := range dangling {
+		t.Errorf("dangling subtest reference in %s: %q has no matching t.Run subtest under that parent in this package", d.File, d.Ref)
 	}
 }
 
