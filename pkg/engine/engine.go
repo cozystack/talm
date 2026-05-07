@@ -604,6 +604,51 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 	return buf.Bytes(), false, nil
 }
 
+// replaceSemanticPaths lists YAML paths where Talos's upstream merge
+// layer is annotated with `merge:"replace"`: at those paths, the
+// patcher overwrites rendered's value with body's verbatim — unless
+// body is the zero value, in which case rendered survives. Each entry
+// mirrors a struct field tagged `merge:"replace"` in the upstream
+// machinery types (collected from
+// pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and
+// pkg/machinery/config/types/network/rule_config.go):
+//
+//   - cluster/network/podSubnets — v1alpha1 `PodSubnet []string ... merge:"replace"`
+//   - cluster/network/serviceSubnets — v1alpha1 `ServiceSubnet []string ... merge:"replace"`
+//   - cluster/apiServer/auditPolicy — v1alpha1 `AuditPolicyConfig Unstructured ... merge:"replace"`
+//   - ingress — typed NetworkRuleConfig `Ingress IngressConfig ... merge:"replace"`
+//   - portSelector/ports — typed NetworkRuleConfig `Ports PortRanges ... merge:"replace"`
+//
+// At these paths the prune must NOT subtract rendered-side entries from
+// body's primitive list, recurse into body's map, or descend into body's
+// object array: any of those reduce body to "just the user's deltas",
+// the upstream replace then writes those deltas verbatim, and rendered's
+// other entries / map keys silently vanish from the merged config — a
+// partial-edit on podSubnets that adds a CIDR ends up losing the
+// original; a partial-edit on auditPolicy that adds a rule loses the
+// rendered apiVersion/kind/other rules.
+//
+// Paths are walked relative to the document root that owns the field,
+// so the typed NetworkRuleConfig entries appear without an apiVersion/
+// kind prefix — pruneBodyIdentitiesAgainstRendered pairs body and
+// rendered docs by identity tuple before calling pruneIdenticalKeys, so
+// each walk sees only its own document's keys. The bare paths above do
+// not collide with anything in the v1alpha1 root (no `ingress` or
+// `portSelector` keys exist there), so a flat lookup is sufficient.
+//
+// The deep-equal short-circuit at the top of pruneIdenticalKeysAt is
+// still safe for replace paths: when body byte-equals rendered, deleting
+// the body key reduces body to the zero value at that path, and the
+// upstream replace then leaves rendered untouched. Skipping kicks in
+// only on the partial-edit branches below the deep-equal check.
+var replaceSemanticPaths = map[string]struct{}{
+	"cluster/network/podSubnets":     {},
+	"cluster/network/serviceSubnets": {},
+	"cluster/apiServer/auditPolicy":  {},
+	"ingress":                        {},
+	"portSelector/ports":             {},
+}
+
 // objectArrayMergeKeys lists the identity fields Talos's upstream
 // strategic-merge layer uses to match elements of an object array at
 // the given YAML path. Each entry mirrors a custom Merge method on the
@@ -643,6 +688,16 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // after `talm template -I` writes the rendered template back as the body),
 // preserving idempotence on full restates without inventing identity
 // where the upstream layer recognises none.
+//
+// One upstream type with a custom Merge is intentionally omitted:
+// ConfigFileList (typed ExtensionServiceConfig.configFiles, matched by
+// mountPath). Its element ConfigFile carries only string fields, so the
+// upstream mergeConfigFile + merge.Merge field-by-field already produces
+// the right result on partial edits — the deep-equal fallback in
+// matchObjectArrayItem handles full-restate idempotence, and adding a
+// path-keyed identity match would not change correctness, only firing
+// path. Listing it would be misleading: the table is meant to call out
+// fields where the inner-primitive append regression is reachable.
 //
 // Routes (machine.network.interfaces[].routes) sit in this same fallback
 // bucket: the schema declares no single primary key for a route, so the
@@ -702,6 +757,12 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 			continue
 		}
 		childPath := joinYAMLPath(yamlPath, k)
+		if _, replace := replaceSemanticPaths[childPath]; replace {
+			// Upstream `merge:"replace"` overwrites rendered with body
+			// verbatim. Any prune at this path leaks rendered-side
+			// entries out of the final config — see replaceSemanticPaths.
+			continue
+		}
 		if bodySub, ok := bodyV.(map[string]any); ok {
 			if renderedSub, ok2 := renderedV.(map[string]any); ok2 {
 				// Only delete when the recursive prune actually
