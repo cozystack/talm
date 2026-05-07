@@ -19,8 +19,8 @@ endpoint: ""
 floatingIP: ""
 
 # Optional override for the link Layer2VIPConfig is pinned to. When
-# left empty the chart picks the default-gateway-bearing link the
-# node already has (the VLAN sub-interface if one carries the
+# left empty the chart picks the IPv4-default-gateway-bearing link
+# the node already has (the VLAN sub-interface if one carries the
 # default route, otherwise the physical NIC). Set this when the
 # target link does not yet exist on the live system at first apply
 # — typically a VLAN sub-interface that the same template is about
@@ -45,12 +45,14 @@ serviceSubnets:
 
 # Optional override for machine.kubelet.nodeIP.validSubnets and
 # cluster.etcd.advertisedSubnets. When left empty the chart derives
-# the value from the node's default-gateway-bearing link at render
-# time (via talm.discovered.default_addresses_by_gateway), so the
-# generated machine config matches the node's actual network without
-# any values.yaml edit. Set this only when you want to pin a specific
-# subnet — typically for multi-homed nodes where the default-gateway
-# link is not the subnet you want kubelet/etcd to use.
+# the value from the node's IPv4-default-gateway-bearing link at
+# render time (via talm.discovered.default_addresses_by_gateway), so
+# the generated machine config matches the node's actual network
+# without any values.yaml edit. Set this only when you want to pin a
+# specific subnet — typically for multi-homed nodes where the
+# IPv4-default-gateway link is not the subnet you want kubelet/etcd
+# to use, or for IPv6-only setups where the chart's IPv4 default
+# would otherwise leave validSubnets empty.
 # Example:
 #   advertisedSubnets:
 #     - "10.0.0.0/8"
