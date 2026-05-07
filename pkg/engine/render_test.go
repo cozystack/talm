@@ -3182,6 +3182,141 @@ machine:
 		}
 	})
 
+	t.Run("body $patch:delete on absent path is a no-op", func(t *testing.T) {
+		// Kubernetes strategic merge patch treats a $patch:delete on an
+		// absent path as a no-op (the key is already absent, nothing to
+		// delete). Talos's configpatcher.Apply does not: its Selector-
+		// based deleteForPath walks the parsed v1alpha1.Config struct and
+		// returns ErrLookupFailed when any path segment doesn't resolve,
+		// surfacing as `failed to delete path '...': lookup failed` from
+		// the apply RPC.
+		//
+		// Stripping these no-op directives at the talm side before the
+		// patch reaches configpatcher.Apply matches the k8s SMP semantic
+		// and stops a real-world failure: a node body restating a chart-
+		// emitted directive (e.g. machine.nodeLabels.<label>: $patch:
+		// delete) errors out when rendered for the first time on a
+		// freshly generated config that hasn't yet acquired the label.
+		// Without this strip, the chart's own pattern fails on every
+		// fresh apply and bootstrap is broken.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  nodeLabels:
+    node.kubernetes.io/exclude-from-external-load-balancers:
+      $patch: delete
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch must accept a delete directive on an absent path as a no-op, got error: %v", err)
+		}
+		out := string(merged)
+		if strings.Contains(out, "$patch: delete") {
+			t.Errorf("merged output still carries the directive literal:\n%s", out)
+		}
+		if strings.Contains(out, "exclude-from-external-load-balancers") {
+			t.Errorf("merged output mentions the never-rendered key — the body's no-op directive should not have re-introduced it:\n%s", out)
+		}
+	})
+
+	t.Run("body $patch:delete on partially-present path is a no-op when leaf is absent", func(t *testing.T) {
+		// A subtler form of the absent-path case: the body's directive
+		// addresses a leaf under a parent that DOES exist in rendered,
+		// but the leaf itself doesn't. configpatcher.Apply walks the
+		// path segment-by-segment and fails on the missing leaf with
+		// the same ErrLookupFailed. The fix must treat any path whose
+		// final segment doesn't resolve as a no-op, not just paths
+		// missing at the top level.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  nodeLabels:
+    other-label: present
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  nodeLabels:
+    node.kubernetes.io/exclude-from-external-load-balancers:
+      $patch: delete
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if strings.Contains(out, "$patch: delete") {
+			t.Errorf("merged output still carries the directive literal:\n%s", out)
+		}
+		if !strings.Contains(out, "other-label: present") {
+			t.Errorf("rendered sibling key under nodeLabels was incorrectly stripped along with the absent target:\n%s", out)
+		}
+	})
+
+	t.Run("body $patch:delete on present path still removes the key", func(t *testing.T) {
+		// Regression-safety probe: the no-op-on-absent fix must not
+		// over-trigger and silently drop directives whose target IS
+		// present in rendered. The user-intent delete must still land
+		// as a Selector and remove the key from the merged config.
+		const renderedTemplate = `version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+  nodeLabels:
+    user-label: please-delete-me
+cluster:
+  controlPlane:
+    endpoint: https://10.0.0.10:6443
+`
+		const userBody = `# talm: nodes=["10.0.0.1"]
+machine:
+  nodeLabels:
+    user-label:
+      $patch: delete
+`
+		dir := t.TempDir()
+		nodeFile := filepath.Join(dir, "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(userBody), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(renderedTemplate), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+		out := string(merged)
+		if strings.Contains(out, "$patch: delete") {
+			t.Errorf("merged output still carries the directive literal:\n%s", out)
+		}
+		if strings.Contains(out, "user-label") {
+			t.Errorf("user-intent delete on a present path was suppressed; the key still appears in merged output:\n%s", out)
+		}
+	})
 }
 
 // TestMergeFileAsPatch_PreservesUserIntentPatchDelete pins the contract

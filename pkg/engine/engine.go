@@ -250,6 +250,14 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			patchFile,
 		)
 	}
+	cleanedPatch, err = stripPatchDeleteDirectivesAbsentInTarget(cleanedPatch, cleanedRendered)
+	if err != nil {
+		return nil, errors.WithHintf(
+			errors.Wrapf(err, "stripping no-op $patch:delete directives from %q", patchFile),
+			"the node body did not parse as YAML; verify %q is well-formed",
+			patchFile,
+		)
+	}
 	prunedBytes, allPruned, err := pruneBodyIdentitiesAgainstRendered(cleanedPatch, cleanedRendered)
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -381,6 +389,159 @@ func stripPatchDeleteDirectivesAtPaths(data []byte, paths []string) ([]byte, err
 		return data, nil
 	}
 	return encodeAllYAMLDocuments(docs)
+}
+
+// stripPatchDeleteDirectivesAbsentInTarget walks every YAML document
+// in `data` and removes $patch:delete directives whose path does not
+// resolve to a key in the matching `target` document. configpatcher.Apply
+// otherwise errors with `failed to delete path '...': lookup failed`
+// — its Selector-based deleteForPath walks the parsed v1alpha1.Config
+// struct and rejects any path segment that does not resolve. Kubernetes
+// strategic merge patch treats delete-of-absent as a no-op, so this
+// helper restores that semantic before the patch reaches the apply RPC,
+// which keeps the chart's own pattern (a body that re-states a chart-
+// emitted directive after `talm template -I`) usable on a fresh apply
+// where the targeted key has not yet been populated on the node.
+//
+// `target` is the rendered template AFTER stripAllPatchDeleteDirectives
+// has removed every chart-side directive — i.e. the structural shape
+// configpatcher.Apply will see as the merge target. A directive whose
+// path isn't reachable in that shape is a no-op by definition.
+//
+// Pairs body and target documents by identity tuple (apiVersion+kind+name,
+// or the legacy-root sentinel) so a body re-ordering its typed documents
+// relative to rendered still resolves directive paths against the right
+// target document. A body document with no matching target document
+// (no rendered counterpart at all) gets every directive stripped,
+// matching the upstream contract: there is nothing to delete.
+func stripPatchDeleteDirectivesAbsentInTarget(data, target []byte) ([]byte, error) {
+	bodyDocs, err := decodeAllYAMLDocuments(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(bodyDocs) == 0 {
+		return data, nil
+	}
+	targetDocs, err := decodeAllYAMLDocuments(target)
+	if err != nil {
+		return nil, err
+	}
+	targetByID := make(map[string]*yaml.Node, len(targetDocs))
+	for _, doc := range targetDocs {
+		targetByID[documentIdentityFromNode(doc)] = doc
+	}
+	pruneSet := make(map[string]struct{})
+	for _, bdoc := range bodyDocs {
+		id := documentIdentityFromNode(bdoc)
+		targetDoc := targetByID[id]
+		for _, rel := range collectDeleteDirectivePaths(bdoc, "") {
+			if !pathExistsInDoc(targetDoc, rel) {
+				pruneSet[joinYAMLPath("/"+id, rel)] = struct{}{}
+			}
+		}
+	}
+	if len(pruneSet) == 0 {
+		return data, nil
+	}
+	stripped := 0
+	for _, doc := range bodyDocs {
+		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
+	}
+	if stripped == 0 {
+		return data, nil
+	}
+	return encodeAllYAMLDocuments(bodyDocs)
+}
+
+// collectDeleteDirectivePaths walks `node` and returns the
+// JSON-pointer-escaped paths (relative to the document root, no
+// identity prefix) of every $patch:delete directive it contains.
+// Used by stripPatchDeleteDirectivesAbsentInTarget to enumerate body's
+// directives so each can be checked against the target document.
+func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
+	if node == nil {
+		return nil
+	}
+	var found []string
+	switch node.Kind {
+	case yaml.DocumentNode:
+		for _, child := range node.Content {
+			found = append(found, collectDeleteDirectivePaths(child, parentRel)...)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			keyNode := node.Content[i]
+			valueNode := node.Content[i+1]
+			if keyNode.Kind != yaml.ScalarNode {
+				continue
+			}
+			childRel := joinYAMLPath(parentRel, jsonPointerEscape(keyNode.Value))
+			if isPatchDeleteDirective(valueNode) {
+				found = append(found, childRel)
+				continue
+			}
+			if valueNode.Kind == yaml.MappingNode {
+				found = append(found, collectDeleteDirectivePaths(valueNode, childRel)...)
+			}
+		}
+	}
+	return found
+}
+
+// pathExistsInDoc resolves `path` (a slash-separated sequence of
+// JSON-pointer-escaped segments, no leading slash, no document
+// identity prefix) against the YAML document `doc` and returns true
+// when every segment names an existing key in the corresponding
+// mapping. An empty path resolves to the document root (true unless
+// doc is nil or non-mapping at the root).
+//
+// The walk is deliberately mapping-only: configpatcher.Apply's
+// Selector-based deleteForPath addresses scalar map fields by name
+// (machine.nodeLabels.<label>) and bails on the first non-matching
+// segment regardless of the target's kind below it. This helper
+// reproduces the same predicate so a path declared no-op here is
+// guaranteed to be the same path the apply RPC would have erred on.
+func pathExistsInDoc(doc *yaml.Node, path string) bool {
+	if doc == nil {
+		return false
+	}
+	cur := doc
+	if cur.Kind == yaml.DocumentNode && len(cur.Content) > 0 {
+		cur = cur.Content[0]
+	}
+	if cur == nil || cur.Kind != yaml.MappingNode {
+		return false
+	}
+	if path == "" {
+		return true
+	}
+	for _, escaped := range strings.Split(path, "/") {
+		seg := jsonPointerUnescape(escaped)
+		if cur.Kind != yaml.MappingNode {
+			return false
+		}
+		found := false
+		for i := 0; i+1 < len(cur.Content); i += 2 {
+			if cur.Content[i].Value == seg {
+				cur = cur.Content[i+1]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonPointerUnescape reverses jsonPointerEscape per RFC 6901
+// (~1 → /, ~0 → ~). Order matters: ~0 must be processed last so a
+// literal "~0" written into a YAML key survives the round-trip.
+func jsonPointerUnescape(s string) string {
+	s = strings.ReplaceAll(s, "~1", "/")
+	s = strings.ReplaceAll(s, "~0", "~")
+	return s
 }
 
 func decodeAllYAMLDocuments(data []byte) ([]*yaml.Node, error) {
