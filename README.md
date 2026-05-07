@@ -210,6 +210,27 @@ talm template -f nodes/node1.yaml -I
 > only files (no body) are still allowed and drive the same rendered
 > template on every listed target.
 >
+> **Idempotent applies.** Repeated `talm apply` runs against an
+> already-configured node do not duplicate entries. Before the strategic
+> merge runs, the engine prunes from the body every primitive-list
+> entry the rendered template already carries (e.g. certSANs,
+> nameservers, validSubnets). For object arrays the upstream patcher
+> merges by identity (machine.network.interfaces by `interface:` or
+> `deviceSelector:`, vlans by `vlanId:`, apiServer admissionControl by
+> `name:`), the prune descends into matched pairs and dedupes the inner
+> primitive lists too — so re-applying after `talm template -I` does not
+> double interface addresses, vlan addresses, or admission-control
+> exemption namespaces. For object arrays without an upstream identity
+> merge (extraVolumes, kernel.modules, wireguard.peers, ...), body items
+> that deep-equal a rendered counterpart are dropped, covering the
+> dominant full-restate case. Fields tagged `merge:"replace"` upstream
+> are passed through verbatim — pruning them would let the upstream
+> replace silently drop the rendered entries on a partial edit. This
+> covers v1alpha1 root paths `cluster.network.podSubnets`,
+> `cluster.network.serviceSubnets`, `cluster.apiServer.auditPolicy`,
+> and the typed `NetworkRuleConfig` paths `ingress` and
+> `portSelector.ports`.
+>
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply
 > the same overlay: its output is the rendered template plus the modeline
 > and the auto-generated warning, byte-identical to what the template
