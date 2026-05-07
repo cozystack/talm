@@ -1450,6 +1450,170 @@ selector_eth1=
 	assertContains(t, output, "busPath: pci-0000:00:1f.1")
 }
 
+// TestDefaultGatewayIsIPv4OnDualStack pins that
+// talm.discovered.default_gateway returns the IPv4 default-route gateway,
+// not the IPv6 one, when both are present on the node. The cozystack and
+// generic charts pair this gateway with a hardcoded IPv4 destination
+// (`network: 0.0.0.0/0`, or no `network:` at all on the typed
+// RouteConfig schema where Talos defaults to IPv4): an IPv6 gateway in
+// either case lands as a malformed route that Talos cannot install, and
+// dependent features (e.g. Layer2 VIP) silently break.
+//
+// The fixture orders the IPv6 default route before the IPv4 one to
+// catch a missing family filter — without one the helper returns the
+// first-iterated gateway, which on real Hetzner-style dual-stack nodes
+// is often the IPv6 entry.
+func TestDefaultGatewayIsIPv4OnDualStack(t *testing.T) {
+	const tmpl = `gw={{ include "talm.discovered.default_gateway" . }}
+`
+	chartRoot := createTestChart(t, "tc", "out.yaml", tmpl)
+	helpersSrc, err := os.ReadFile("../../charts/talm/templates/_helpers.tpl")
+	if err != nil {
+		t.Fatalf("read helpers: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartRoot, "templates", "_helpers.tpl"), helpersSrc, 0o644); err != nil {
+		t.Fatalf("write vendored helpers: %v", err)
+	}
+
+	output := renderChartTemplateWithLookup(t, chartRoot, "templates/out.yaml", secondaryNicLookup())
+
+	if !strings.Contains(output, "gw=192.168.1.1") {
+		t.Errorf("expected default_gateway to return IPv4 192.168.1.1, got:\n%s", output)
+	}
+	if strings.Contains(output, "gw=fe80::1") {
+		t.Errorf("default_gateway returned IPv6 fe80::1; the consumer pairs this with an IPv4 destination and Talos will reject the resulting route:\n%s", output)
+	}
+}
+
+// TestDefaultLinkHelpersFollowIPv4OnTwoNicDualStack pins that every
+// default_*_by_gateway helper (link name, MAC, busPath, deviceSelector)
+// follows the IPv4 default route on a multi-NIC dual-stack node where
+// IPv4 and IPv6 default routes terminate on DIFFERENT links. Without
+// the family filter the link-identification chain selects the
+// IPv6-default link (eth1) while the addresses/gateway helpers
+// describe the IPv4-default link (eth0) — the resulting LinkConfig
+// name attaches to eth1 but its addresses live on eth0 and the
+// rendered config configures neither NIC correctly.
+func TestDefaultLinkHelpersFollowIPv4OnTwoNicDualStack(t *testing.T) {
+	const tmpl = `link_name={{ include "talm.discovered.default_link_name_by_gateway" . }}
+link_mac={{ include "talm.discovered.default_link_address_by_gateway" . }}
+link_bus={{ include "talm.discovered.default_link_bus_by_gateway" . }}
+link_selector={{ include "talm.discovered.default_link_selector_by_gateway" . }}
+`
+	chartRoot := createTestChart(t, "tc", "out.yaml", tmpl)
+	helpersSrc, err := os.ReadFile("../../charts/talm/templates/_helpers.tpl")
+	if err != nil {
+		t.Fatalf("read helpers: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartRoot, "templates", "_helpers.tpl"), helpersSrc, 0o644); err != nil {
+		t.Fatalf("write vendored helpers: %v", err)
+	}
+
+	output := renderChartTemplateWithLookup(t, chartRoot, "templates/out.yaml", dualStackTwoNicsLookup())
+
+	if !strings.Contains(output, "link_name=eth0") {
+		t.Errorf("default_link_name_by_gateway must follow the IPv4 default route to eth0, not the IPv6 default route to eth1:\n%s", output)
+	}
+	if strings.Contains(output, "link_name=eth1") {
+		t.Errorf("default_link_name_by_gateway returned eth1 (the IPv6-default NIC) — chart will attach LinkConfig to the wrong link:\n%s", output)
+	}
+	// MAC and bus path must come from eth0 — eth1's MAC/bus would
+	// land in deviceSelector and Talos would attach the rendered
+	// LinkConfig to the wrong PCI function.
+	if !strings.Contains(output, "link_mac=aa:bb:cc:00:00:01") {
+		t.Errorf("default_link_address_by_gateway must return eth0's MAC, got:\n%s", output)
+	}
+	if !strings.Contains(output, "link_bus=pci-0000:00:1f.0") {
+		t.Errorf("default_link_bus_by_gateway must return eth0's busPath, got:\n%s", output)
+	}
+	if !strings.Contains(output, "busPath: pci-0000:00:1f.0") {
+		t.Errorf("default_link_selector_by_gateway must emit eth0's busPath, got:\n%s", output)
+	}
+}
+
+// TestCozystackChartRendersIPv4GatewayOnDualStack pins the end-to-end
+// contract for the headline scenario: a node with both IPv4 and IPv6
+// default routes must produce a chart-rendered config whose
+// `0.0.0.0/0` route carries the IPv4 gateway, never IPv6. This is the
+// exact regression a user hits on a Hetzner-style dual-stack node where
+// the rendered VIP config silently breaks because the route is
+// malformed.
+//
+// The single-NIC fixture catches the family-filter bug at the
+// gateway/address level. The two-NIC subtest below catches the same
+// bug at the link-identification level — both must hold for the chart
+// to produce a working config on real dual-stack hardware.
+func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
+	t.Run("single NIC dual-stack", func(t *testing.T) {
+		output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", dualStackNicLookup(), "v1.12")
+
+		// Multidoc v1.12 schema emits LinkConfig / VLANConfig with
+		// `routes: [{gateway: ...}]`. The destination defaults to IPv4
+		// upstream, so the gateway must be IPv4.
+		if !strings.Contains(output, "gateway: 192.168.201.1") {
+			t.Errorf("expected rendered gateway 192.168.201.1, got:\n%s", output)
+		}
+		if strings.Contains(output, "gateway: fe80::1") {
+			t.Errorf("rendered route uses IPv6 gateway fe80::1 paired with an IPv4 destination — Talos will reject this route on the node:\n%s", output)
+		}
+		// default_addresses_by_gateway must also prefer the IPv4 default
+		// route's family; without that, the rendered LinkConfig.addresses
+		// is empty (no IPv6 addresses exist on the node) and the chart
+		// produces a config that does not configure the primary NIC at all.
+		if !strings.Contains(output, "192.168.201.10/24") {
+			t.Errorf("expected rendered address 192.168.201.10/24 (default_addresses_by_gateway must follow the IPv4 default route), got:\n%s", output)
+		}
+	})
+
+	t.Run("generic chart single NIC dual-stack", func(t *testing.T) {
+		// charts/generic shares the same talm helpers (via symlink at
+		// charts/generic/charts/talm), but its own values defaults and
+		// chart-level helpers differ from cozystack. Pin that the same
+		// IPv4-only contract holds end-to-end through the generic chart
+		// path so a future generic-only template change cannot
+		// regress the family handling without surfacing here.
+		output := renderChartTemplateWithLookup(t, "../../charts/generic", "templates/controlplane.yaml", dualStackNicLookup(), "v1.12")
+
+		if !strings.Contains(output, "gateway: 192.168.201.1") {
+			t.Errorf("generic chart: expected rendered gateway 192.168.201.1, got:\n%s", output)
+		}
+		if strings.Contains(output, "gateway: fe80::1") {
+			t.Errorf("generic chart: rendered route uses IPv6 gateway fe80::1:\n%s", output)
+		}
+		if !strings.Contains(output, "192.168.201.10/24") {
+			t.Errorf("generic chart: expected rendered address 192.168.201.10/24, got:\n%s", output)
+		}
+	})
+
+	t.Run("two NIC dual-stack with IPv4 and IPv6 default routes on different links", func(t *testing.T) {
+		// On Hetzner-like nodes the IPv4 default route and the IPv6
+		// default route may terminate on different links. The chart
+		// must attach LinkConfig.name to the IPv4-default link (eth0)
+		// so the addresses/gateway it renders on the same document
+		// describe the same NIC. A missing family filter in any
+		// default_link_*_by_gateway helper would point name at eth1
+		// (the IPv6-default link) while addresses/gateway describe
+		// eth0 — neither NIC ends up correctly configured.
+		output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", dualStackTwoNicsLookup(), "v1.12")
+
+		if !strings.Contains(output, "name: eth0") {
+			t.Errorf("expected LinkConfig name: eth0 (the IPv4-default link), got:\n%s", output)
+		}
+		if strings.Contains(output, "name: eth1") {
+			t.Errorf("LinkConfig was attached to eth1 (the IPv6-default link), the rendered LinkConfig.addresses/gateway describe eth0:\n%s", output)
+		}
+		if !strings.Contains(output, "gateway: 192.168.201.1") {
+			t.Errorf("expected rendered gateway 192.168.201.1, got:\n%s", output)
+		}
+		if strings.Contains(output, "gateway: fe80::1") {
+			t.Errorf("rendered route uses IPv6 gateway fe80::1, got:\n%s", output)
+		}
+		if !strings.Contains(output, "192.168.201.10/24") {
+			t.Errorf("expected rendered address 192.168.201.10/24, got:\n%s", output)
+		}
+	})
+}
+
 // TestNetworkMultidoc_NoDiscovery is a regression test for #58. When discovery
 // returns no default route (offline render, isolated node, custom networking),
 // the multidoc cozystack template must NOT emit a LinkConfig/BondConfig/
@@ -3396,6 +3560,215 @@ func simpleNicLookup() func(string, string, string) (map[string]any, error) {
 				return eth0, nil
 			}
 			if id == "" {
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// dualStackNicLookup returns a lookup fixture for a node with both an
+// IPv4 and an IPv6 default route on the primary link. The IPv6 route
+// is ordered first to catch any default-gateway helper that lacks a
+// family filter — without one, the helper would return the IPv6
+// gateway and the chart's `0.0.0.0/0` route would land malformed.
+// Mirrors a typical Hetzner-style cloud node where `route -6` and
+// `route -4` both have a default entry.
+func dualStackNicLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			// IPv6 default route ordered first — a missing family
+			// filter in default_gateway would return fe80::1.
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "fe80::1",
+					"outLinkName": "eth0",
+					"family":      "inet6",
+					"table":       "main",
+					"priority":    1024,
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.201.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth0",
+					"address":  "192.168.201.10/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.201.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "eth0" {
+				return eth0, nil
+			}
+			if id == "" {
+				return linksList, nil
+			}
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// dualStackTwoNicsLookup returns a lookup fixture for a node with the
+// IPv4 and IPv6 default routes on DIFFERENT links — the multi-NIC
+// shape where the IPv4-only filter actually matters: a missing filter
+// in any default_*_by_gateway helper would point the chart at the
+// IPv6-default link (eth1) while addresses, gateway, and routes all
+// describe the IPv4-default link (eth0), producing a config that
+// configures neither NIC correctly.
+//
+// The IPv6 route is ordered first so a missing family filter reaches
+// the wrong link before iteration ends; this mirrors the discovery
+// order Talos returns when both routes share the same priority window.
+func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        2,
+			"hardwareAddr": "aa:bb:cc:00:00:02",
+			"busPath":      "pci-0000:00:1f.1",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "fe80::1",
+					"outLinkName": "eth1",
+					"family":      "inet6",
+					"table":       "main",
+					"priority":    1024,
+				},
+			},
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.201.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "2001:db8::a/64", "family": "inet6", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.201.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+	return func(resource, namespace, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "eth1":
+				return eth1, nil
+			case "":
 				return linksList, nil
 			}
 			return map[string]any{}, nil
