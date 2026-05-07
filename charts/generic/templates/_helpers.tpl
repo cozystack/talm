@@ -105,6 +105,19 @@ nameservers:
 {{- else }}
   []
 {{- end }}
+{{- /* Operator-declared vipLink override: emit Layer2VIPConfig
+       regardless of discovery state. Useful when the target link
+       does not yet exist on the live system at first apply (typical
+       case: a VLAN sub-interface this template is about to bring up).
+       The discovery-derived block below skips its own Layer2VIPConfig
+       when this branch fires, so we never emit duplicates. */}}
+{{- if and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") }}
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ .Values.floatingIP | quote }}
+link: {{ .Values.vipLink }}
+{{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
 {{- if $defaultLinkName }}
 {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
@@ -181,11 +194,15 @@ addresses:
 routes:
   - gateway: {{ include "talm.discovered.default_gateway" . }}
 {{- end }}
+{{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
+       has set .Values.vipLink, since the override-path block above
+       has already emitted the document with the operator's chosen
+       link. */}}
+{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") }}
 {{- $vipLinkName := $interfaceName }}
 {{- if $isVlan }}
 {{- $vipLinkName = $defaultLinkName }}
 {{- end }}
-{{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
@@ -203,11 +220,21 @@ link: {{ $vipLinkName }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
     {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
-    {{- if or $existingInterfacesConfiguration $defaultLinkName }}
+    {{- /* vipLink override on the legacy schema: legacy Talos has no
+       Layer2VIPConfig document, so the override is expressed as a
+       top-level interfaces[] entry that carries only the vip block.
+       When vipLink == $defaultLinkName the inline vip below already
+       lands on the right link, so no override entry is needed. */}}
+    {{- $vipOverride := and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
+    {{- /* Suppress the inline (discovery-derived) vip when the operator
+       has redirected it to a different link; otherwise the VIP would
+       be pinned twice on different interfaces. */}}
+    {{- $suppressInlineVip := and .Values.vipLink (ne .Values.vipLink $defaultLinkName) }}
+    {{- if or $existingInterfacesConfiguration $defaultLinkName $vipOverride }}
     interfaces:
     {{- if $existingInterfacesConfiguration }}
     {{- $existingInterfacesConfiguration | nindent 4 }}
-    {{- else }}
+    {{- else if $defaultLinkName }}
     {{- $isVlan := include "talm.discovered.is_vlan" $defaultLinkName }}
     {{- $parentLinkName := "" }}
     {{- if $isVlan }}
@@ -229,7 +256,7 @@ link: {{ $vipLinkName }}
           routes:
             - network: 0.0.0.0/0
               gateway: {{ include "talm.discovered.default_gateway" . }}
-          {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+          {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
           vip:
             ip: {{ .Values.floatingIP }}
           {{- end }}
@@ -238,11 +265,16 @@ link: {{ $vipLinkName }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+      {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
       vip:
         ip: {{ .Values.floatingIP }}
       {{- end }}
       {{- end }}
+    {{- end }}
+    {{- if $vipOverride }}
+    - interface: {{ .Values.vipLink }}
+      vip:
+        ip: {{ .Values.floatingIP }}
     {{- end }}
     {{- end }}
 {{- end }}

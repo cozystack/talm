@@ -77,7 +77,17 @@ of silently embedding a placeholder. For cozystack VIP setups set
 `endpoint` and `floatingIP` together (same IP, single shared VIP);
 for single-node clusters use that node's routable IP and leave
 `floatingIP` blank; for multi-node with an external load balancer
-use the LB URL and leave `floatingIP` blank. Subnet-selector fields
+use the LB URL and leave `floatingIP` blank. When the VIP must sit
+on a link that does not yet exist on the live system at first apply
+(typically a VLAN sub-interface), set `vipLink` to that link name —
+the chart pins `Layer2VIPConfig.link` to it instead of the default-
+gateway link that discovery would otherwise pick, and emits the
+document even on a totally fresh node where no default-gateway link
+has been discovered yet. The chart does not auto-emit a `LinkConfig`
+or `VLANConfig` for the override link; the operator is responsible
+for ensuring the link comes up, typically by adding a `LinkConfig`
+or `VLANConfig` for that link to the per-node body overlay alongside
+`vipLink`. Subnet-selector fields
 (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived
 automatically from the node's default-gateway-bearing link, so no
 override is needed unless you have a multi-homed node that requires

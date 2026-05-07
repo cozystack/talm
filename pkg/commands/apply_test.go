@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"google.golang.org/grpc/metadata"
@@ -288,30 +289,43 @@ func TestWrapWithNodeContext_NoNodesNoClient(t *testing.T) {
 	wrapped := wrapWithNodeContext(inner)
 	err := wrapped(context.Background(), nil)
 	if err == nil {
-		t.Error("expected error when no nodes and no client config context, got nil")
+		t.Fatal("expected error when no nodes and no client config context, got nil")
+	}
+	// The hint chain must keep an operator-actionable explanation, not
+	// just the bare "no client available" wrap. A future migration that
+	// drops the hint without replacing it would silently degrade the
+	// diagnostic.
+	hints := errors.GetAllHints(err)
+	if len(hints) == 0 {
+		t.Errorf("expected at least one hint guiding the operator, got bare error: %v", err)
 	}
 }
 
 // nodesFromOutgoingCtx pulls per-iteration node identity out of gRPC
-// outgoing metadata. The Talos client SDK writes single-target metadata to
-// the "node" key (client.WithNode) and multi-target metadata to "nodes"
-// (client.WithNodes) — checking both keys lets the per-node loop tests
-// assert iteration shape regardless of which writer the loop chose.
+// outgoing metadata. Production rotates nodes via client.WithNodes with a
+// single-element slice (the plural "nodes" key is what
+// helpers.ForEachResource and apid both read); the singular "node" key is
+// also checked here to keep the helper resilient against fakes or future
+// callers that use client.WithNode directly. Tests that pin the metadata
+// contract assert against md.Get directly rather than going through this
+// helper.
 func nodesFromOutgoingCtx(t *testing.T, ctx context.Context) []string {
 	t.Helper()
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
 		return nil
 	}
-	if vs := md.Get("node"); len(vs) > 0 {
+	if vs := md.Get("nodes"); len(vs) > 0 {
 		return vs
 	}
-	return md.Get("nodes")
+	return md.Get("node")
 }
 
 // fakeAuthOpenClient mimics openClientPerNodeAuth for tests: shares one
-// (nil) parent client across iterations and rotates the node via WithNode
-// on a fresh per-iteration context.
+// (nil) parent client across iterations and rotates the node via WithNodes
+// (single-element plural slice) on a fresh per-iteration context. Mirroring
+// production keeps the loop-semantics tests honest about what metadata key
+// downstream lookups will actually see.
 //
 // The action receives a nil *client.Client. Callers are responsible for
 // not dereferencing it; tests that exercise client method calls must
@@ -321,7 +335,7 @@ func nodesFromOutgoingCtx(t *testing.T, ctx context.Context) []string {
 // silent test coverage of an untouched code path.
 func fakeAuthOpenClient(parentCtx context.Context) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
-		return action(client.WithNode(parentCtx, node), nil)
+		return action(client.WithNodes(parentCtx, node), nil)
 	}
 }
 
@@ -511,13 +525,23 @@ func TestApplyTemplatesPerNode_NoNodesIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for empty nodes list, got nil")
 	}
-	// The error must point the user at the concrete ways to set nodes
-	// so the message survives a cosmetic reword but catches a regression
-	// that drops the guidance entirely.
+	// The error itself names the missing inputs; the cockroachdb/errors
+	// hint chain points the user at the concrete ways to set them. Both
+	// must survive a reword — the message catches a future regression
+	// that drops the topic entirely; the hint catches one that drops
+	// the actionable guidance.
 	msg := err.Error()
-	for _, want := range []string{"nodes", "--nodes"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error message %q does not mention %q", msg, want)
+	if !strings.Contains(msg, "nodes") {
+		t.Errorf("error message %q must mention %q (the missing input)", msg, "nodes")
+	}
+	hints := errors.GetAllHints(err)
+	if len(hints) == 0 {
+		t.Fatalf("expected at least one hint guiding the operator to set nodes, got %v", err)
+	}
+	combined := strings.Join(hints, "\n")
+	for _, want := range []string{"--nodes", "modeline", "talosconfig"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("hint chain %q does not mention %q (operator-actionable resolution path)", combined, want)
 		}
 	}
 }
@@ -652,15 +676,18 @@ func TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError(t *testing.T) {
 	}
 }
 
-// TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey pins the
-// gRPC metadata key the auth-mode opener writes. WithNode sets "node"
-// (single-target proxy); WithNodes sets "nodes" (apid aggregation).
-// engine.Render's FailIfMultiNodes guard treats len("nodes") > 1 as the
-// multi-node case, so single-target metadata under "node" passes
-// trivially. A future refactor that swaps WithNode back to WithNodes
-// would slip past nodesFromOutgoingCtx (which reads either key) — this
-// assertion catches that regression directly.
-func TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey(t *testing.T) {
+// TestApplyTemplatesPerNode_AuthModeUsesPluralNodesMetadataKey pins the
+// gRPC metadata key the auth-mode opener writes. The auth template-rendering
+// path drives lookups inside engine.Render through Talos's
+// helpers.ForEachResource, which reads only the plural "nodes" metadata key
+// (cmd/talosctl/pkg/talos/helpers/resources.go) — when that key is empty the
+// helper falls back to []string{""} and issues an RPC with an empty target,
+// surfacing as "rpc error: code = Internal desc = invalid target".
+// helpers.FailIfMultiNodes accepts len("nodes") <= 1, so a single-element
+// plural slice keeps the multi-node guard happy while making lookups work.
+// The singular "node" key, in contrast, is invisible to ForEachResource and
+// must never be used on the auth path.
+func TestApplyTemplatesPerNode_AuthModeUsesPluralNodesMetadataKey(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "node.yaml")
 	if err := os.WriteFile(configFile, []byte("# talm: nodes=[\"a\"]\n"), 0o644); err != nil {
@@ -673,11 +700,11 @@ func TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey(t *testing.T) {
 		if !ok {
 			t.Fatal("expected outgoing metadata on per-iteration ctx")
 		}
-		if got := md.Get("node"); !slices.Equal(got, []string{node}) {
-			t.Errorf(`metadata key "node" = %v, want [%q]`, got, node)
+		if got := md.Get("nodes"); !slices.Equal(got, []string{node}) {
+			t.Errorf(`metadata key "nodes" = %v, want [%q] (single-element plural slice — what helpers.ForEachResource reads)`, got, node)
 		}
-		if got := md.Get("nodes"); len(got) != 0 {
-			t.Errorf(`metadata key "nodes" must be unset for single-target apply, got %v`, got)
+		if got := md.Get("node"); len(got) != 0 {
+			t.Errorf(`metadata key "node" must be unset on auth apply, got %v`, got)
 		}
 		return []byte("version: v1alpha1\nmachine:\n  type: worker\n"), nil
 	}
@@ -686,6 +713,75 @@ func TestApplyTemplatesPerNode_AuthModeUsesSingleNodeMetadataKey(t *testing.T) {
 	openClient := openClientPerNodeAuth(context.Background(), nil)
 	if err := applyTemplatesPerNode(engine.Options{}, configFile, []string{node}, openClient, render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+}
+
+// TestCosiPreflightContext_StripsPluralAndAttachesSingular pins the
+// COSI preflight ctx contract: the auth template-rendering apply path
+// puts the target node under the plural "nodes" metadata key (so
+// helpers.ForEachResource and apid's machine-API backend resolver can
+// read it), but Talos's apid director rejects every COSI method whose
+// outgoing context carries the plural key, regardless of slice
+// length. cosiPreflightContext rebuilds ctx with the singular "node"
+// key so the COSI router accepts the call. Without this, the version
+// preflight silently no-ops on the auth path: cosiVersionReader
+// swallows errors and returns ok=false on rejection, so the user
+// never sees the mismatch warning the preflight exists to surface.
+func TestCosiPreflightContext_StripsPluralAndAttachesSingular(t *testing.T) {
+	const node = "10.0.0.1"
+	in := client.WithNodes(context.Background(), node)
+
+	out, err := cosiPreflightContext(in)
+	if err != nil {
+		t.Fatalf("cosiPreflightContext: %v", err)
+	}
+
+	md, ok := metadata.FromOutgoingContext(out)
+	if !ok {
+		t.Fatal("expected outgoing metadata on preflight ctx")
+	}
+	if got := md.Get("nodes"); len(got) != 0 {
+		t.Errorf(`metadata key "nodes" must be unset on COSI preflight ctx, got %v (apid's COSI router rejects every call carrying it)`, got)
+	}
+	if got := md.Get("node"); !slices.Equal(got, []string{node}) {
+		t.Errorf(`metadata key "node" = %v, want [%q] (apid's COSI router routes by the singular key)`, got, node)
+	}
+}
+
+// TestCosiPreflightContext_LeavesNoMetadataAlone pins the noop case
+// for the insecure (maintenance) apply path, whose ctx carries no
+// outgoing metadata at all — the maintenance client dials a single
+// endpoint per call and routing-by-key is irrelevant. The helper
+// must return ctx unchanged, not synthesize an empty "node" key
+// that apid would route to the wrong target.
+func TestCosiPreflightContext_LeavesNoMetadataAlone(t *testing.T) {
+	in := context.Background()
+	out, err := cosiPreflightContext(in)
+	if err != nil {
+		t.Fatalf("cosiPreflightContext: %v", err)
+	}
+
+	if md, ok := metadata.FromOutgoingContext(out); ok && len(md) > 0 {
+		t.Errorf("expected no outgoing metadata on preflight ctx for maintenance path, got %v", md)
+	}
+}
+
+// TestCosiPreflightContext_RejectsMultiNodeCtx pins that a multi-
+// element plural slice surfaces as an explicit error rather than a
+// silent passthrough. applyTemplatesPerNode iterates one node at a
+// time, so a multi-element ctx at this point indicates a broken
+// caller; passing it through to the COSI router would silently
+// no-op the preflight (apid rejects, cosiVersionReader swallows the
+// rejection, version mismatch never surfaces) — the exact symptom
+// this helper exists to prevent on the single-node case.
+func TestCosiPreflightContext_RejectsMultiNodeCtx(t *testing.T) {
+	in := client.WithNodes(context.Background(), "a", "b")
+	_, err := cosiPreflightContext(in)
+	if err == nil {
+		t.Fatal("expected error for multi-node outgoing ctx, got nil")
+	}
+	if !strings.Contains(err.Error(), "expected exactly one") {
+		t.Errorf("expected error to mention single-node invariant, got: %v", err)
 	}
 }
 
