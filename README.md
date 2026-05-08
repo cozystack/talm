@@ -51,6 +51,14 @@ cd newcluster
 talm init -p cozystack -N myawesomecluster
 ```
 
+To pin a specific Talos installer image at init time (e.g. a [Talos Factory](https://factory.talos.dev/) image with extensions), pass `--image`:
+
+```bash
+talm init -p cozystack -N myawesomecluster --image factory.talos.dev/installer/<sha256>:<version>
+```
+
+`--image` rewrites the top-level `image:` field in the preset's `values.yaml` before write. The flag is honored on initial `init` only — for an existing project, edit `values.yaml` directly. The `cozystack` preset declares `image:`; the `generic` preset does not, so `--image --preset generic` is rejected up front.
+
 Edit `values.yaml` to set your cluster's control-plane endpoint. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty on purpose so a missed override fails loudly instead of silently embedding a placeholder. For cozystack VIP setups set `endpoint` and `floatingIP` together (same IP, single shared VIP); for single-node clusters use that node's routable IP and leave `floatingIP` blank; for multi-node with an external load balancer use the LB URL and leave `floatingIP` blank. When the VIP must sit on a link that does not yet exist on the live system at first apply (typically a VLAN sub-interface), set `vipLink` to that link name — the chart pins `Layer2VIPConfig.link` to it instead of the default-gateway link that discovery would otherwise pick, and emits the document even on a totally fresh node where no default-gateway link has been discovered yet. The chart does not auto-emit a `LinkConfig` or `VLANConfig` for the override link; the operator is responsible for ensuring the link comes up, typically by adding a `LinkConfig` or `VLANConfig` for that link to the per-node body overlay alongside `vipLink`. Subnet-selector fields (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived automatically from the node's default-gateway-bearing link, so no override is needed unless you have a multi-homed node that requires a specific subnet pinned.
 
 Boot Talos Linux node, let's say it has address `192.0.2.4`. Then:
