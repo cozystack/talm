@@ -577,7 +577,7 @@ func validateImageOverride(presetFiles map[string]string, presetName, override s
 		if parts[1] != "values.yaml" {
 			continue
 		}
-		if !imageLineRe.Match([]byte(content)) {
+		if !imageLineRe.MatchString(content) {
 			return fmt.Errorf("--image was set but preset %q does not declare a top-level image: field in values.yaml; remove --image or choose a preset that exposes it (e.g. cozystack)", presetName)
 		}
 		return nil
