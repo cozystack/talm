@@ -545,6 +545,12 @@ func applyImageOverride(values []byte, override string) ([]byte, error) {
 	if override == "" {
 		return values, nil
 	}
+	// In the talm init flow this guard is redundant: RunE invokes
+	// validateImageOverride against the same byte content from
+	// presetFiles before this loop runs, so a missing image: field
+	// fails the command up front. The check is kept as defense in
+	// depth for direct callers (unit tests, future code paths that
+	// might skip the validator) so the helper is safe in isolation.
 	if !imageLineRe.Match(values) {
 		return nil, fmt.Errorf("--image was set but the preset values.yaml does not declare a top-level image: field; remove --image, choose a different preset, or add the image field manually")
 	}
