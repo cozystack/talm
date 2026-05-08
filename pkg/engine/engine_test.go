@@ -92,7 +92,7 @@ type danglingSubtestRef struct {
 // citation, lift the slug into a literal at the t.Run call site or
 // extend the collector to walk tt.name resolutions.
 func findDanglingSubtestReferences(testFiles []string) ([]danglingSubtestRef, error) {
-	subtestRe := regexp.MustCompile(`t\.Run\("([^"\\]+)"`)
+	subtestRe := regexp.MustCompile(`t\.Run\s*\(\s*"([^"\\]+)"`)
 	refRe := regexp.MustCompile(`Test[A-Z][A-Za-z0-9_]+/[A-Za-z0-9_$.:\-]+`)
 	parentSubtests := make(map[string]map[string]struct{})
 	collectSubtest := func(parent, raw string) {
