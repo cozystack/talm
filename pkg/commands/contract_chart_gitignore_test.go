@@ -215,8 +215,9 @@ func TestContract_WriteGitignoreFile_KubeconfigBaseNameOnly(t *testing.T) {
 func TestContract_WriteGitignoreFile_PreservesExistingEntries(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
+	originalKube := Config.GlobalOptions.Kubeconfig
+	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
 	Config.GlobalOptions.Kubeconfig = ""
-	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = "" })
 
 	existing := "# Custom rules\nnotes/\n*.log\n"
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
@@ -242,8 +243,9 @@ func TestContract_WriteGitignoreFile_PreservesExistingEntries(t *testing.T) {
 func TestContract_WriteGitignoreFile_IdempotentOnFullList(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
+	originalKube := Config.GlobalOptions.Kubeconfig
+	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
 	Config.GlobalOptions.Kubeconfig = ""
-	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = "" })
 
 	full := `# Sensitive files
 secrets.yaml
@@ -278,8 +280,9 @@ kubeconfig
 func TestContract_WriteGitignoreFile_TolerantOfAnnotatedEntries(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
+	originalKube := Config.GlobalOptions.Kubeconfig
+	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
 	Config.GlobalOptions.Kubeconfig = ""
-	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = "" })
 
 	annotated := `# Sensitive files
 secrets.yaml # never commit this
