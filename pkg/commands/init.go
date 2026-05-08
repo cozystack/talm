@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ var initCmdFlags struct {
 	preset       string
 	name         string
 	talosVersion string
+	image        string
 	update       bool
 	encrypt      bool
 	decrypt      bool
@@ -55,6 +57,14 @@ var initCmd = &cobra.Command{
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("talos-version") {
 			initCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
+		}
+
+		// --image rewrites the preset's values.yaml at write time, so it
+		// only makes sense on initial init. Combining it with --encrypt /
+		// --decrypt / --update would let the flag silently disappear —
+		// surface the mismatch up front instead.
+		if initCmdFlags.image != "" && (initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update) {
+			return fmt.Errorf("--image is honored on initial init only; not valid with --encrypt, --decrypt, or --update")
 		}
 
 		// For -e, -d, and -u flags, always check that we're in a project root
@@ -410,15 +420,29 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("failed to get preset files: %w", err)
 		}
 
+		// Validate --image up-front so a flag/preset mismatch fails
+		// the command before any file is written.
+		if err := validateImageOverride(presetFiles, initCmdFlags.preset, initCmdFlags.image); err != nil {
+			return err
+		}
+
 		for path, content := range presetFiles {
 			parts := strings.SplitN(path, "/", 2)
 			chartName := parts[0]
 			// Write preset files
 			if chartName == initCmdFlags.preset {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
-				if parts[len(parts)-1] == "Chart.yaml" {
+				switch parts[len(parts)-1] {
+				case "Chart.yaml":
 					err = writeToDestination(fmt.Appendf(nil, content, clusterName, Config.InitOptions.Version), file, 0o644)
-				} else {
+				case "values.yaml":
+					var rendered []byte
+					rendered, err = applyImageOverride([]byte(content), initCmdFlags.image)
+					if err != nil {
+						return err
+					}
+					err = writeToDestination(rendered, file, 0o644)
+				default:
 					err = writeToDestination([]byte(content), file, 0o644)
 				}
 				if err != nil {
@@ -487,6 +511,78 @@ func readChartYamlPreset() (string, error) {
 	}
 
 	return "", fmt.Errorf("preset not found in Chart.yaml dependencies")
+}
+
+// imageLineRe matches the top-level `image:` line in a preset
+// values.yaml regardless of YAML serialization style — double-quoted,
+// single-quoted, unquoted, with or without a trailing comment.
+// Line-anchored (?m)^image:…$ so a nested key, indented entry, or
+// commented `# image:` line is never substituted.
+var imageLineRe = regexp.MustCompile(`(?m)^image:.*$`)
+
+// applyImageOverride returns values with the top-level `image:` line
+// replaced so it points at override. An empty override returns values
+// unchanged. When override is non-empty but values has no top-level
+// `image:` line, the helper returns an error rather than silently
+// dropping the user's flag — a preset that does not declare an image
+// field cannot be customized through this path, and the caller must
+// surface that to the user before any file is written.
+//
+// The override is %q-quoted, which Go-escapes special characters and
+// emits a double-quoted string. The substitution goes through
+// ReplaceAllFunc rather than ReplaceAll because the latter expands
+// `$0` / `$1` / `$name` / `${name}` sequences in the replacement —
+// an image reference like `foo/$tenant/bar` would otherwise be
+// rewritten to a different image, silently. ReplaceAllFunc returns
+// the byte slice verbatim with no $-expansion.
+//
+// The regex matches every top-level `image:` line via ReplaceAllFunc,
+// so a preset that ever declares two top-level image fields would have
+// both rewritten to the same value. Today only `cozystack` has one
+// occurrence; a future preset that breaks this assumption surfaces
+// here as a behaviour change worth catching at review.
+func applyImageOverride(values []byte, override string) ([]byte, error) {
+	if override == "" {
+		return values, nil
+	}
+	// In the talm init flow this guard is redundant: RunE invokes
+	// validateImageOverride against the same byte content from
+	// presetFiles before this loop runs, so a missing image: field
+	// fails the command up front. The check is kept as defense in
+	// depth for direct callers (unit tests, future code paths that
+	// might skip the validator) so the helper is safe in isolation.
+	if !imageLineRe.Match(values) {
+		return nil, fmt.Errorf("--image was set but the preset values.yaml does not declare a top-level image: field; remove --image, choose a different preset, or add the image field manually")
+	}
+	replacement := fmt.Appendf(nil, "image: %q", override)
+	return imageLineRe.ReplaceAllFunc(values, func([]byte) []byte {
+		return replacement
+	}), nil
+}
+
+// validateImageOverride scans presetFiles for the chosen preset's
+// values.yaml and confirms a top-level image line is present when
+// the user passed --image. The check runs before any file is written
+// so a flag-vs-preset mismatch fails the command up front instead of
+// leaving a half-initialized project on disk.
+func validateImageOverride(presetFiles map[string]string, presetName, override string) error {
+	if override == "" {
+		return nil
+	}
+	for path, content := range presetFiles {
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) != 2 || parts[0] != presetName {
+			continue
+		}
+		if parts[1] != "values.yaml" {
+			continue
+		}
+		if !imageLineRe.MatchString(content) {
+			return fmt.Errorf("--image was set but preset %q does not declare a top-level image: field in values.yaml; remove --image or choose a preset that exposes it (e.g. cozystack)", presetName)
+		}
+		return nil
+	}
+	return fmt.Errorf("--image was set but preset %q has no values.yaml in the embedded chart files", presetName)
 }
 
 // askUserOverwrite asks user if they want to overwrite a file
@@ -586,6 +682,14 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 }
 
 func updateTalmLibraryChart() error {
+	// --image is only honored on initial init (it customizes the
+	// preset's values.yaml at write time). Refusing it on --update
+	// surfaces the no-op trap explicitly instead of letting the
+	// user's flag silently disappear.
+	if initCmdFlags.image != "" {
+		return fmt.Errorf("--image is honored on initial init only; for an existing project, edit the image field in values.yaml directly")
+	}
+
 	// Determine preset: use -p flag if provided, otherwise try to read from Chart.yaml
 	var presetName string
 
@@ -680,6 +784,7 @@ func init() {
 	initCmd.Flags().StringVar(&initCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "preset for file generation (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().StringVarP(&initCmdFlags.name, "name", "N", "", "cluster name (not required with --encrypt, --decrypt, or --update)")
+	initCmd.Flags().StringVar(&initCmdFlags.image, "image", "", "override the Talos installer image written to the preset's values.yaml (e.g. factory.talos.dev/installer/<sha256>:<version>)")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
