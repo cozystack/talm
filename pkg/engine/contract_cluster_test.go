@@ -222,6 +222,7 @@ func TestContract_Cluster_NoControlplaneBlocksOnWorker(t *testing.T) {
 			assertNotContains(t, out, "etcd:")
 			assertNotContains(t, out, "allowSchedulingOnControlPlanes")
 			assertNotContains(t, out, "proxy:")
+			assertNotContains(t, out, "discovery:")
 		})
 	}
 }
