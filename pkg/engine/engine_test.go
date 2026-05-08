@@ -103,17 +103,17 @@ func findDanglingSubtestReferences(testFiles []string) ([]danglingSubtestRef, er
 		parentSubtests[parent][slug] = struct{}{}
 	}
 	bodies := make(map[string][]byte, len(testFiles))
+	fset := token.NewFileSet()
 	for _, path := range testFiles {
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if err != nil {
-			return nil, errors.Wrapf(err, "parse %s", path)
-		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return nil, errors.Wrapf(err, "read %s", path)
 		}
 		bodies[path] = body
+		file, err := parser.ParseFile(fset, path, body, parser.ParseComments)
+		if err != nil {
+			return nil, errors.Wrapf(err, "parse %s", path)
+		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
