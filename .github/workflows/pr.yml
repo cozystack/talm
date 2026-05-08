@@ -47,3 +47,63 @@ jobs:
             echo "Please sign-off commits with: git commit --signoff"
             exit 1
           fi
+
+  coverage:
+    # Report-only coverage summary. Does NOT block merge — the goal is
+    # visibility into per-package coverage drift over time. Adding a
+    # threshold gate would force every PR to also touch tests, which
+    # disincentivises small focused PRs. Reviewers eyeball the
+    # numbers; sustained drift gets addressed in dedicated coverage
+    # commits.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Run tests with coverage
+        run: |
+          go test ./... -coverprofile=coverage.out -covermode=atomic
+      - name: Per-package summary
+        run: |
+          # Aggregate coverage per Go package so the PR view shows
+          # one line per package instead of the per-function default.
+          # `go tool cover -func` has no per-package mode; awk
+          # collapses by the package portion of the path.
+          {
+            echo "## Coverage report"
+            echo
+            echo '```text'
+            go tool cover -func=coverage.out | awk '
+              /^total:/ { total = $NF; next }
+              {
+                # path looks like: github.com/cozystack/talm/pkg/engine/engine.go:75:\tfn\t75.0%
+                split($1, parts, ":")
+                path = parts[1]
+                # strip trailing /file.go
+                pkg = path
+                sub(/\/[^/]+\.go$/, "", pkg)
+                # strip module prefix for compactness
+                sub(/^github\.com\/cozystack\/talm\//, "", pkg)
+                pct = $NF
+                sub(/%/, "", pct)
+                sum[pkg] += pct
+                cnt[pkg] += 1
+              }
+              END {
+                for (pkg in sum) {
+                  printf "%-50s %5.1f%% (avg of %d funcs)\n", pkg, sum[pkg]/cnt[pkg], cnt[pkg]
+                }
+                if (total != "") printf "\n%-50s %s (overall)\n", "TOTAL", total
+              }
+            ' | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14
