@@ -47,7 +47,15 @@ func TestContract_NormalizeEndpoint(t *testing.T) {
 		{"http://1.2.3.4", "https://1.2.3.4:6443"},
 		{"https://node.example.com:6443", "https://node.example.com:6443"},
 		{"node.example.com", "https://node.example.com:6443"},
-		// IPv6 with brackets — net.SplitHostPort returns the bracket-stripped host.
+		// IPv6 with brackets — net.SplitHostPort returns the bracket-
+		// stripped host, and the current normalizeEndpoint does NOT
+		// re-add them, producing a malformed URL. Pinning the broken
+		// output deliberately so a later fix surfaces here. Tracked
+		// in issue #155 — when normalizeEndpoint switches to
+		// net.JoinHostPort, the expected value below becomes
+		// "https://[2001:db8::1]:6443" and the test starts asserting
+		// the canonical form.
+		// FIXME(#155): expected URL is malformed (missing brackets).
 		{"[2001:db8::1]:6443", "https://2001:db8::1:6443"},
 	}
 	for _, tc := range cases {
