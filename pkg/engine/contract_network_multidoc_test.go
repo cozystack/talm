@@ -330,16 +330,13 @@ func TestContract_NetworkMultidoc_Layer2VIPOverrideOnFreshNode(t *testing.T) {
 // Layer2VIPConfig target).
 //
 // Test setup: simpleNicLookup carries 192.168.201.10/24 on eth0. We
-// declare the same address as the VIP (host portion only; the chart
-// strips by `<floatingIP>/` prefix). The address should still appear
-// once for the floatingIP being declared at all (Layer2VIPConfig.name)
-// but NOT as `- address: 192.168.201.10/24` under LinkConfig.addresses.
-//
-// Picking a VIP that does not match any discovery address makes the
-// test robust against future discovery fixture changes.
+// deliberately set floatingIP to the SAME host address (192.168.201.10)
+// so the strip path actually fires — the chart filters per-link
+// addresses by `<floatingIP>/` prefix, so a VIP that matches no
+// discovered address would not exercise the filter. The address must
+// appear once at Layer2VIPConfig.name (the VIP declaration itself),
+// but MUST NOT appear under LinkConfig.addresses as a regular address.
 func TestContract_NetworkMultidoc_FloatingIPStrippedFromLinkAddresses(t *testing.T) {
-	// Pick a VIP that DOES match the discovery address, then assert
-	// it is NOT in LinkConfig.addresses.
 	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
 		"floatingIP":        "192.168.201.10",
 		"advertisedSubnets": []any{testAdvertisedSubnet},
