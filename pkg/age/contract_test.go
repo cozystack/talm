@@ -354,7 +354,10 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 	if err := age.EncryptSecretsFile(dir); err != nil {
 		t.Fatal(err)
 	}
-	first, _ := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	first, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Change b's value, leave a alone.
 	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("a: alpha\nb: charlie\n"), 0o600); err != nil {
@@ -363,7 +366,10 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 	if err := age.EncryptSecretsFile(dir); err != nil {
 		t.Fatal(err)
 	}
-	second, _ := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	second, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if string(first) == string(second) {
 		t.Fatal("expected ciphertext to change after b's plaintext changed")
