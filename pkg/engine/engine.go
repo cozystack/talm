@@ -535,6 +535,9 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 				found = append(found, collectDeleteDirectivePaths(valueNode, childRel)...)
 			}
 		}
+	case yaml.SequenceNode, yaml.ScalarNode, yaml.AliasNode:
+		// Directives live only inside mappings (as values of named keys).
+		// Sequences carry no key, scalars/aliases carry no children to walk.
 	}
 
 	return found
@@ -707,6 +710,9 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 		for i, child := range node.Content {
 			removed = append(removed, removePatchDeleteFromNode(child, fmt.Sprintf("%s/%d", parentPath, i), prunePaths)...)
 		}
+	case yaml.ScalarNode, yaml.AliasNode:
+		// Scalars and aliases have no children, so they cannot host a
+		// $patch:delete directive — nothing to remove.
 	}
 
 	return removed
