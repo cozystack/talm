@@ -29,6 +29,11 @@ import (
 // canonical reference for the seven occurrences in this file alone.
 const localSecretsYamlName = "secrets.yaml"
 
+// talosconfigFlagName is the persistent --talosconfig flag name and the
+// default basename used by EnsureTalosconfigPath when neither the flag
+// nor Chart.yaml's globalOptions.talosconfig declares a value.
+const talosconfigFlagName = "talosconfig"
+
 // parseFlagFromArgs parses a flag value from command line arguments.
 // Supports both -flag value and -flag=value formats, as well as comma-separated values.
 func parseFlagFromArgs(args []string, shortFlag, longFlag string) []string {
@@ -312,7 +317,7 @@ func ResolveSecretsPath(withSecrets string) string {
 
 // EnsureTalosconfigPath ensures talosconfig path is set to project root if not explicitly set via flag.
 func EnsureTalosconfigPath(cmd *cobra.Command) {
-	if cmd.PersistentFlags().Changed("talosconfig") {
+	if cmd.PersistentFlags().Changed(talosconfigFlagName) {
 		return
 	}
 
@@ -324,7 +329,7 @@ func EnsureTalosconfigPath(cmd *cobra.Command) {
 		// Use talosconfig from project root
 		talosconfigPath = Config.GlobalOptions.Talosconfig
 		if talosconfigPath == "" {
-			talosconfigPath = "talosconfig"
+			talosconfigPath = talosconfigFlagName
 		}
 	}
 	// Make it absolute path relative to project root if it's relative
