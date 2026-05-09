@@ -162,135 +162,12 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 // EncryptSecretsFile encrypts secrets.yaml values and saves to secrets.encrypted.yaml.
 // Uses incremental encryption: only encrypts values that have changed.
 func EncryptSecretsFile(rootDir string) error {
-	secretsFile := filepath.Join(rootDir, plainSecretsFile)
-	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
-
-	// Load plain secrets
-	secretsData, err := os.ReadFile(secretsFile)
-	if err != nil {
-		return errors.Wrap(err, "read secrets file")
-	}
-
-	// Load or generate key
-	var identity *age.X25519Identity
-	keyFile := filepath.Join(rootDir, keyFileName)
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		var keyCreated bool
-		identity, keyCreated, err = GenerateKey(rootDir)
-		if err != nil {
-			return errors.Wrap(err, "generate key")
-		}
-		_ = keyCreated // Not used in this context
-	} else {
-		identity, err = LoadKey(rootDir)
-		if err != nil {
-			return errors.Wrap(err, "load key")
-		}
-	}
-
-	// Parse YAML
-	var secrets map[string]any
-	if err := yaml.Unmarshal(secretsData, &secrets); err != nil {
-		return errors.Wrap(err, "parse secrets YAML")
-	}
-
-	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
-	var encryptedSecrets map[string]any
-	if _, err := os.Stat(encryptedFile); err == nil {
-		encryptedData, err := os.ReadFile(encryptedFile)
-		if err == nil {
-			if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err == nil {
-				// Merge: encrypt only changed values, preserve unchanged encrypted values
-				merged, err := mergeAndEncryptYAMLValues(secrets, encryptedSecrets, identity)
-				if err != nil {
-					return errors.Wrap(err, "merge and encrypt")
-				}
-				encryptedSecrets = merged.(map[string]any)
-			} else {
-				// If parsing fails, encrypt everything
-				encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
-				if err != nil {
-					return errors.Wrap(err, "encrypt secrets")
-				}
-				encryptedSecrets = encrypted.(map[string]any)
-			}
-		} else {
-			// If reading fails, encrypt everything
-			encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
-			if err != nil {
-				return errors.Wrap(err, "encrypt secrets")
-			}
-			encryptedSecrets = encrypted.(map[string]any)
-		}
-	} else {
-		// No encrypted file exists, encrypt everything
-		encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
-		if err != nil {
-			return errors.Wrap(err, "encrypt secrets")
-		}
-		encryptedSecrets = encrypted.(map[string]any)
-	}
-
-	// Marshal encrypted YAML
-	encryptedData, err := yaml.Marshal(encryptedSecrets)
-	if err != nil {
-		return errors.Wrap(err, "marshal encrypted secrets")
-	}
-
-	// Write encrypted file via secureperm.WriteFile so it lands at
-	// mode 0o600 (defense-in-depth — age encryption is the security
-	// layer, but world-readable secrets material on shared
-	// workstations invites mistakes). RotateKeys uses the same
-	// helper for the same file, keeping the on-disk mode invariant
-	// across every code path that writes secrets.encrypted.yaml.
-	if err := secureperm.WriteFile(encryptedFile, encryptedData); err != nil {
-		return errors.Wrap(err, "write encrypted file")
-	}
-
-	return nil
+	return encryptYAMLPair(rootDir, plainSecretsFile, encryptedSecretsFile)
 }
 
 // DecryptSecretsFile decrypts secrets.encrypted.yaml and saves to secrets.yaml.
 func DecryptSecretsFile(rootDir string) error {
-	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
-	secretsFile := filepath.Join(rootDir, plainSecretsFile)
-
-	// Load encrypted secrets
-	encryptedData, err := os.ReadFile(encryptedFile)
-	if err != nil {
-		return errors.Wrap(err, "read encrypted file")
-	}
-
-	// Load key
-	identity, err := LoadKey(rootDir)
-	if err != nil {
-		return errors.Wrap(err, "load key")
-	}
-
-	// Parse YAML
-	var encryptedSecrets map[string]any
-	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
-		return errors.Wrap(err, "parse encrypted YAML")
-	}
-
-	// Decrypt values
-	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, identity)
-	if err != nil {
-		return errors.Wrap(err, "decrypt secrets")
-	}
-
-	// Marshal decrypted YAML
-	decryptedData, err := yaml.Marshal(decryptedSecrets)
-	if err != nil {
-		return errors.Wrap(err, "marshal decrypted secrets")
-	}
-
-	// Write decrypted file with secure permissions
-	if err := secureperm.WriteFile(secretsFile, decryptedData); err != nil {
-		return errors.Wrap(err, "write decrypted file")
-	}
-
-	return nil
+	return decryptYAMLPair(rootDir, encryptedSecretsFile, plainSecretsFile)
 }
 
 // encryptYAMLValues recursively encrypts string values in YAML structure.
@@ -671,85 +548,49 @@ func RotateKeys(rootDir string) error {
 // EncryptYAMLFile encrypts a YAML file's values (keeping keys unencrypted) and saves to encrypted file.
 // Uses incremental encryption: only encrypts values that have changed.
 func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
+	return encryptYAMLPair(rootDir, plainFile, encryptedFile)
+}
+
+// encryptYAMLPair is the shared implementation for EncryptSecretsFile
+// and EncryptYAMLFile. Both flows take a plain-YAML path and an
+// encrypted-YAML destination under rootDir, load (or generate) the
+// project's age key, and write the destination at mode 0o600
+// (defense-in-depth — age encryption is the security layer, but
+// world-readable secrets material on shared workstations invites
+// mistakes). The function does incremental encryption: an existing
+// destination is loaded and used to keep ciphertext byte-stable for
+// values whose plaintext did not change. If the existing destination
+// cannot be read or parsed, the function falls back to a full
+// encryption — the project still ends up in a consistent state.
+func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 	plainFilePath := filepath.Join(rootDir, plainFile)
 	encryptedFilePath := filepath.Join(rootDir, encryptedFile)
 
-	// Load plain file
 	plainData, err := os.ReadFile(plainFilePath)
 	if err != nil {
 		return errors.Wrap(err, "read plain file")
 	}
 
-	// Load or generate key
-	var identity *age.X25519Identity
-	keyFile := filepath.Join(rootDir, keyFileName)
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		var keyCreated bool
-		identity, keyCreated, err = GenerateKey(rootDir)
-		if err != nil {
-			return errors.Wrap(err, "generate key")
-		}
-		_ = keyCreated // Not used in this context
-	} else {
-		identity, err = LoadKey(rootDir)
-		if err != nil {
-			return errors.Wrap(err, "load key")
-		}
+	identity, err := loadOrGenerateIdentity(rootDir)
+	if err != nil {
+		return err
 	}
 
-	// Parse YAML
-	var yamlData map[string]any
-	if err := yaml.Unmarshal(plainData, &yamlData); err != nil {
-		return errors.Wrap(err, "parse YAML")
+	var plain map[string]any
+	if err := yaml.Unmarshal(plainData, &plain); err != nil {
+		return errors.Wrap(err, "parse plain YAML")
 	}
 
-	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
-	var encryptedYAML map[string]any
-	if _, err := os.Stat(encryptedFilePath); err == nil {
-		encryptedData, err := os.ReadFile(encryptedFilePath)
-		if err == nil {
-			if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err == nil {
-				// Merge: encrypt only changed values, preserve unchanged encrypted values
-				merged, err := mergeAndEncryptYAMLValues(yamlData, encryptedYAML, identity)
-				if err != nil {
-					return errors.Wrap(err, "merge and encrypt")
-				}
-				encryptedYAML = merged.(map[string]any)
-			} else {
-				// If parsing fails, encrypt everything
-				encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
-				if err != nil {
-					return errors.Wrap(err, "encrypt YAML values")
-				}
-				encryptedYAML = encrypted.(map[string]any)
-			}
-		} else {
-			// If reading fails, encrypt everything
-			encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
-			if err != nil {
-				return errors.Wrap(err, "encrypt YAML values")
-			}
-			encryptedYAML = encrypted.(map[string]any)
-		}
-	} else {
-		// No encrypted file exists, encrypt everything
-		encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
-		if err != nil {
-			return errors.Wrap(err, "encrypt YAML values")
-		}
-		encryptedYAML = encrypted.(map[string]any)
+	encryptedMap, err := incrementalEncryptMap(plain, encryptedFilePath, identity)
+	if err != nil {
+		return err
 	}
 
-	// Marshal encrypted YAML
-	encryptedData, err := yaml.Marshal(encryptedYAML)
+	encryptedData, err := yaml.Marshal(encryptedMap)
 	if err != nil {
 		return errors.Wrap(err, "marshal encrypted YAML")
 	}
 
-	// Write encrypted file via secureperm.WriteFile (mode 0o600).
-	// Same defense-in-depth rationale as EncryptSecretsFile and
-	// RotateKeys — every code path that writes encrypted secrets
-	// material agrees on the same on-disk permission.
 	if err := secureperm.WriteFile(encryptedFilePath, encryptedData); err != nil {
 		return errors.Wrap(err, "write encrypted file")
 	}
@@ -757,42 +598,121 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	return nil
 }
 
+// loadOrGenerateIdentity loads the project's age identity from
+// `<rootDir>/talm.key` or creates one if the file does not exist. The
+// load-or-create semantics are what `talm init` and the encrypt
+// helpers rely on across init/apply/talosconfig flows.
+func loadOrGenerateIdentity(rootDir string) (*age.X25519Identity, error) {
+	keyFile := filepath.Join(rootDir, keyFileName)
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		identity, _, err := GenerateKey(rootDir)
+		if err != nil {
+			return nil, errors.Wrap(err, "generate key")
+		}
+		return identity, nil
+	}
+	identity, err := LoadKey(rootDir)
+	if err != nil {
+		return nil, errors.Wrap(err, "load key")
+	}
+	return identity, nil
+}
+
+// incrementalEncryptMap returns the encrypted map[string]any for plain
+// using existing ciphertext at encryptedFilePath when available. The
+// fall-through to full encryption mirrors the behaviour of the old
+// inline blocks in EncryptSecretsFile / EncryptYAMLFile: a missing,
+// unreadable, or unparseable destination drops to encryptYAMLMap on
+// the full plain tree, so the project recovers from a corrupted
+// destination on the next encrypt round.
+func incrementalEncryptMap(plain map[string]any, encryptedFilePath string, identity *age.X25519Identity) (map[string]any, error) {
+	if _, err := os.Stat(encryptedFilePath); err != nil {
+		return encryptYAMLMap(plain, identity.Recipient())
+	}
+	encryptedData, err := os.ReadFile(encryptedFilePath)
+	if err != nil {
+		return encryptYAMLMap(plain, identity.Recipient())
+	}
+	var existing map[string]any
+	if err := yaml.Unmarshal(encryptedData, &existing); err != nil {
+		return encryptYAMLMap(plain, identity.Recipient())
+	}
+	return mergeAndEncryptYAMLMap(plain, existing, identity)
+}
+
+// encryptYAMLMap is a typed wrapper around encryptYAMLValues that
+// returns map[string]any directly. The wrapper exists so callers can
+// avoid the unchecked any -> map[string]any assertion the linter
+// rightly flags. encryptYAMLValues always returns the same kind it
+// received at the top level, so a non-map result on a map input would
+// indicate a bug rather than a runtime input shape.
+func encryptYAMLMap(plain map[string]any, recipient *age.X25519Recipient) (map[string]any, error) {
+	encrypted, err := encryptYAMLValues(plain, recipient)
+	if err != nil {
+		return nil, errors.Wrap(err, "encrypt YAML values")
+	}
+	out, ok := encrypted.(map[string]any)
+	if !ok {
+		return nil, errors.Newf("encryptYAMLValues returned %T for map input; this is an internal invariant violation", encrypted)
+	}
+	return out, nil
+}
+
+// mergeAndEncryptYAMLMap is a typed wrapper around
+// mergeAndEncryptYAMLValues. Same rationale as encryptYAMLMap — both
+// helpers exist to confine the any -> map[string]any boundary to one
+// site that emits an explicit invariant-violation error rather than
+// panicking.
+func mergeAndEncryptYAMLMap(plain, encrypted map[string]any, identity *age.X25519Identity) (map[string]any, error) {
+	merged, err := mergeAndEncryptYAMLValues(plain, encrypted, identity)
+	if err != nil {
+		return nil, errors.Wrap(err, "merge and encrypt")
+	}
+	out, ok := merged.(map[string]any)
+	if !ok {
+		return nil, errors.Newf("mergeAndEncryptYAMLValues returned %T for map input; this is an internal invariant violation", merged)
+	}
+	return out, nil
+}
+
 // DecryptYAMLFile decrypts an encrypted YAML file's values and saves to plain file.
 func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
+	return decryptYAMLPair(rootDir, encryptedFile, plainFile)
+}
+
+// decryptYAMLPair is the shared implementation for DecryptSecretsFile
+// and DecryptYAMLFile. Both flows take an encrypted-YAML path and a
+// plain-YAML destination under rootDir, load the project's age key,
+// and write the destination with secure permissions.
+func decryptYAMLPair(rootDir, encryptedFile, plainFile string) error {
 	encryptedFilePath := filepath.Join(rootDir, encryptedFile)
 	plainFilePath := filepath.Join(rootDir, plainFile)
 
-	// Load encrypted file
 	encryptedData, err := os.ReadFile(encryptedFilePath)
 	if err != nil {
 		return errors.Wrap(err, "read encrypted file")
 	}
 
-	// Load key
 	identity, err := LoadKey(rootDir)
 	if err != nil {
 		return errors.Wrap(err, "load key")
 	}
 
-	// Parse YAML
 	var encryptedYAML map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err != nil {
 		return errors.Wrap(err, "parse encrypted YAML")
 	}
 
-	// Decrypt values
 	decryptedYAML, err := decryptYAMLValues(encryptedYAML, identity)
 	if err != nil {
 		return errors.Wrap(err, "decrypt YAML values")
 	}
 
-	// Marshal decrypted YAML
 	decryptedData, err := yaml.Marshal(decryptedYAML)
 	if err != nil {
 		return errors.Wrap(err, "marshal decrypted YAML")
 	}
 
-	// Write decrypted file with secure permissions
 	if err := secureperm.WriteFile(plainFilePath, decryptedData); err != nil {
 		return errors.Wrap(err, "write decrypted file")
 	}
