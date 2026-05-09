@@ -39,8 +39,8 @@ const (
 	ageEncryptionSuffix  = "]"
 )
 
-// GenerateKey generates a new age identity and saves it to talm.key file in age keygen format
-// Returns true if a new key was created (not loaded from existing file)
+// GenerateKey generates a new age identity and saves it to talm.key file in age keygen format.
+// Returns true if a new key was created (not loaded from existing file).
 func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 
@@ -82,8 +82,8 @@ func formatKeyFile(identity *age.X25519Identity, now time.Time) string {
 	)
 }
 
-// LoadKey loads age identity from talm.key file
-// Supports both age keygen format (with comments) and plain format
+// LoadKey loads age identity from talm.key file.
+// Supports both age keygen format (with comments) and plain format.
 func LoadKey(rootDir string) (*age.X25519Identity, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 
@@ -125,12 +125,12 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 	return identity, nil
 }
 
-// GetPublicKey returns the public key from an identity
+// GetPublicKey returns the public key from an identity.
 func GetPublicKey(identity *age.X25519Identity) string {
 	return identity.Recipient().String()
 }
 
-// GetPublicKeyFromFile extracts the public key from talm.key file
+// GetPublicKeyFromFile extracts the public key from talm.key file.
 func GetPublicKeyFromFile(rootDir string) (string, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 
@@ -157,8 +157,8 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 	return identity.Recipient().String(), nil
 }
 
-// EncryptSecretsFile encrypts secrets.yaml values and saves to secrets.encrypted.yaml
-// Uses incremental encryption: only encrypts values that have changed
+// EncryptSecretsFile encrypts secrets.yaml values and saves to secrets.encrypted.yaml.
+// Uses incremental encryption: only encrypts values that have changed.
 func EncryptSecretsFile(rootDir string) error {
 	secretsFile := filepath.Join(rootDir, plainSecretsFile)
 	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
@@ -256,7 +256,7 @@ func EncryptSecretsFile(rootDir string) error {
 	return nil
 }
 
-// DecryptSecretsFile decrypts secrets.encrypted.yaml and saves to secrets.yaml
+// DecryptSecretsFile decrypts secrets.encrypted.yaml and saves to secrets.yaml.
 func DecryptSecretsFile(rootDir string) error {
 	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
 	secretsFile := filepath.Join(rootDir, plainSecretsFile)
@@ -299,7 +299,7 @@ func DecryptSecretsFile(rootDir string) error {
 	return nil
 }
 
-// encryptYAMLValues recursively encrypts string values in YAML structure
+// encryptYAMLValues recursively encrypts string values in YAML structure.
 func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 	switch v := data.(type) {
 	case map[string]any:
@@ -340,7 +340,7 @@ func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 	}
 }
 
-// decryptYAMLValues recursively decrypts string values in YAML structure
+// decryptYAMLValues recursively decrypts string values in YAML structure.
 func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 	switch v := data.(type) {
 	case map[string]any:
@@ -389,7 +389,7 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 	}
 }
 
-// decryptYAMLValuesString decrypts a single encrypted string value (helper for mergeAndEncryptYAMLValues)
+// decryptYAMLValuesString decrypts a single encrypted string value (helper for mergeAndEncryptYAMLValues).
 func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (string, error) {
 	if strings.HasPrefix(encrypted, ageEncryptionPrefix) && strings.HasSuffix(encrypted, ageEncryptionSuffix) {
 		encryptedData := strings.TrimPrefix(encrypted, ageEncryptionPrefix)
@@ -401,8 +401,8 @@ func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (st
 	return encrypted, nil
 }
 
-// mergeAndEncryptYAMLValues merges plain and encrypted YAML, encrypting only changed values
-// This ensures idempotency: unchanged values keep their encrypted form
+// mergeAndEncryptYAMLValues merges plain and encrypted YAML, encrypting only changed values.
+// This ensures idempotency: unchanged values keep their encrypted form.
 func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identity) (any, error) {
 	switch plainVal := plain.(type) {
 	case map[string]any:
@@ -489,7 +489,7 @@ func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identit
 	}
 }
 
-// encryptString encrypts a string using age
+// encryptString encrypts a string using age.
 func encryptString(plaintext string, recipient *age.X25519Recipient) (string, error) {
 	var buf bytes.Buffer
 
@@ -510,7 +510,7 @@ func encryptString(plaintext string, recipient *age.X25519Recipient) (string, er
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-// decryptString decrypts a base64-encoded age-encrypted string
+// decryptString decrypts a base64-encoded age-encrypted string.
 func decryptString(encryptedBase64 string, identity *age.X25519Identity) (string, error) {
 	encrypted, err := base64.StdEncoding.DecodeString(encryptedBase64)
 	if err != nil {
@@ -690,8 +690,8 @@ func RotateKeys(rootDir string) error {
 	return nil
 }
 
-// EncryptYAMLFile encrypts a YAML file's values (keeping keys unencrypted) and saves to encrypted file
-// Uses incremental encryption: only encrypts values that have changed
+// EncryptYAMLFile encrypts a YAML file's values (keeping keys unencrypted) and saves to encrypted file.
+// Uses incremental encryption: only encrypts values that have changed.
 func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	plainFilePath := filepath.Join(rootDir, plainFile)
 	encryptedFilePath := filepath.Join(rootDir, encryptedFile)
@@ -787,7 +787,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	return nil
 }
 
-// DecryptYAMLFile decrypts an encrypted YAML file's values and saves to plain file
+// DecryptYAMLFile decrypts an encrypted YAML file's values and saves to plain file.
 func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 	encryptedFilePath := filepath.Join(rootDir, encryptedFile)
 	plainFilePath := filepath.Join(rootDir, plainFile)
