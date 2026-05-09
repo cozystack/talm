@@ -92,6 +92,7 @@ linters:
       - builtin$
       - generated\.go$
       - pkg/generated/
+      - \.claude/
     rules:
       - linters:
           - funlen
@@ -128,3 +129,4 @@ formatters:
       - builtin$
       - generated\.go$
       - pkg/generated/
+      - \.claude/
