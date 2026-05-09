@@ -507,7 +507,7 @@ busPath: {{ $link.spec.busPath }}
 {{- $value := .value -}}
 {{- $field := .field -}}
 {{- if not $value -}}
-{{- fail (printf "values.yaml: %s must be a non-empty DNS-1123 subdomain (lowercase alphanumeric, '-', and '.'; total max 253 chars)" $field) -}}
+{{- fail (printf "values.yaml: %s must be a non-empty DNS-1123 subdomain (must be lowercase, only [a-z0-9-.], start and end with [a-z0-9], max 253 chars)" $field) -}}
 {{- end -}}
 {{- if gt (len $value) 253 -}}
 {{- fail (printf "values.yaml: %s=%q exceeds 253 characters (DNS-1123 subdomain length limit)" $field $value) -}}
