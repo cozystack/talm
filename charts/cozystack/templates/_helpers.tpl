@@ -98,12 +98,12 @@ cluster:
   network:
     cni:
       name: none
-    dnsDomain: {{ .Values.clusterDomain }}
+    dnsDomain: {{ include "talm.validate.dns1123subdomain" (dict "value" .Values.clusterDomain "field" "clusterDomain") }}
     podSubnets:
       {{- toYaml .Values.podSubnets | nindent 6 }}
     serviceSubnets:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
-  clusterName: {{ .Values.clusterName | default .Chart.Name | regexFind "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" | required "clusterName must be a valid DNS-1123 label" | quote }}
+  clusterName: {{ include "talm.validate.dns1123subdomain" (dict "value" (.Values.clusterName | default .Chart.Name) "field" "clusterName") | quote }}
   controlPlane:
     endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP (cozystack floatingIP) or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
   {{- if eq .MachineType "controlplane" }}

@@ -35,6 +35,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 var initCmdFlags struct {
@@ -100,6 +101,15 @@ var initCmd = &cobra.Command{
 		}
 		if initCmdFlags.name == "" {
 			return fmt.Errorf("cluster name is required (use --name or -N flag)")
+		}
+		// Validate the operator-supplied cluster name against the same
+		// DNS-1123 subdomain rule the chart helpers enforce at render
+		// time. Without this check an invalid name reaches the bundle
+		// generator and surfaces as an opaque downstream error; pinning
+		// it here means the operator sees the precise upstream message
+		// (length, character class, etc.) before any file is written.
+		if errs := validation.IsDNS1123Subdomain(initCmdFlags.name); len(errs) > 0 {
+			return fmt.Errorf("--name %q is not a valid DNS-1123 subdomain: %s", initCmdFlags.name, strings.Join(errs, "; "))
 		}
 		return nil
 	},
