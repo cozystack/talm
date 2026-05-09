@@ -19,6 +19,12 @@
 # Example: endpoint: "https://192.168.0.1:6443"
 endpoint: ""
 
+# Optional override for the cluster's name (defaults to Chart.Name).
+# Note that changing this value on a live cluster is considered
+# dangerous as it is baked into PKI (cert SANs) and ETCD identity at
+# bootstrap.
+clusterName: ""
+
 clusterDomain: cozy.local
 # Layer-2 VIP for cozystack multi-node setups. When set, the chart
 # emits a Layer2VIPConfig document pinning this IP as a floating
