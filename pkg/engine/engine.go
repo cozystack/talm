@@ -46,7 +46,7 @@ type Options struct {
 	StringValues      []string
 	Values            []string
 	FileValues        []string
-	JsonValues        []string
+	JsonValues        []string `yaml:"jsonValues"` //nolint:revive,stylecheck // public field name kept for backwards compatibility with existing consumers in pkg/commands/template.go and Chart.yaml
 	LiteralValues     []string
 	TalosVersion      string
 	WithSecrets       string
@@ -72,6 +72,8 @@ func NormalizeTemplatePath(p string) string {
 
 // debugPhase is a unified debug function that prints debug information based on the given stage and context,
 // then exits the program.
+//
+//nolint:gocritic // hugeParam: Options carries flag-aggregated config and is consumed read-only along the debug path; converting to a pointer here would require changing every public signature in this file (Render, InitializeConfigBundle, FullConfigProcess) without runtime benefit, since debugPhase exits the process.
 func debugPhase(opts Options, patches []string, clusterName string, clusterEndpoint string, mType machine.Type) {
 	phase := 2
 
@@ -178,6 +180,8 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 }
 
 // InitializeConfigBundle initializes a Talos configuration bundle from opts.
+//
+//nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
 func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 	genOptions := []generate.Option{}
 
@@ -1521,7 +1525,7 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 
 // Render executes the rendering of templates based on the provided options.
 //
-//nolint:funlen // 75 lines: dispatch over (Full ? FullConfigProcess : ApplyPatches) with per-branch cluster-meta hydration and per-mode serialisation; splitting either branch would scatter the shared FailIfMultiNodes/loadValues/SerializeConfiguration steps across helpers without simplifying control flow.
+//nolint:funlen,gocritic // funlen: 75-line linear dispatch over (Full ? FullConfigProcess : ApplyPatches) with per-branch cluster-meta hydration and per-mode serialisation; splitting either branch would scatter the shared FailIfMultiNodes/loadValues/SerializeConfiguration steps across helpers without simplifying control flow. hugeParam: Options is the package's public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
 	// Validate TalosVersion early so malformed values surface a user-friendly
 	// error instead of an opaque "semverCompare: invalid semantic version" from
@@ -1750,7 +1754,7 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 // bundle-rebuild passes (TypeUnknown then resolved machine type),
 // apply patches in dependency order, serialise.
 //
-//nolint:gocognit // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context, splitting them would scatter the wrap calls without reducing the count.
+//nolint:gocognit,gocyclo,gocritic // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
