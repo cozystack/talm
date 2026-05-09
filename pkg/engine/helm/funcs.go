@@ -42,9 +42,9 @@ import (
 // These are late-bound in Engine.Render().  The
 // version included in the FuncMap is a placeholder.
 func funcMap() template.FuncMap {
-	f := sprig.TxtFuncMap()
-	delete(f, "env")
-	delete(f, "expandenv")
+	funcs := sprig.TxtFuncMap()
+	delete(funcs, "env")
+	delete(funcs, "expandenv")
 
 	// Add some extra functionality
 	extra := template.FuncMap{
@@ -69,9 +69,9 @@ func funcMap() template.FuncMap {
 		},
 	}
 
-	maps.Copy(f, extra)
+	maps.Copy(funcs, extra)
 
-	return f
+	return funcs
 }
 
 // toYAML takes an interface, marshals it to yaml, and returns a string. It will
@@ -112,14 +112,14 @@ func fromYAML(str string) map[string]any {
 // it tolerates errors. It will insert the returned error message string as
 // the first and only item in the returned array.
 func fromYAMLArray(str string) []any {
-	a := []any{}
+	out := []any{}
 
-	err := yaml.Unmarshal([]byte(str), &a)
+	err := yaml.Unmarshal([]byte(str), &out)
 	if err != nil {
-		a = []any{err.Error()}
+		out = []any{err.Error()}
 	}
 
-	return a
+	return out
 }
 
 // toTOML takes an interface, marshals it to toml, and returns a string. It will
@@ -176,12 +176,12 @@ func fromJSON(str string) map[string]any {
 // it tolerates errors. It will insert the returned error message string as
 // the first and only item in the returned array.
 func fromJSONArray(str string) []any {
-	a := []any{}
+	out := []any{}
 
-	err := json.Unmarshal([]byte(str), &a)
+	err := json.Unmarshal([]byte(str), &out)
 	if err != nil {
-		a = []any{err.Error()}
+		out = []any{err.Error()}
 	}
 
-	return a
+	return out
 }
