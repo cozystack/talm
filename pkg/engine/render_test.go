@@ -125,7 +125,7 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 	key := path.Join(chrt.Name(), templateFile)
 	result, ok := out[key]
 	if !ok {
-		var keys []string
+		keys := make([]string, 0, len(out))
 		for k := range out {
 			keys = append(keys, k)
 		}
@@ -184,7 +184,7 @@ func renderChartTemplateWithLookup(t *testing.T, chartPath string, templateFile 
 	key := path.Join(chrt.Name(), templateFile)
 	result, ok := out[key]
 	if !ok {
-		var keys []string
+		keys := make([]string, 0, len(out))
 		for k := range out {
 			keys = append(keys, k)
 		}
@@ -1539,10 +1539,10 @@ link_selector={{ include "talm.discovered.default_link_selector_by_gateway" . }}
 // the rendered VIP config silently breaks because the route is
 // malformed.
 //
-// The single-NIC fixture catches the family-filter bug at the
+// The single-NIC fixture catches the family-filter regression at the
 // gateway/address level. The two-NIC subtest below catches the same
-// bug at the link-identification level — both must hold for the chart
-// to produce a working config on real dual-stack hardware.
+// regression at the link-identification level — both must hold for
+// the chart to produce a working config on real dual-stack hardware.
 func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
 	t.Run("single NIC dual-stack", func(t *testing.T) {
 		output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", dualStackNicLookup(), "v1.12")
@@ -3471,7 +3471,7 @@ machine:
 			t.Fatalf("MergeFileAsPatch: %v", err)
 		}
 
-		renderedCount := strings.Count(string(rendered), "127.0.0.1")
+		renderedCount := strings.Count(rendered, "127.0.0.1")
 		mergedCount := strings.Count(string(merged), "127.0.0.1")
 		if renderedCount == 0 {
 			t.Fatalf("test fixture broken: rendered output has no 127.0.0.1 to count duplicates against")
