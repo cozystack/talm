@@ -130,7 +130,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
 
-		return nil, machine.TypeUnknown, err
+		return nil, machine.TypeUnknown, errors.Wrap(err, "loading patches")
 	}
 
 	err = configBundle.ApplyPatches(loadedPatches, true, false)
@@ -212,12 +212,22 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 		bundle.WithVerbose(false),
 	}
 
-	return bundle.NewBundle(configBundleOpts...)
+	configBundle, err := bundle.NewBundle(configBundleOpts...)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating config bundle")
+	}
+
+	return configBundle, nil
 }
 
 // SerializeConfiguration serializes the configuration bundle for machineType.
 func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Type) ([]byte, error) {
-	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	out, err := configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	if err != nil {
+		return nil, errors.Wrap(err, "serializing config bundle")
+	}
+
+	return out, nil
 }
 
 // MergeFileAsPatch overlays the YAML body of patchFile onto rendered using
@@ -1322,7 +1332,7 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 				break
 			}
 
-			return nil, false, err
+			return nil, false, errors.Wrap(err, "decoding YAML document")
 		}
 
 		if doc == nil {
@@ -1513,7 +1523,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		}
 
 		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "checking node selector")
 		}
 
 		helmEngine.LookupFunc = newLookupFunction(ctx, c)
@@ -1521,7 +1531,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	chartPath, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "resolving working directory")
 	}
 
 	if opts.Root != "" {
@@ -1530,7 +1540,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	chrt, err := loader.LoadDir(chartPath)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "loading chart from %q", chartPath)
 	}
 
 	values, err := loadValues(opts)
@@ -1547,7 +1557,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	out, err := eng.Render(chrt, rootValues)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "rendering chart")
 	}
 
 	if len(opts.TemplateFiles) == 0 {
@@ -1673,7 +1683,7 @@ func mergeMaps(a, b map[string]any) map[string]any {
 func isTalosConfigPatch(doc string) (bool, error) {
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
-		return false, err
+		return false, errors.Wrap(err, "unmarshaling YAML document")
 	}
 
 	_, hasMachine := parsed["machine"]
@@ -1757,7 +1767,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	// Load and apply patches to discover the machine type
 	configBundle, err := bundle.NewBundle(configBundleOpts...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "creating initial config bundle")
 	}
 
 	patches, err := configpatcher.LoadPatches(talosPatches)
@@ -1766,7 +1776,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
 
-		return nil, err
+		return nil, errors.Wrap(err, "loading patches")
 	}
 
 	err = configBundle.ApplyPatches(patches, true, false)
@@ -1775,7 +1785,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
 
-		return nil, err
+		return nil, errors.Wrap(err, "applying initial patches")
 	}
 
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
@@ -1805,20 +1815,20 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 
 	configBundle, err = bundle.NewBundle(configBundleOpts...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "creating reloaded config bundle")
 	}
 
 	var configOrigin, configFull []byte
 	if !opts.Full {
 		configOrigin, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "serializing original config bundle")
 		}
 
 		// Overwrite some fields to preserve them for diff
 		var config map[string]any
 		if err := yaml.Unmarshal(configOrigin, &config); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "unmarshaling original config")
 		}
 
 		if machine, ok := config["machine"].(map[string]any); ok {
@@ -1839,18 +1849,18 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 
 		configOrigin, err = yaml.Marshal(&config)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "marshaling original config")
 		}
 	}
 
 	err = configBundle.ApplyPatches(patches, (machineType == machine.TypeControlPlane), (machineType == machine.TypeWorker))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "applying patches to reloaded bundle")
 	}
 
 	configFull, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "serializing patched config bundle")
 	}
 
 	var target []byte
@@ -1859,20 +1869,20 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	} else {
 		target, err = yamltools.DiffYAMLs(configOrigin, configFull)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "diffing original and patched configs")
 		}
 	}
 
 	var targetNode yaml.Node
 	if err := yaml.Unmarshal(target, &targetNode); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "unmarshaling target config")
 	}
 
 	// Copy comments from source configuration to the final output
 	for _, configPatch := range talosPatches {
 		var sourceNode yaml.Node
 		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "unmarshaling source patch for comment propagation")
 		}
 
 		dstPaths := make(map[string]*yaml.Node)
@@ -1885,7 +1895,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	encoder.SetIndent(2)
 
 	if err := encoder.Encode(&targetNode); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "encoding target config")
 	}
 
 	_ = encoder.Close()
@@ -1989,11 +1999,11 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
 		if helperErr != nil {
-			return map[string]any{}, helperErr
+			return map[string]any{}, errors.Wrap(helperErr, "iterating resources")
 		}
 
 		if err := multiErr.ErrorOrNil(); err != nil {
-			return map[string]any{}, err
+			return map[string]any{}, errors.Wrap(err, "collecting resource lookup errors")
 		}
 
 		if len(resources) == 0 {
