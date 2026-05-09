@@ -28,6 +28,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -153,9 +154,9 @@ func TestContract_InitPreRun_AcceptsWhenCWDIsRoot(t *testing.T) {
 // full picture.
 //
 // Stage one conflict (Chart.yaml) inside a fresh root and assert:
-// 1. RunE returns an error mentioning the conflict.
-// 2. None of the otherwise-created files (talosconfig, talm.key,
-//    .gitignore, secrets.encrypted.yaml) exist after the run.
+//  1. RunE returns an error mentioning the conflict.
+//  2. None of the otherwise-created files (talosconfig, talm.key,
+//     .gitignore, secrets.encrypted.yaml) exist after the run.
 func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 	withInitFlagsSnapshot(t)
 	withConfigSnapshot(t)
@@ -199,6 +200,189 @@ func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 		if _, statErr := os.Stat(filepath.Join(dirAbs, name)); statErr == nil {
 			t.Errorf("partial-write detected: %q exists after pre-check rejection", name)
 		}
+	}
+}
+
+// Contract: when the operator stages MULTIPLE conflicting destinations
+// (Chart.yaml AND values.yaml AND charts/talm/Chart.yaml), the pre-check
+// must list ALL of them in the error message — not bail at the first.
+// The runtime sorts the slice with slices.Sort before joining, so the
+// error is deterministic regardless of map-iteration order. Pin both
+// the all-listed and the deterministic-order properties.
+func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
+	withInitFlagsSnapshot(t)
+	withConfigSnapshot(t)
+
+	dir := t.TempDir()
+	dirAbs, _ := filepath.Abs(dir)
+	t.Chdir(dirAbs)
+	Config.RootDir = dirAbs
+	Config.RootDirExplicit = true
+	Config.InitOptions.Version = "v0.0.0-test"
+
+	// Stage three conflicts in distinct chart locations so the pre-check
+	// must visit and report each one. charts/talm/Chart.yaml exercises
+	// the library-chart dispatch arm; Chart.yaml and values.yaml exercise
+	// the preset arm.
+	stagedFiles := []string{
+		filepath.Join(dirAbs, "Chart.yaml"),
+		filepath.Join(dirAbs, "values.yaml"),
+		filepath.Join(dirAbs, "charts", "talm", "Chart.yaml"),
+	}
+	for _, p := range stagedFiles {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("name: pre-existing\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	initCmdFlags.preset = "cozystack"
+	initCmdFlags.name = "test-cluster"
+	initCmdFlags.force = false
+	initCmdFlags.encrypt = false
+	initCmdFlags.decrypt = false
+	initCmdFlags.update = false
+	initCmdFlags.image = ""
+
+	err := initCmd.RunE(initCmd, nil)
+	if err == nil {
+		t.Fatal("expected RunE to fail with multiple conflicts")
+	}
+
+	// Every staged path must be named in the error. Skipping any one
+	// would mean the operator has to re-run init multiple times to
+	// discover the full conflict set.
+	for _, p := range stagedFiles {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("error must list conflict %q, got: %v", p, err)
+		}
+	}
+
+	// Deterministic order: the conflicts must appear sorted, so two
+	// invocations against the same on-disk state produce byte-identical
+	// errors. With slices.Sort applied to absolute paths, the
+	// charts/talm/Chart.yaml entry sorts before Chart.yaml in the same
+	// dir because "/" < "Y" — assert the listing order matches a
+	// fresh sort of the same staged set.
+	expectedOrder := append([]string{}, stagedFiles...)
+	for i := range expectedOrder {
+		expectedOrder[i], _ = filepath.Abs(expectedOrder[i])
+	}
+	// Use the same sort the runtime uses.
+	for i := range expectedOrder {
+		for j := i + 1; j < len(expectedOrder); j++ {
+			if expectedOrder[i] > expectedOrder[j] {
+				expectedOrder[i], expectedOrder[j] = expectedOrder[j], expectedOrder[i]
+			}
+		}
+	}
+	first, last := expectedOrder[0], expectedOrder[len(expectedOrder)-1]
+	firstIdx := strings.Index(err.Error(), first)
+	lastIdx := strings.Index(err.Error(), last)
+	if firstIdx == -1 || lastIdx == -1 || firstIdx >= lastIdx {
+		t.Errorf("conflicts not in sorted order: %q must appear before %q in: %v", first, last, err)
+	}
+}
+
+// Contract: when os.Getwd() fails, PreRunE returns the wrapped error
+// rather than fail-open into the partial-overlay risk that #156 was
+// about.
+//
+// Reproducer: chdir into a temp dir, remove that dir, then call PreRunE.
+// On Linux the kernel returns ENOENT from getcwd(2); the guard wraps it.
+//
+// Linux-only:
+//   - Windows refuses to remove a directory any process has as its CWD,
+//     so the kernel-level setup the test depends on is unavailable.
+//   - macOS getcwd(3) returns the cached path even after rmdir, so
+//     Getwd does NOT fail. The fail-closed branch is unreachable from
+//     a unit test on Darwin without injecting the error via a stub.
+//     The contract still has to hold cross-platform — we just pin it
+//     here on the platform CI runs (ubuntu-latest), which is the
+//     authoritative gate.
+func TestContract_InitPreRun_FailsClosedOnGetwd(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("Getwd-on-removed-dir reproducer is Linux-only (windows: cannot remove CWD; darwin: getcwd survives rmdir); GOOS=%s", runtime.GOOS)
+	}
+	withInitFlagsSnapshot(t)
+	withConfigSnapshot(t)
+
+	parent := t.TempDir()
+	sub := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+	if err := os.Remove(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	initCmdFlags.preset = "cozystack"
+	initCmdFlags.name = "test-cluster"
+
+	err := initCmd.PreRunE(initCmd, nil)
+	if err == nil {
+		t.Fatal("expected PreRunE to fail when CWD has been removed")
+	}
+	if !strings.Contains(err.Error(), "current working directory") {
+		t.Errorf("error must mention current working directory failure, got: %v", err)
+	}
+}
+
+// Contract: when filepath.Abs(Config.RootDir) fails because the relative
+// path resolution calls os.Getwd internally and that fails, PreRunE
+// returns the wrapped error. Pinned because the production code's
+// Config.RootDir defaults to "." (relative) — the abs-path resolution
+// for a relative input is an os.Getwd round-trip and inherits the same
+// TOCTOU exposure as the explicit Getwd call above it.
+//
+// Reproducer: same shape as the Getwd contract — chdir into a removed
+// directory. The first os.Getwd in the guard would also fail, but
+// hitting the second guard requires its own coverage so a future
+// refactor that makes the first one survive (e.g. by caching at startup)
+// does not silently fail-open through the second.
+//
+// Linux-only: same constraints as the Getwd test above. Windows
+// cannot remove the CWD; darwin getcwd survives rmdir. Linux CI is
+// the authoritative gate.
+func TestContract_InitPreRun_FailsClosedOnAbsRootDir(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("Abs-on-relative-path-with-removed-CWD reproducer is Linux-only; GOOS=%s", runtime.GOOS)
+	}
+	withInitFlagsSnapshot(t)
+	withConfigSnapshot(t)
+
+	parent := t.TempDir()
+	sub := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+	if err := os.Remove(sub); err != nil {
+		t.Fatal(err)
+	}
+	// Force Config.RootDir to a relative path so filepath.Abs has to
+	// call os.Getwd internally. This is the production default ("."),
+	// not a synthetic shape.
+	Config.RootDir = "."
+	Config.RootDirExplicit = false
+
+	initCmdFlags.preset = "cozystack"
+	initCmdFlags.name = "test-cluster"
+
+	err := initCmd.PreRunE(initCmd, nil)
+	if err == nil {
+		t.Fatal("expected PreRunE to fail when Config.RootDir is relative and CWD is removed")
+	}
+	// Either the first Getwd guard or the second Abs(Config.RootDir)
+	// guard fires depending on the kernel: both wrap with a clear
+	// message. Assert at least one of the two phrases appears so a
+	// future refactor that swaps the order still keeps the contract.
+	msg := err.Error()
+	if !strings.Contains(msg, "current working directory") && !strings.Contains(msg, "project root") {
+		t.Errorf("error must mention CWD or project root resolution failure, got: %v", err)
 	}
 }
 

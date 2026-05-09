@@ -147,7 +147,7 @@ func TestContract_GetFlagValues_RegisteredButUnset(t *testing.T) {
 
 // === detectRootFromFiles / detectRootFromTemplates / detectRootFromCWD ===
 
-// Contract: empty input yields ('', nil) — caller falls through to
+// Contract: empty input yields ("", nil) — caller falls through to
 // the next detection strategy.
 func TestContract_DetectRootFromFiles_EmptyInput(t *testing.T) {
 	got, err := detectRootFromFiles(nil)
