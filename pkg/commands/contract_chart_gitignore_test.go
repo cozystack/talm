@@ -64,7 +64,7 @@ dependencies:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "cozystack" {
+	if got != presetCozystack {
 		t.Errorf("expected preset 'cozystack', got %q", got)
 	}
 }

@@ -269,7 +269,7 @@ func TestContract_ExpandFilePaths_NonExistentPathPropagated(t *testing.T) {
 // Case-sensitive; no fuzzy matching. The list comes from
 // pkg/generated/presets.go (built at chart-bake time).
 func TestContract_IsValidPreset(t *testing.T) {
-	available := []string{"cozystack", "generic", "talos"}
+	available := []string{presetCozystack, presetGeneric, "talos"}
 
 	for _, name := range available {
 		if !isValidPreset(name, available) {

@@ -44,8 +44,8 @@ func TestContract_InitPreRun_AcceptsValidDNS1123Subdomain(t *testing.T) {
 	withInitFlagsSnapshot(t)
 
 	cases := []string{
-		"cozystack",
-		"generic",
+		presetCozystack,
+		presetGeneric,
 		"talm",
 		"my-cluster",
 		"my.cluster.example",
@@ -55,7 +55,7 @@ func TestContract_InitPreRun_AcceptsValidDNS1123Subdomain(t *testing.T) {
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			initCmdFlags.preset = "cozystack"
+			initCmdFlags.preset = presetCozystack
 			initCmdFlags.name = name
 			initCmdFlags.encrypt = false
 			initCmdFlags.decrypt = false
@@ -92,7 +92,7 @@ func TestContract_InitPreRun_RejectsInvalidDNS1123Subdomain(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			initCmdFlags.preset = "cozystack"
+			initCmdFlags.preset = presetCozystack
 			initCmdFlags.name = tc.clusterName
 			initCmdFlags.encrypt = false
 			initCmdFlags.decrypt = false

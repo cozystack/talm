@@ -58,7 +58,7 @@ func TestContract_InitPreRun_RefusesWhenInsideAncestorProject(t *testing.T) {
 	Config.RootDir = rootAbs
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -106,7 +106,7 @@ func TestContract_InitPreRun_RootExplicitSkipsAncestorCheck(t *testing.T) {
 	Config.RootDir = subdir
 	Config.RootDirExplicit = true
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -132,7 +132,7 @@ func TestContract_InitPreRun_AcceptsWhenCWDIsRoot(t *testing.T) {
 	Config.RootDir = dirAbs
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -173,7 +173,7 @@ func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = false
 	initCmdFlags.encrypt = false
@@ -238,7 +238,7 @@ func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
 		}
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = false
 	initCmdFlags.encrypt = false
@@ -319,7 +319,7 @@ func TestContract_InitPreRun_FailsClosedOnGetwd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 
 	err := initCmd.PreRunE(initCmd, nil)
@@ -369,7 +369,7 @@ func TestContract_InitPreRun_FailsClosedOnAbsRootDir(t *testing.T) {
 	Config.RootDir = "."
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 
 	err := initCmd.PreRunE(initCmd, nil)
@@ -498,7 +498,7 @@ func TestContract_InitRun_ForceBypassesPreCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = presetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = true // <- bypass
 	initCmdFlags.encrypt = false

@@ -36,9 +36,4 @@ const (
 	// initSubcommand is the canonical name of the init subcommand,
 	// used when the dispatcher needs to special-case it.
 	initSubcommand = "init"
-
-	// presetTalmLibrary is the embedded library chart name that always
-	// lands under charts/talm/ regardless of the operator's preset
-	// choice.
-	presetTalmLibrary = "talm"
 )
