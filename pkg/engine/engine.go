@@ -119,7 +119,7 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 }
 
 // FullConfigProcess handles the full process of creating and updating the Bundle.
-func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
+func FullConfigProcess(_ context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
 	configBundle, err := InitializeConfigBundle(opts)
 	if err != nil {
 		return nil, machine.TypeUnknown, fmt.Errorf("initial config bundle error: %w", err)
@@ -2000,7 +2000,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 		var resources []map[string]any
 
-		callbackResource := func(parentCtx context.Context, hostname string, r resource.Resource, callError error) error {
+		callbackResource := func(_ context.Context, _ string, r resource.Resource, callError error) error {
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
 				errCode := status.Code(callError)
@@ -2027,7 +2027,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 			return nil
 		}
-		callbackRD := func(definition *meta.ResourceDefinition) error {
+		callbackRD := func(_ *meta.ResourceDefinition) error {
 			return nil
 		}
 
