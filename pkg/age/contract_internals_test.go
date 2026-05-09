@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -287,7 +288,10 @@ func TestContract_IncrementalEncrypt_ListSameLengthLocalised(t *testing.T) {
 // === helpers ===
 
 func writeYAML(dir, name, body string) error {
-	return os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		return errors.Wrap(err, "write YAML test fixture")
+	}
+	return nil
 }
 
 func readYAML(t *testing.T, dir, name string) map[string]any {

@@ -37,6 +37,13 @@ import (
 // targeted recovery guidance instead of a generic failure message.
 var ErrLeftoverRotationBackup = errors.New("leftover rotation backup from a previous run (either interrupted, or successful with a failed cleanup step); inspect and remove (or restore) before retrying")
 
+// errInternalInvariant is the sentinel for the typed wrapper helpers
+// (encryptYAMLMap / mergeAndEncryptYAMLMap) when their underlying
+// recursive function returns a non-map for a map input. Reaching this
+// branch means the recursive function violated its own postcondition;
+// the wrap chain attached at the call site supplies the offending type.
+var errInternalInvariant = errors.New("internal invariant violation: recursive helper returned wrong kind for top-level input")
+
 const (
 	keyFileName          = "talm.key"
 	encryptedSecretsFile = "secrets.encrypted.yaml"
@@ -114,6 +121,7 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 		if strings.HasPrefix(trimmed, "AGE-SECRET-KEY-") {
 			secretKeyLine = trimmed
 		} else {
+			//nolint:wrapcheck // errors.WithHint is the project standard for attaching operator hints; the inner errors.New supplies the wrap chain.
 			return nil, errors.WithHint(
 				errors.New("no AGE-SECRET-KEY found in key file"),
 				"the key file must contain an AGE-SECRET-KEY-1... line, either alone (legacy plain format) or alongside age keygen comments",
@@ -474,6 +482,7 @@ func RotateKeys(rootDir string) error {
 		// a Phase 0 refusal on retry would be the first sign of
 		// the partial state).
 		if rbErr := os.Rename(keyBackup, keyFile); rbErr != nil {
+			//nolint:wrapcheck // errors.WithHintf wraps an already-wrapped chain (errors.Wrapf below); cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
 			return errors.WithHintf(
 				errors.Wrapf(errors.WithSecondaryError(err, rbErr),
 					"back up encrypted file before rotation; AND rollback of key-file rename failed"),
@@ -535,6 +544,7 @@ func RotateKeys(rootDir string) error {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
 	}
 	if len(cleanupErrs) > 0 {
+		//nolint:wrapcheck // errors.WithHint wraps the errors.Newf below; cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
 		return errors.WithHint(
 			errors.Newf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s",
 				strings.Join(cleanupErrs, "; ")),
@@ -653,7 +663,7 @@ func encryptYAMLMap(plain map[string]any, recipient *age.X25519Recipient) (map[s
 	}
 	out, ok := encrypted.(map[string]any)
 	if !ok {
-		return nil, errors.Newf("encryptYAMLValues returned %T for map input; this is an internal invariant violation", encrypted)
+		return nil, errors.Wrapf(errInternalInvariant, "encryptYAMLValues returned %T", encrypted)
 	}
 	return out, nil
 }
@@ -670,7 +680,7 @@ func mergeAndEncryptYAMLMap(plain, encrypted map[string]any, identity *age.X2551
 	}
 	out, ok := merged.(map[string]any)
 	if !ok {
-		return nil, errors.Newf("mergeAndEncryptYAMLValues returned %T for map input; this is an internal invariant violation", merged)
+		return nil, errors.Wrapf(errInternalInvariant, "mergeAndEncryptYAMLValues returned %T", merged)
 	}
 	return out, nil
 }
