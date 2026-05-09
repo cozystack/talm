@@ -52,20 +52,13 @@ func TestResolveEngineTemplatePaths_DotDotPrefixedDir(t *testing.T) {
 		t.Fatalf("seed templates/controlplane.yaml: %v", err)
 	}
 
-	origCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(rootDir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origCwd) })
+	t.Chdir(rootDir)
 
-	got := resolveEngineTemplatePaths([]string{"..templates/controlplane.yaml"}, rootDir)
+	got := resolveEngineTemplatePaths([]string{testTemplateControlplane}, rootDir)
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
-	if got[0] != "..templates/controlplane.yaml" {
-		t.Errorf("got %q, want %q (the ..templates dir was misclassified as outside-root and routed through the basename fallback)", got[0], "..templates/controlplane.yaml")
+	if got[0] != testTemplateControlplane {
+		t.Errorf("got %q, want %q (the ..templates dir was misclassified as outside-root and routed through the basename fallback)", got[0], testTemplateControlplane)
 	}
 }

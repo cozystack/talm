@@ -24,4 +24,52 @@ const (
 	// the affected tests pass against a phantom preset.
 	presetCozystack = "cozystack"
 	presetGeneric   = "generic"
+
+	// testNodeAddrA / testNodeAddrB / testNodeAddrC are the three
+	// canonical reserved-range IPs the apply / template suite uses
+	// to address fake Talos nodes. Documentation-range RFC 5737
+	// 192.0.2.0/24 would be even more strictly correct, but these
+	// values are how every existing test fixture spells "node".
+	testNodeAddrA = "10.0.0.1"
+	testNodeAddrC = "10.0.0.3"
+
+	// testTalosVersion / testKubernetesVersion are the version
+	// pair the apply-options builders are tested against; pinning
+	// them here keeps fixture and assertion in sync after a future
+	// version bump.
+	testTalosVersion      = "v1.12"
+	testKubernetesVersion = "1.31.0"
+
+	// testProjectRoot is the synthetic absolute Config.RootDir the
+	// apply-options builder tests use to verify path resolution
+	// without touching the real filesystem layout.
+	testProjectRoot = "/project"
+
+	// testTalmApply / testTalosconfigName are user-facing literals
+	// the apply-options assertions reference verbatim — the engine
+	// reads CommandName for FailIfMultiNodes wording, and
+	// "talosconfig" is the talosconfig basename pinned by every
+	// node-resolution test.
+	testTalmApply       = "talm apply"
+	testTalosconfigName = "talosconfig"
+
+	// testTemplateControlplane / testTemplateOutsideRoot are the
+	// canonical template paths exercised by both
+	// resolveTemplatePaths and resolveEngineTemplatePaths suites.
+	// The "..templates/" prefix is the historical regression seed
+	// that taught isOutsideRoot the difference between ".."
+	// (parent) and "..templates" (sibling).
+	testTemplateControlplane = "..templates/controlplane.yaml"
+
+	// testNodeFixtureA / testNodeFixtureFingerprint are
+	// fixture-only strings that appear in restore-on-error / fake
+	// maintenance call paths.
+	testNodeFixtureA           = "original-A"
+	testNodeFixtureFingerprint = "fp-1"
+
+	// testFooLiteral is the placeholder relPath token used by
+	// isOutsideRoot's table-driven cases; six occurrences exceed
+	// goconst's threshold so a single hoisted const documents the
+	// intent.
+	testFooLiteral = "foo"
 )
