@@ -483,7 +483,10 @@ func decryptString(encryptedBase64 string, identity *age.X25519Identity) (string
 
 // RotateKeys rotates encryption keys in secrets.encrypted.yaml
 func RotateKeys(rootDir string) error {
-	// Load old key first (before generating new one)
+	// Load old key first (before retiring it). The old identity is
+	// kept in memory only — once the talm.key file is removed below,
+	// the key material exists only here for the duration of the
+	// re-encrypt pass, then goes out of scope.
 	oldIdentity, err := LoadKey(rootDir)
 	if err != nil {
 		return fmt.Errorf("failed to load old key: %w", err)
@@ -508,7 +511,17 @@ func RotateKeys(rootDir string) error {
 		return fmt.Errorf("failed to decrypt with old key: %w", err)
 	}
 
-	// Generate new key (this overwrites talm.key)
+	// Retire the old key: GenerateKey is a load-or-create helper, so
+	// without removing talm.key first it would re-load the old
+	// identity instead of generating a fresh one — and "rotation"
+	// would become a no-op that leaves the same key encrypting every
+	// secret. Remove it first, then generate so a new identity is
+	// guaranteed to land on disk.
+	keyFile := filepath.Join(rootDir, keyFileName)
+	if err := os.Remove(keyFile); err != nil {
+		return fmt.Errorf("failed to retire old key: %w", err)
+	}
+
 	newIdentity, _, err := GenerateKey(rootDir)
 	if err != nil {
 		return fmt.Errorf("failed to generate new key: %w", err)

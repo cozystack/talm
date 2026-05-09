@@ -388,21 +388,13 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 
 // === RotateKeys ===
 
-// Contract: RotateKeys preserves plaintext round-trip after the
-// call: whatever key happens to be on disk afterwards is sufficient
-// to decrypt the encrypted file. This is the minimum integrity
-// guarantee operators rely on.
-//
-// KNOWN BUG (not pinned, on purpose): RotateKeys at age.go:485 does
-// NOT actually replace talm.key. It calls GenerateKey, which is a
-// load-or-create operation: if talm.key already exists,
-// GenerateKey loads and returns it instead of generating a fresh
-// identity. So today RotateKeys re-encrypts the secrets file with
-// the SAME key. The test does not assert "public key changes" — if
-// it did, this would fail today, and pinning a passing assertion
-// would lock in the bug. Track separately and fix in a dedicated
-// commit.
-func TestContract_Age_RotateKeys_PreservesPlaintextRoundTrip(t *testing.T) {
+// Contract: RotateKeys actually rotates the on-disk key — the
+// public key after the call is different from before — AND the
+// plaintext round-trips end-to-end with whatever key is on disk
+// afterwards. The test exercises both invariants so a regression
+// that reintroduces the load-or-create no-op surfaces as the
+// public-key inequality fail.
+func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) {
 	dir := t.TempDir()
 	plain := []byte("secret: rotate-me\n")
 	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600); err != nil {
@@ -411,9 +403,22 @@ func TestContract_Age_RotateKeys_PreservesPlaintextRoundTrip(t *testing.T) {
 	if err := age.EncryptSecretsFile(dir); err != nil {
 		t.Fatal(err)
 	}
+	oldPub, err := age.GetPublicKeyFromFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := age.RotateKeys(dir); err != nil {
 		t.Fatalf("RotateKeys: %v", err)
+	}
+
+	// Public key must have changed — the whole point of rotation.
+	newPub, err := age.GetPublicKeyFromFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldPub == newPub {
+		t.Errorf("RotateKeys did not replace the on-disk key\nold: %s\nnew: %s", oldPub, newPub)
 	}
 
 	// Decrypt with whatever key is on disk now — plaintext must round-trip.
