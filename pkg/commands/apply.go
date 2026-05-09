@@ -61,24 +61,31 @@ var applyCmd = &cobra.Command{
 		if !cmd.Flags().Changed("talos-version") {
 			applyCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
+
 		if !cmd.Flags().Changed("with-secrets") {
 			applyCmdFlags.withSecrets = Config.TemplateOptions.WithSecrets
 		}
+
 		if !cmd.Flags().Changed("kubernetes-version") {
 			applyCmdFlags.kubernetesVersion = Config.TemplateOptions.KubernetesVersion
 		}
+
 		if !cmd.Flags().Changed("debug") {
 			applyCmdFlags.debug = Config.TemplateOptions.Debug
 		}
+
 		if !cmd.Flags().Changed("preserve") {
 			applyCmdFlags.preserve = Config.UpgradeOptions.Preserve
 		}
+
 		if !cmd.Flags().Changed("stage") {
 			applyCmdFlags.stage = Config.UpgradeOptions.Stage
 		}
+
 		if !cmd.Flags().Changed("force") {
 			applyCmdFlags.force = Config.UpgradeOptions.Force
 		}
+
 		applyCmdFlags.nodesFromArgs = len(GlobalArgs.Nodes) > 0
 		applyCmdFlags.endpointsFromArgs = len(GlobalArgs.Endpoints) > 0
 		// Set dummy endpoint to avoid errors on building client
@@ -120,6 +127,7 @@ func apply(args []string) error {
 			// apply the rendered config plus the node file overlay. See
 			// applyTemplatesPerNode for why the loop is mandatory.
 			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
+
 			nodes := append([]string(nil), GlobalArgs.Nodes...)
 			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
 
@@ -147,6 +155,7 @@ func apply(args []string) error {
 				if err != nil {
 					return err
 				}
+
 				preflightCheckTalosVersion(cosiCtx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
 
 				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
@@ -158,7 +167,9 @@ func apply(args []string) error {
 				if err != nil {
 					return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 				}
+
 				helpers.PrintApplyResults(resp)
+
 				return nil
 			}
 
@@ -171,6 +182,7 @@ func apply(args []string) error {
 				if err := withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
 					resolved := resolveAuthTemplateNodes(nodes, c)
 					openClient := openClientPerNodeAuth(parentCtx, c)
+
 					return applyTemplatesPerNode(opts, configFile, resolved, openClient, engine.Render, applyClosure)
 				}); err != nil {
 					return err
@@ -180,6 +192,7 @@ func apply(args []string) error {
 			// Direct patch path: apply config file as patch against empty bundle
 			opts := buildApplyPatchOptions(withSecretsPath)
 			patches := []string{"@" + configFile}
+
 			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
 			if err != nil {
 				return errors.WithHint(
@@ -207,6 +220,7 @@ func apply(args []string) error {
 						targetNodes = append(targetNodes, cfg.Nodes...)
 					}
 				}
+
 				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
 
 				// COSI does not support multi-node proxying — apid's
@@ -256,10 +270,12 @@ func apply(args []string) error {
 		if !applyCmdFlags.nodesFromArgs {
 			GlobalArgs.Nodes = []string{}
 		}
+
 		if !applyCmdFlags.endpointsFromArgs {
 			GlobalArgs.Endpoints = []string{}
 		}
 	}
+
 	return nil
 }
 
@@ -347,6 +363,7 @@ func applyTemplatesPerNode(
 		if err != nil {
 			return err
 		}
+
 		if hasOverlay {
 			return errors.WithHintf(
 				errors.Newf("node file %q targets %d nodes (%v) but carries a non-empty per-node body", configFile, len(nodes), nodes),
@@ -355,6 +372,7 @@ func applyTemplatesPerNode(
 			)
 		}
 	}
+
 	for _, node := range nodes {
 		if err := openClient(node, func(ctx context.Context, c *client.Client) error {
 			return renderMergeAndApply(ctx, c, opts, configFile, render, apply)
@@ -362,6 +380,7 @@ func applyTemplatesPerNode(
 			return errors.Wrapf(err, "node %s", node)
 		}
 	}
+
 	return nil
 }
 
@@ -393,8 +412,10 @@ type maintenanceClientFunc func(fingerprints []string, action func(ctx context.C
 func openClientPerNodeMaintenance(fingerprints []string, mkClient maintenanceClientFunc) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
 		savedNodes := append([]string(nil), GlobalArgs.Nodes...)
+
 		GlobalArgs.Nodes = []string{node}
 		defer func() { GlobalArgs.Nodes = savedNodes }()
+
 		return mkClient(fingerprints, action)
 	}
 }
@@ -449,6 +470,7 @@ func cosiPreflightContext(ctx context.Context) (context.Context, error) {
 	if !ok {
 		return ctx, nil
 	}
+
 	nodes := md.Get("nodes")
 	switch len(nodes) {
 	case 0:
@@ -475,13 +497,16 @@ func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
 	if len(cliNodes) > 0 {
 		return cliNodes
 	}
+
 	if c == nil {
 		return nil
 	}
+
 	cfg := c.GetConfigContext()
 	if cfg == nil {
 		return nil
 	}
+
 	return append([]string(nil), cfg.Nodes...)
 }
 
@@ -494,10 +519,12 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 			"the chart did not render against the current node's discovery state; verify the templates referenced in the modeline exist and the node is reachable",
 		)
 	}
+
 	merged, err := engine.MergeFileAsPatch(rendered, configFile)
 	if err != nil {
 		return errors.Wrapf(err, "merging node file %q as patch", configFile)
 	}
+
 	return apply(ctx, c, merged)
 }
 
@@ -507,6 +534,7 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 // client and passes it to engine.Render together with these options.
 func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
 	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
+
 	return engine.Options{
 		TalosVersion:      applyCmdFlags.talosVersion,
 		WithSecrets:       withSecretsPath,
@@ -544,6 +572,7 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 					"this code path requires a Talos client; if you reached it from a flow that did not open one, check the call site",
 				)
 			}
+
 			configContext := c.GetConfigContext()
 			if configContext == nil {
 				return errors.WithHint(
@@ -551,10 +580,12 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 					"the talosconfig has no active context; pick one with `talosctl config context <name>` or pass --talosconfig",
 				)
 			}
+
 			nodes = configContext.Nodes
 		}
 
 		ctx = client.WithNodes(ctx, nodes...)
+
 		return f(ctx, c)
 	}
 }
@@ -585,13 +616,16 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 		for i, p := range templates {
 			resolved[i] = engine.NormalizeTemplatePath(p)
 		}
+
 		return resolved
 	}
+
 	absRootDir, rootErr := filepath.Abs(rootDir)
 	if rootErr != nil {
 		for i, p := range templates {
 			resolved[i] = engine.NormalizeTemplatePath(p)
 		}
+
 		return resolved
 	}
 
@@ -603,19 +637,25 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 			// Resolve relative paths against rootDir, not CWD
 			absTemplatePath = filepath.Join(absRootDir, templatePath)
 		}
+
 		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 		if relErr != nil {
 			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 			continue
 		}
+
 		relPath = filepath.Clean(relPath)
 		if isOutsideRoot(relPath) {
 			// Path goes outside project root — use original path as-is
 			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 			continue
 		}
+
 		resolved[i] = engine.NormalizeTemplatePath(relPath)
 	}
+
 	return resolved
 }
 

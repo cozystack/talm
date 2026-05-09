@@ -93,6 +93,7 @@ func cosiVersionReader(c *client.Client) versionReader {
 		if err != nil {
 			return "", false
 		}
+
 		return res.TypedSpec().Version, true
 	}
 }
@@ -135,8 +136,10 @@ func preflightCheckTalosVersion(ctx context.Context, read versionReader, configu
 // WithVersionContract option is supplied.
 func evaluateVersionMismatch(configuredVersion, runningVersion string) error {
 	var configuredContract *machineryconfig.VersionContract
+
 	if configuredVersion != "" {
 		var err error
+
 		configuredContract, err = machineryconfig.ParseContractFromVersion(configuredVersion)
 		if err != nil {
 			return nil
@@ -157,5 +160,6 @@ func evaluateVersionMismatch(configuredVersion, runningVersion string) error {
 		configuredContract,
 		runningVersion,
 	)
+
 	return errors.WithHint(warning, preflightVersionMismatchHint)
 }

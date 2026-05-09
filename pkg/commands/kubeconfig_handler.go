@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
@@ -47,8 +48,10 @@ Otherwise, kubeconfig will be written to PWD.`
 		// Check if --login flag is set
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
 
-		var newArgs []string
-		var kubeconfigPath string
+		var (
+			newArgs        []string
+			kubeconfigPath string
+		)
 
 		// If --login flag is set, use original args without auto-substitution
 		if loginFlagValue {
@@ -89,13 +92,16 @@ Otherwise, kubeconfig will be written to PWD.`
 
 		// After command execution, set secure permissions and check if kubeconfig path is in project root
 		// Resolve to absolute path
-		var absPath string
-		var err error
+		var (
+			absPath string
+			err     error
+		)
 		if !filepath.IsAbs(kubeconfigPath) {
 			absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
 		} else {
 			absPath, err = filepath.Abs(kubeconfigPath)
 		}
+
 		if err != nil {
 			return fmt.Errorf("failed to resolve kubeconfig path: %w", err)
 		}
@@ -166,8 +172,9 @@ Otherwise, kubeconfig will be written to PWD.`
 	wrappedCmd.Args = func(cmd *cobra.Command, args []string) error {
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
 		if !loginFlagValue && len(args) > 0 {
-			return fmt.Errorf("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
+			return errors.New("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
 		}
+
 		return nil
 	}
 }

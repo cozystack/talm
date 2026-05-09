@@ -72,6 +72,7 @@ type Engine struct {
 // bar chart during render time.
 func (e Engine) Render(chrt *chart.Chart, values chartutil.Values) (map[string]string, error) {
 	tmap := allTemplates(chrt, values)
+
 	return e.render(tmap)
 }
 
@@ -108,16 +109,20 @@ func warnWrap(warn string) string {
 func includeFun(t *template.Template, includedNames map[string]int) func(string, any) (string, error) {
 	return func(name string, data any) (string, error) {
 		var buf strings.Builder
+
 		if v, ok := includedNames[name]; ok {
 			if v > recursionMaxNums {
-				return "", errors.Wrapf(fmt.Errorf("unable to execute template"), "rendering template has a nested reference name: %s", name)
+				return "", errors.Wrapf(errors.New("unable to execute template"), "rendering template has a nested reference name: %s", name)
 			}
+
 			includedNames[name]++
 		} else {
 			includedNames[name] = 1
 		}
+
 		err := t.ExecuteTemplate(&buf, name, data)
 		includedNames[name]--
+
 		return buf.String(), err
 	}
 }
@@ -183,19 +188,24 @@ func (e Engine) initFunMap(t *template.Template) {
 			if e.LintMode {
 				// Don't fail on missing required values when linting
 				log.Printf("[INFO] Missing required value: %s", warn)
+
 				return "", nil
 			}
+
 			return val, errors.New(warnWrap(warn))
 		} else if _, ok := val.(string); ok {
 			if val == "" {
 				if e.LintMode {
 					// Don't fail on missing required values when linting
 					log.Printf("[INFO] Missing required value: %s", warn)
+
 					return "", nil
 				}
+
 				return val, errors.New(warnWrap(warn))
 			}
 		}
+
 		return val, nil
 	}
 
@@ -204,8 +214,10 @@ func (e Engine) initFunMap(t *template.Template) {
 		if e.LintMode {
 			// Don't fail when linting
 			log.Printf("[INFO] Fail: %s", msg)
+
 			return "", nil
 		}
+
 		return "", errors.New(warnWrap(msg))
 	}
 
@@ -233,6 +245,7 @@ func (e Engine) initFunMap(t *template.Template) {
 		if err != nil {
 			return "", fmt.Errorf("cidrNetwork: %w", err)
 		}
+
 		return p.Masked().String(), nil
 	}
 
@@ -253,6 +266,7 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 			err = errors.Errorf("rendering template failed: %v", r)
 		}
 	}()
+
 	t := template.New("gotpl")
 	if e.Strict {
 		t.Option("missingkey=error")
@@ -285,6 +299,7 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 		// At render time, add information about the template that is being rendered.
 		vals := tpls[filename].vals
 		vals["Template"] = chartutil.Values{"Name": filename, "BasePath": tpls[filename].basePath}
+
 		var buf strings.Builder
 		if err := t.ExecuteTemplate(&buf, filename, vals); err != nil {
 			return map[string]string{}, cleanupExecError(filename, err)
@@ -310,6 +325,7 @@ func cleanupParseError(filename string, err error) error {
 	location := tokens[1]
 	// The remaining tokens make up a stacktrace-like chain, ending with the relevant error
 	errMsg := tokens[len(tokens)-1]
+
 	return fmt.Errorf("parse error at (%s): %s", string(location), errMsg)
 }
 
@@ -338,12 +354,15 @@ func cleanupExecError(filename string, err error) error {
 
 func sortTemplates(tpls map[string]renderable) []string {
 	keys := make([]string, len(tpls))
+
 	i := 0
 	for key := range tpls {
 		keys[i] = key
 		i++
 	}
+
 	sort.Sort(sort.Reverse(byPathLen(keys)))
+
 	return keys
 }
 
@@ -353,10 +372,12 @@ func (p byPathLen) Len() int      { return len(p) }
 func (p byPathLen) Swap(i, j int) { p[j], p[i] = p[i], p[j] }
 func (p byPathLen) Less(i, j int) bool {
 	a, b := p[i], p[j]
+
 	ca, cb := strings.Count(a, "/"), strings.Count(b, "/")
 	if ca == cb {
 		return strings.Compare(a, b) == -1
 	}
+
 	return ca < cb
 }
 
@@ -366,6 +387,7 @@ func (p byPathLen) Less(i, j int) bool {
 func allTemplates(c *chart.Chart, vals chartutil.Values) map[string]renderable {
 	templates := make(map[string]renderable)
 	recAllTpls(c, templates, vals)
+
 	return templates
 }
 
@@ -408,9 +430,11 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 		if t == nil {
 			continue
 		}
+
 		if !isTemplateValid(c, t.Name) {
 			continue
 		}
+
 		templates[path.Join(newParentID, t.Name)] = renderable{
 			tpl:      string(t.Data),
 			vals:     next,
@@ -426,6 +450,7 @@ func isTemplateValid(ch *chart.Chart, templateName string) bool {
 	if isLibraryChart(ch) {
 		return strings.HasPrefix(filepath.Base(templateName), "_")
 	}
+
 	return true
 }
 

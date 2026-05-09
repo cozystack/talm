@@ -46,11 +46,14 @@ import (
 // invoke talm under a consistent identity.
 func WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
+
 	f, err := os.CreateTemp(dir, ".secureperm-*")
 	if err != nil {
 		return fmt.Errorf("create tmp in %s: %w", dir, err)
 	}
+
 	tmpPath := f.Name()
+
 	committed := false
 	defer func() {
 		if !committed {
@@ -64,6 +67,7 @@ func WriteFile(path string, data []byte) error {
 	if err := f.Chmod(0o600); err != nil {
 		return fmt.Errorf("chmod tmp: %w", err)
 	}
+
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write tmp: %w", err)
 	}
@@ -76,12 +80,15 @@ func WriteFile(path string, data []byte) error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync tmp: %w", err)
 	}
+
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close tmp: %w", err)
 	}
+
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename tmp -> %s: %w", path, err)
 	}
+
 	committed = true
 	// Best-effort fsync of the parent dir so the rename entry itself is
 	// durable. Ignored errors: dir fsync is unsupported on a few
@@ -90,6 +97,7 @@ func WriteFile(path string, data []byte) error {
 		_ = d.Sync()
 		_ = d.Close()
 	}
+
 	return nil
 }
 

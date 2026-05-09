@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/cockroachdb/errors"
 )
 
 // Config structure for storing settings from modeline
@@ -19,17 +21,21 @@ type Config struct {
 func ParseModeline(line string) (*Config, error) {
 	config := &Config{}
 	trimLine := strings.TrimSpace(line)
+
 	prefix := "# talm: "
 	if after, ok := strings.CutPrefix(trimLine, prefix); ok {
 		content := after
+
 		parts := strings.SplitSeq(content, ", ")
 		for part := range parts {
 			keyVal := strings.SplitN(strings.TrimSpace(part), "=", 2)
 			if len(keyVal) != 2 {
 				return nil, fmt.Errorf("invalid format of modeline part: %s", part)
 			}
+
 			key := keyVal[0]
 			val := keyVal[1]
+
 			var arr []string
 			if err := json.Unmarshal([]byte(val), &arr); err != nil {
 				return nil, fmt.Errorf("error parsing JSON array for key %s, value %s, error: %v", key, val, err)
@@ -45,9 +51,11 @@ func ParseModeline(line string) (*Config, error) {
 				// Ignore unknown keys
 			}
 		}
+
 		return config, nil
 	}
-	return nil, fmt.Errorf("modeline prefix not found")
+
+	return nil, errors.New("modeline prefix not found")
 }
 
 // ReadAndParseModeline reads the first line from a file and parses the modeline.
@@ -61,6 +69,7 @@ func ReadAndParseModeline(filePath string) (*Config, error) {
 	scanner := bufio.NewScanner(file)
 	if scanner.Scan() {
 		firstLine := scanner.Text()
+
 		return ParseModeline(firstLine)
 	}
 
@@ -68,7 +77,7 @@ func ReadAndParseModeline(filePath string) (*Config, error) {
 		return nil, fmt.Errorf("error reading first line of config file: %v", err)
 	}
 
-	return nil, fmt.Errorf("config file is empty")
+	return nil, errors.New("config file is empty")
 }
 
 // GenerateModeline creates a modeline string using JSON formatting for values
@@ -93,5 +102,6 @@ func GenerateModeline(nodes []string, endpoints []string, templates []string) (s
 
 	// Form the final modeline string
 	modeline := fmt.Sprintf(`# talm: nodes=%s, endpoints=%s, templates=%s`, string(nodesJSON), string(endpointsJSON), string(templatesJSON))
+
 	return modeline, nil
 }

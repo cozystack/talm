@@ -116,6 +116,7 @@ func WithClientAuto(action func(context.Context, *client.Client) error) error {
 	if GlobalArgs.SkipVerify {
 		return WithClientSkipVerify(action)
 	}
+
 	return WithClientNoNodes(action)
 }
 
@@ -147,9 +148,11 @@ func DetectProjectRoot(startDir string) (string, error) {
 		if _, err := os.Stat(chartYaml); err == nil {
 			chartExists = true
 		}
+
 		if _, err := os.Stat(secretsYaml); err == nil {
 			secretsExists = true
 		}
+
 		if _, err := os.Stat(secretsEncryptedYaml); err == nil {
 			secretsExists = true
 		}
@@ -163,6 +166,7 @@ func DetectProjectRoot(startDir string) (string, error) {
 			// Reached filesystem root
 			break
 		}
+
 		currentDir = parentDir
 	}
 
@@ -179,6 +183,7 @@ func DetectProjectRootForFile(filePath string) (string, error) {
 
 	// Get directory containing the file
 	fileDir := filepath.Dir(absFilePath)
+
 	return DetectProjectRoot(fileDir)
 }
 
@@ -190,6 +195,7 @@ func ValidateAndDetectRootsForFiles(filePaths []string) (string, error) {
 	}
 
 	var commonRoot string
+
 	roots := make(map[string]bool)
 
 	for _, filePath := range filePaths {
@@ -197,6 +203,7 @@ func ValidateAndDetectRootsForFiles(filePaths []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to detect root for file %s: %w", filePath, err)
 		}
+
 		if fileRoot == "" {
 			return "", fmt.Errorf("failed to detect project root for file %s (Chart.yaml and secrets.yaml not found)", filePath)
 		}
@@ -222,6 +229,7 @@ func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endp
 	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 	if err != nil {
 		fmt.Printf("Warning: modeline parsing failed: %v\n", err)
+
 		return nil, err
 	}
 
@@ -236,6 +244,7 @@ func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endp
 				GlobalArgs.Nodes = append(GlobalArgs.Nodes, modelineConfig.Nodes...)
 			}
 		}
+
 		if !endpointsFromArgs && len(modelineConfig.Endpoints) > 0 {
 			if overwrite {
 				GlobalArgs.Endpoints = modelineConfig.Endpoints
@@ -243,6 +252,7 @@ func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endp
 				GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, modelineConfig.Endpoints...)
 			}
 		}
+
 		templates = modelineConfig.Templates
 	}
 

@@ -27,6 +27,7 @@ import (
 // Supports both -flag value and -flag=value formats, as well as comma-separated values.
 func parseFlagFromArgs(args []string, shortFlag, longFlag string) []string {
 	var values []string
+
 	for i, arg := range args {
 		if arg == shortFlag || arg == longFlag {
 			// Get the next argument(s) as value(s)
@@ -36,6 +37,7 @@ func parseFlagFromArgs(args []string, shortFlag, longFlag string) []string {
 					values = parseCommaSeparatedValues(nextArg)
 				}
 			}
+
 			break
 		} else if strings.HasPrefix(arg, shortFlag+"=") || strings.HasPrefix(arg, longFlag+"=") {
 			// Handle -flag=value or --flag=value format
@@ -43,15 +45,18 @@ func parseFlagFromArgs(args []string, shortFlag, longFlag string) []string {
 			if len(parts) == 2 {
 				values = parseCommaSeparatedValues(parts[1])
 			}
+
 			break
 		}
 	}
+
 	return values
 }
 
 // parseCommaSeparatedValues parses comma-separated values and returns a slice of trimmed values.
 func parseCommaSeparatedValues(value string) []string {
 	var values []string
+
 	if strings.Contains(value, ",") {
 		parts := strings.SplitSeq(value, ",")
 		for part := range parts {
@@ -64,6 +69,7 @@ func parseCommaSeparatedValues(value string) []string {
 			values = append(values, trimmed)
 		}
 	}
+
 	return values
 }
 
@@ -82,6 +88,7 @@ func getFlagValues(cmd *cobra.Command, flagName string) []string {
 			return values
 		}
 	}
+
 	return []string{}
 }
 
@@ -90,6 +97,7 @@ func detectRootFromFiles(filePaths []string) (string, error) {
 	if len(filePaths) == 0 {
 		return "", nil
 	}
+
 	return ValidateAndDetectRootsForFiles(filePaths)
 }
 
@@ -108,6 +116,7 @@ func detectRootFromCWD() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get current working directory: %w", err)
 	}
+
 	return DetectProjectRoot(currentDir)
 }
 
@@ -116,11 +125,14 @@ func checkRootConflict(detectedRoot string, rootDirExplicit bool) error {
 	if !rootDirExplicit {
 		return nil
 	}
+
 	absConfigRoot, _ := filepath.Abs(Config.RootDir)
+
 	absDetectedRoot, _ := filepath.Abs(detectedRoot)
 	if absConfigRoot != absDetectedRoot {
 		return fmt.Errorf("conflicting project roots: global --root=%s, but detected root=%s", absConfigRoot, absDetectedRoot)
 	}
+
 	return nil
 }
 
@@ -167,11 +179,14 @@ func DetectAndSetRoot(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+
 		if detectedRoot != "" {
 			if err := checkRootConflict(detectedRoot, Config.RootDirExplicit); err != nil {
 				return err
 			}
+
 			Config.RootDir = detectedRoot
+
 			return nil
 		}
 	}
@@ -181,6 +196,7 @@ func DetectAndSetRoot(cmd *cobra.Command, args []string) error {
 		detectedRoot, err := detectRootFromTemplates(templateFiles)
 		if err == nil && detectedRoot != "" {
 			Config.RootDir = detectedRoot
+
 			return nil
 		}
 	}
@@ -205,6 +221,7 @@ func DetectAndSetRootFromFiles(filePaths []string) error {
 		if err != nil {
 			return err
 		}
+
 		if detectedRoot != "" {
 			absConfigRoot, _ := filepath.Abs(Config.RootDir)
 			absDetectedRoot, _ := filepath.Abs(detectedRoot)
@@ -217,6 +234,7 @@ func DetectAndSetRootFromFiles(filePaths []string) error {
 			}
 			// Use root from files (has priority)
 			Config.RootDir = detectedRoot
+
 			return nil
 		}
 	}
@@ -240,9 +258,11 @@ func ResolveSecretsPath(withSecrets string) string {
 	if withSecrets == "" {
 		withSecrets = "secrets.yaml"
 	}
+
 	if !filepath.IsAbs(withSecrets) {
 		withSecrets = filepath.Join(Config.RootDir, withSecrets)
 	}
+
 	return withSecrets
 }
 
@@ -275,6 +295,7 @@ func EnsureTalosconfigPath(cmd *cobra.Command) {
 // Returns a list of file paths, with directories expanded to their YAML files.
 func ExpandFilePaths(paths []string) ([]string, error) {
 	var expanded []string
+
 	for _, path := range paths {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
@@ -285,6 +306,7 @@ func ExpandFilePaths(paths []string) ([]string, error) {
 		if err != nil {
 			// If path doesn't exist, treat it as a file (let the caller handle the error)
 			expanded = append(expanded, absPath)
+
 			continue
 		}
 
@@ -294,25 +316,30 @@ func ExpandFilePaths(paths []string) ([]string, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to find YAML files in %s: %w", path, err)
 			}
+
 			if len(yamlFiles) == 0 {
 				return nil, fmt.Errorf("no YAML files found in directory %s", path)
 			}
+
 			expanded = append(expanded, yamlFiles...)
 		} else {
 			// It's a file, add it as is
 			expanded = append(expanded, absPath)
 		}
 	}
+
 	return expanded, nil
 }
 
 // findYAMLFiles recursively finds all YAML files in a directory.
 func findYAMLFiles(dir string) ([]string, error) {
 	var yamlFiles []string
+
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if !info.IsDir() {
 			ext := filepath.Ext(path)
 			if ext == ".yaml" || ext == ".yml" {
@@ -320,10 +347,13 @@ func findYAMLFiles(dir string) ([]string, error) {
 				if err != nil {
 					return err
 				}
+
 				yamlFiles = append(yamlFiles, absPath)
 			}
 		}
+
 		return nil
 	})
+
 	return yamlFiles, err
 }

@@ -61,8 +61,10 @@ func PresetFiles() (map[string]string, error) {
 // AvailablePresets returns a list of available preset chart names.
 // The "generic" preset is always first if it exists.
 func AvailablePresets() ([]string, error) {
-	var presets []string
-	var hasGeneric bool
+	var (
+		presets    []string
+		hasGeneric bool
+	)
 
 	entries, err := embeddedCharts.ReadDir(".")
 	if err != nil {

@@ -52,6 +52,7 @@ Use this command when your client certificate has expired.`,
 				Config.RootDir = detectedRoot
 			}
 		}
+
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,15 +92,19 @@ func regenerateTalosconfig() error {
 	talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
 
 	// Load existing talosconfig to preserve endpoints and nodes
-	var oldConfig *config.Config
-	var clusterName string
+	var (
+		oldConfig   *config.Config
+		clusterName string
+	)
 
 	if fileExists(talosconfigFile) {
 		var err error
+
 		oldConfig, err = config.Open(talosconfigFile)
 		if err != nil {
 			return fmt.Errorf("failed to read existing talosconfig: %w", err)
 		}
+
 		clusterName = oldConfig.Context
 	}
 
@@ -117,6 +122,7 @@ func regenerateTalosconfig() error {
 
 	// Build generate options
 	var genOptions []generate.Option
+
 	genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 
 	// Add version contract if configured
@@ -125,6 +131,7 @@ func regenerateTalosconfig() error {
 		if err != nil {
 			return fmt.Errorf("invalid talos-version: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
@@ -204,6 +211,7 @@ func getClusterNameFromChart() string {
 	}
 
 	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
 		return ""

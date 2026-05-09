@@ -16,11 +16,12 @@ func CopyComments(srcNode, dstNode *yaml.Node, path string, dstPaths map[string]
 		dstPaths[path] = srcNode
 	}
 
-	for i := 0; i < len(srcNode.Content); i++ {
+	for i := range len(srcNode.Content) {
 		newPath := path + "/" + srcNode.Content[i].Value
 		if srcNode.Kind == yaml.SequenceNode {
 			newPath = path + "/" + strconv.Itoa(i)
 		}
+
 		CopyComments(srcNode.Content[i], dstNode, newPath, dstPaths)
 	}
 }
@@ -33,11 +34,12 @@ func ApplyComments(dstNode *yaml.Node, path string, dstPaths map[string]*yaml.No
 		dstNode.FootComment = mergeComments(dstNode.FootComment, srcNode.FootComment)
 	}
 
-	for i := 0; i < len(dstNode.Content); i++ {
+	for i := range len(dstNode.Content) {
 		newPath := path + "/" + dstNode.Content[i].Value
 		if dstNode.Kind == yaml.SequenceNode {
 			newPath = path + "/" + strconv.Itoa(i)
 		}
+
 		ApplyComments(dstNode.Content[i], newPath, dstPaths)
 	}
 }
@@ -47,9 +49,11 @@ func mergeComments(oldComment, newComment string) string {
 	if oldComment == "" {
 		return newComment
 	}
+
 	if newComment == "" {
 		return oldComment
 	}
+
 	return strings.TrimSpace(oldComment) + "\n\n" + strings.TrimSpace(newComment)
 }
 
@@ -59,6 +63,7 @@ func DiffYAMLs(original, modified []byte) ([]byte, error) {
 	if err := yaml.Unmarshal(original, &origNode); err != nil {
 		return nil, err
 	}
+
 	if err := yaml.Unmarshal(modified, &modNode); err != nil {
 		return nil, err
 	}
@@ -74,9 +79,11 @@ func DiffYAMLs(original, modified []byte) ([]byte, error) {
 	buffer := &bytes.Buffer{}
 	encoder := yaml.NewEncoder(buffer)
 	encoder.SetIndent(2)
+
 	if err := encoder.Encode(diff); err != nil {
 		return nil, err
 	}
+
 	_ = encoder.Close()
 
 	return buffer.Bytes(), nil
@@ -86,6 +93,7 @@ func DiffYAMLs(original, modified []byte) ([]byte, error) {
 func clearComments(node *yaml.Node) {
 	node.HeadComment = ""
 	node.LineComment = ""
+
 	node.FootComment = ""
 	for _, n := range node.Content {
 		clearComments(n)
@@ -108,6 +116,7 @@ func compareNodes(orig, mod *yaml.Node) *yaml.Node {
 			return mod
 		}
 	}
+
 	return nil
 }
 
@@ -137,6 +146,7 @@ func compareMappingNodes(orig, mod *yaml.Node) *yaml.Node {
 
 		if origExists {
 			processedKeys[key] = true
+
 			changedNode := compareNodes(origVal, modVal)
 			if changedNode != nil {
 				addNodeToDiff(diff, key, changedNode)
@@ -153,10 +163,12 @@ func compareMappingNodes(orig, mod *yaml.Node) *yaml.Node {
 			origVal := origMap[key]
 			if origVal.Kind == yaml.MappingNode {
 				nestedDelete := &yaml.Node{Kind: yaml.MappingNode}
+
 				for j := 0; j < len(origVal.Content); j += 2 {
 					nestedKey := origVal.Content[j].Value
 					addNodeToDiff(nestedDelete, nestedKey, createDeleteNode())
 				}
+
 				addNodeToDiff(diff, key, nestedDelete)
 			} else {
 				addNodeToDiff(diff, key, createDeleteNode())
@@ -167,12 +179,14 @@ func compareMappingNodes(orig, mod *yaml.Node) *yaml.Node {
 	if len(diff.Content) == 0 {
 		return nil
 	}
+
 	return diff
 }
 
 // compareSequenceNodes compares two sequence nodes and returns differences.
 func compareSequenceNodes(orig, mod *yaml.Node) *yaml.Node {
 	diff := &yaml.Node{Kind: yaml.SequenceNode}
+
 	origSet := nodeSet(orig)
 	for _, modItem := range mod.Content {
 		if !origSet[modItem.Value] {
@@ -183,6 +197,7 @@ func compareSequenceNodes(orig, mod *yaml.Node) *yaml.Node {
 	if len(diff.Content) == 0 {
 		return nil
 	}
+
 	return diff
 }
 
@@ -192,6 +207,7 @@ func nodeSet(node *yaml.Node) map[string]bool {
 	for _, item := range node.Content {
 		result[item.Value] = true
 	}
+
 	return result
 }
 
@@ -205,11 +221,13 @@ func addNodeToDiff(diff *yaml.Node, key string, node *yaml.Node) {
 // nodeMap creates a map from a YAML mapping node for easy lookup.
 func nodeMap(node *yaml.Node) map[string]*yaml.Node {
 	result := make(map[string]*yaml.Node)
+
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode := node.Content[i]
 		if keyNode.Kind == yaml.ScalarNode {
 			result[keyNode.Value] = node.Content[i+1]
 		}
 	}
+
 	return result
 }

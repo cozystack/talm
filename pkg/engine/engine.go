@@ -74,10 +74,12 @@ func NormalizeTemplatePath(p string) string {
 // then exits the program.
 func debugPhase(opts Options, patches []string, clusterName string, clusterEndpoint string, mType machine.Type) {
 	phase := 2
+
 	if clusterName == "" {
 		clusterName = "dummy"
 		phase = 1
 	}
+
 	if clusterEndpoint == "" {
 		clusterEndpoint = "clusterEndpoint"
 		phase = 1
@@ -102,6 +104,7 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 		if patch == "" {
 			continue
 		}
+
 		if patch[0] == '@' {
 			// Apply patch is always one
 			fmt.Printf(" %s=%s\n", patchOption, patch)
@@ -126,6 +129,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
+
 		return nil, machine.TypeUnknown, err
 	}
 
@@ -134,6 +138,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
+
 		return nil, machine.TypeUnknown, fmt.Errorf("apply initial patches error: %w", err)
 	}
 
@@ -158,6 +163,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		ClusterName:       clusterName,
 		Endpoint:          clusterEndpoint.String(),
 	}
+
 	configBundle, err = InitializeConfigBundle(updatedOpts)
 	if err != nil {
 		return nil, machineType, fmt.Errorf("reinit config bundle error: %w", err)
@@ -181,6 +187,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid talos-version: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
@@ -189,6 +196,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load secrets bundle: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 	}
 
@@ -238,9 +246,11 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			"verify the path is correct and the file is readable by the user running talm",
 		)
 	}
+
 	if isEffectivelyEmptyYAML(patchBytes) {
 		return rendered, nil
 	}
+
 	cleanedRendered, renderedDirectivePaths, err := stripAllPatchDeleteDirectives(rendered)
 	if err != nil {
 		return nil, errors.WithHint(
@@ -248,6 +258,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
 		)
 	}
+
 	cleanedPatch, err := stripPatchDeleteDirectivesAtPaths(patchBytes, renderedDirectivePaths)
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -256,6 +267,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			patchFile,
 		)
 	}
+
 	cleanedPatch, err = stripPatchDeleteDirectivesAbsentInTarget(cleanedPatch, cleanedRendered)
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -264,6 +276,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			patchFile,
 		)
 	}
+
 	prunedBytes, allPruned, err := pruneBodyIdentitiesAgainstRendered(cleanedPatch, cleanedRendered)
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -272,9 +285,11 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			patchFile,
 		)
 	}
+
 	if allPruned {
 		return cleanedRendered, nil
 	}
+
 	patch, err := configpatcher.LoadPatch(prunedBytes)
 	if err != nil {
 		return nil, errors.WithHint(
@@ -282,6 +297,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			"the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/",
 		)
 	}
+
 	out, err := configpatcher.Apply(configpatcher.WithBytes(cleanedRendered), []configpatcher.Patch{patch})
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -290,6 +306,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			patchFile,
 		)
 	}
+
 	merged, err := out.Bytes()
 	if err != nil {
 		return nil, errors.WithHintf(
@@ -297,6 +314,7 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 			"configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible",
 		)
 	}
+
 	return merged, nil
 }
 
@@ -337,20 +355,25 @@ func stripAllPatchDeleteDirectives(data []byte) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if len(docs) == 0 {
 		return data, nil, nil
 	}
+
 	var stripped []string
 	for _, doc := range docs {
 		stripped = append(stripped, removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), nil)...)
 	}
+
 	if len(stripped) == 0 {
 		return data, nil, nil
 	}
+
 	out, err := encodeAllYAMLDocuments(docs)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return out, stripped, nil
 }
 
@@ -376,24 +399,30 @@ func stripPatchDeleteDirectivesAtPaths(data []byte, paths []string) ([]byte, err
 	if len(paths) == 0 {
 		return data, nil
 	}
+
 	docs, err := decodeAllYAMLDocuments(data)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(docs) == 0 {
 		return data, nil
 	}
+
 	pruneSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		pruneSet[p] = struct{}{}
 	}
+
 	stripped := 0
 	for _, doc := range docs {
 		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
 	}
+
 	if stripped == 0 {
 		return data, nil
 	}
+
 	return encodeAllYAMLDocuments(docs)
 }
 
@@ -425,20 +454,26 @@ func stripPatchDeleteDirectivesAbsentInTarget(data, target []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+
 	if len(bodyDocs) == 0 {
 		return data, nil
 	}
+
 	targetDocs, err := decodeAllYAMLDocuments(target)
 	if err != nil {
 		return nil, err
 	}
+
 	targetByID := make(map[string]*yaml.Node, len(targetDocs))
 	for _, doc := range targetDocs {
 		targetByID[documentIdentityFromNode(doc)] = doc
 	}
+
 	pruneSet := make(map[string]struct{})
+
 	for _, bdoc := range bodyDocs {
 		id := documentIdentityFromNode(bdoc)
+
 		targetDoc := targetByID[id]
 		for _, rel := range collectDeleteDirectivePaths(bdoc, "") {
 			if !pathExistsInDoc(targetDoc, rel) {
@@ -446,16 +481,20 @@ func stripPatchDeleteDirectivesAbsentInTarget(data, target []byte) ([]byte, erro
 			}
 		}
 	}
+
 	if len(pruneSet) == 0 {
 		return data, nil
 	}
+
 	stripped := 0
 	for _, doc := range bodyDocs {
 		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
 	}
+
 	if stripped == 0 {
 		return data, nil
 	}
+
 	return encodeAllYAMLDocuments(bodyDocs)
 }
 
@@ -468,7 +507,9 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 	if node == nil {
 		return nil
 	}
+
 	var found []string
+
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
@@ -478,19 +519,24 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			keyNode := node.Content[i]
 			valueNode := node.Content[i+1]
+
 			if keyNode.Kind != yaml.ScalarNode {
 				continue
 			}
+
 			childRel := joinYAMLPath(parentRel, jsonPointerEscape(keyNode.Value))
 			if isPatchDeleteDirective(valueNode) {
 				found = append(found, childRel)
+
 				continue
 			}
+
 			if valueNode.Kind == yaml.MappingNode {
 				found = append(found, collectDeleteDirectivePaths(valueNode, childRel)...)
 			}
 		}
 	}
+
 	return found
 }
 
@@ -511,33 +557,43 @@ func pathExistsInDoc(doc *yaml.Node, path string) bool {
 	if doc == nil {
 		return false
 	}
+
 	cur := doc
 	if cur.Kind == yaml.DocumentNode && len(cur.Content) > 0 {
 		cur = cur.Content[0]
 	}
+
 	if cur == nil || cur.Kind != yaml.MappingNode {
 		return false
 	}
+
 	if path == "" {
 		return true
 	}
+
 	for escaped := range strings.SplitSeq(path, "/") {
 		seg := jsonPointerUnescape(escaped)
+
 		if cur.Kind != yaml.MappingNode {
 			return false
 		}
+
 		found := false
+
 		for i := 0; i+1 < len(cur.Content); i += 2 {
 			if cur.Content[i].Value == seg {
 				cur = cur.Content[i+1]
 				found = true
+
 				break
 			}
 		}
+
 		if !found {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -547,33 +603,42 @@ func pathExistsInDoc(doc *yaml.Node, path string) bool {
 func jsonPointerUnescape(s string) string {
 	s = strings.ReplaceAll(s, "~1", "/")
 	s = strings.ReplaceAll(s, "~0", "~")
+
 	return s
 }
 
 func decodeAllYAMLDocuments(data []byte) ([]*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
+
 	var docs []*yaml.Node
+
 	for {
 		var doc yaml.Node
+
 		err := dec.Decode(&doc)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
 			return nil, errors.WithHint(
 				errors.Wrap(err, "decoding YAML before stripping $patch:delete directives"),
 				"the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body",
 			)
 		}
+
 		docs = append(docs, &doc)
 	}
+
 	return docs, nil
 }
 
 func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 	var buf bytes.Buffer
+
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
+
 	for _, doc := range docs {
 		if err := enc.Encode(doc); err != nil {
 			return nil, errors.WithHint(
@@ -582,12 +647,14 @@ func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 			)
 		}
 	}
+
 	if err := enc.Close(); err != nil {
 		return nil, errors.WithHint(
 			errors.Wrap(err, "closing YAML encoder after stripping $patch:delete directives"),
 			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
 		)
 	}
+
 	return buf.Bytes(), nil
 }
 
@@ -602,7 +669,9 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 	if node == nil {
 		return nil
 	}
+
 	var removed []string
+
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
@@ -614,25 +683,32 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 			keyNode := node.Content[i]
 			valueNode := node.Content[i+1]
 			childPath := parentPath + "/" + jsonPointerEscape(keyNode.Value)
+
 			if isPatchDeleteDirective(valueNode) {
 				if prunePaths == nil {
 					removed = append(removed, childPath)
+
 					continue
 				}
+
 				if _, prune := prunePaths[childPath]; prune {
 					removed = append(removed, childPath)
+
 					continue
 				}
 			}
+
 			removed = append(removed, removePatchDeleteFromNode(valueNode, childPath, prunePaths)...)
 			kept = append(kept, keyNode, valueNode)
 		}
+
 		node.Content = kept
 	case yaml.SequenceNode:
 		for i, child := range node.Content {
 			removed = append(removed, removePatchDeleteFromNode(child, fmt.Sprintf("%s/%d", parentPath, i), prunePaths)...)
 		}
 	}
+
 	return removed
 }
 
@@ -644,6 +720,7 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 func jsonPointerEscape(s string) string {
 	s = strings.ReplaceAll(s, "~", "~0")
 	s = strings.ReplaceAll(s, "/", "~1")
+
 	return s
 }
 
@@ -654,10 +731,13 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return false
 	}
+
 	if len(n.Content) != 2 {
 		return false
 	}
+
 	k, v := n.Content[0], n.Content[1]
+
 	return k.Kind == yaml.ScalarNode && k.Value == "$patch" &&
 		v.Kind == yaml.ScalarNode && v.Value == "delete"
 }
@@ -694,6 +774,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 			"the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation",
 		)
 	}
+
 	if !bodyAllMaps {
 		// JSON Patch / YAML patch-list bodies: top-level is a sequence,
 		// not a mapping, so the identity-prune step has no map keys to
@@ -701,6 +782,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 		// route it through the JSON Patch path (load.go: jsonpatch.DecodePatch).
 		return body, false, nil
 	}
+
 	renderedDocs, _, err := decodeAsMaps(rendered)
 	if err != nil {
 		// Rendered should always parse — engine.Render produced it from
@@ -713,6 +795,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
 		)
 	}
+
 	if len(bodyDocs) == 0 {
 		return nil, true, nil
 	}
@@ -743,17 +826,21 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 				reattachIdentityKeys(bdoc, rdoc)
 			}
 		}
+
 		if len(bdoc) > 0 {
 			keptDocs = append(keptDocs, bdoc)
 		}
 	}
+
 	if len(keptDocs) == 0 {
 		return nil, true, nil
 	}
 
 	var buf bytes.Buffer
+
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
+
 	for _, doc := range keptDocs {
 		if err := enc.Encode(doc); err != nil {
 			return nil, false, errors.WithHint(
@@ -762,12 +849,14 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 			)
 		}
 	}
+
 	if err := enc.Close(); err != nil {
 		return nil, false, errors.WithHint(
 			errors.Wrap(err, "closing encoder for pruned body"),
 			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
 		)
 	}
+
 	return buf.Bytes(), false, nil
 }
 
@@ -919,10 +1008,13 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 		if !exists {
 			continue
 		}
+
 		if reflect.DeepEqual(bodyV, renderedV) {
 			delete(body, k)
+
 			continue
 		}
+
 		childPath := joinYAMLPath(yamlPath, k)
 		if _, replace := replaceSemanticPaths[childPath]; replace {
 			// Upstream `merge:"replace"` overwrites rendered with body
@@ -930,6 +1022,7 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 			// entries out of the final config — see replaceSemanticPaths.
 			continue
 		}
+
 		if bodySub, ok := bodyV.(map[string]any); ok {
 			if renderedSub, ok2 := renderedV.(map[string]any); ok2 {
 				// Only delete when the recursive prune actually
@@ -940,12 +1033,15 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 				// rendered's populated value wins.
 				before := len(bodySub)
 				pruneIdenticalKeysAt(bodySub, renderedSub, childPath)
+
 				if before > 0 && len(bodySub) == 0 {
 					delete(body, k)
 				}
+
 				continue
 			}
 		}
+
 		if bodySlice, ok := bodyV.([]any); ok {
 			if renderedSlice, ok2 := renderedV.([]any); ok2 {
 				if isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
@@ -955,8 +1051,10 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 					} else {
 						body[k] = diff
 					}
+
 					continue
 				}
+
 				pruned := pruneObjectArrayItems(bodySlice, renderedSlice, childPath)
 				if len(pruned) == 0 {
 					delete(body, k)
@@ -985,33 +1083,43 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 // rendered counterpart are user-adds and are kept verbatim.
 func pruneObjectArrayItems(body, rendered []any, yamlPath string) []any {
 	keys := objectArrayMergeKeys[yamlPath]
+
 	out := make([]any, 0, len(body))
 	for _, bElem := range body {
 		bMap, ok := bElem.(map[string]any)
 		if !ok {
 			out = append(out, bElem)
+
 			continue
 		}
+
 		rMap := matchObjectArrayItem(bMap, rendered, keys)
 		if rMap == nil {
 			out = append(out, bElem)
+
 			continue
 		}
+
 		before := len(bMap)
 		pruneIdenticalKeysAt(bMap, rMap, yamlPath)
+
 		if before > 0 && len(bMap) == 0 {
 			continue
 		}
+
 		for _, idKey := range keys {
 			if _, hasInBody := bMap[idKey]; hasInBody {
 				continue
 			}
+
 			if v, ok := rMap[idKey]; ok {
 				bMap[idKey] = v
 			}
 		}
+
 		out = append(out, bMap)
 	}
+
 	return out
 }
 
@@ -1042,33 +1150,42 @@ func matchObjectArrayItem(body map[string]any, rendered []any, keys []string) ma
 			chosenKey string
 			chosenVal any
 		)
+
 		for _, k := range keys {
 			if v, ok := body[k]; ok && hasIdentityValue(v) {
 				chosenKey = k
 				chosenVal = v
+
 				break
 			}
 		}
+
 		if chosenKey == "" {
 			return nil
 		}
+
 		for _, rElem := range rendered {
 			rMap, ok := rElem.(map[string]any)
 			if !ok {
 				continue
 			}
+
 			if rv, hasR := rMap[chosenKey]; hasR && reflect.DeepEqual(rv, chosenVal) {
 				return rMap
 			}
 		}
+
 		return nil
 	}
+
 	for _, rElem := range rendered {
 		if reflect.DeepEqual(rElem, body) {
 			rMap, _ := rElem.(map[string]any)
+
 			return rMap
 		}
 	}
+
 	return nil
 }
 
@@ -1083,6 +1200,7 @@ func hasIdentityValue(v any) bool {
 	if v == nil {
 		return false
 	}
+
 	switch x := v.(type) {
 	case string:
 		return x != ""
@@ -1103,6 +1221,7 @@ func joinYAMLPath(parent, key string) string {
 	if parent == "" {
 		return key
 	}
+
 	return parent + "/" + key
 }
 
@@ -1126,6 +1245,7 @@ func isPrimitiveSlice(s []any) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -1153,16 +1273,20 @@ func primitiveSliceDifference(body, rendered []any) []any {
 	out := make([]any, 0, len(body))
 	for _, b := range body {
 		found := false
+
 		for _, r := range rendered {
 			if reflect.DeepEqual(b, r) {
 				found = true
+
 				break
 			}
 		}
+
 		if !found {
 			out = append(out, b)
 		}
 	}
+
 	return out
 }
 
@@ -1181,27 +1305,37 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 	if len(data) == 0 {
 		return nil, true, nil
 	}
+
 	dec := yaml.NewDecoder(bytes.NewReader(data))
+
 	var docs []map[string]any
+
 	allMaps := true
+
 	for {
 		var doc any
 		if err := dec.Decode(&doc); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
 			return nil, false, err
 		}
+
 		if doc == nil {
 			continue
 		}
+
 		asMap, ok := doc.(map[string]any)
 		if !ok {
 			allMaps = false
+
 			continue
 		}
+
 		docs = append(docs, asMap)
 	}
+
 	return docs, allMaps, nil
 }
 
@@ -1231,14 +1365,17 @@ const legacyRootIdentity = "__legacy_root__"
 // streams instead of with every other unnamed doc of the same kind.
 func documentIdentity(doc map[string]any) string {
 	apiVersion, _ := doc["apiVersion"].(string)
+
 	kind, _ := doc["kind"].(string)
 	if apiVersion == "" && kind == "" {
 		return legacyRootIdentity
 	}
+
 	id := apiVersion + "/" + kind
 	if name, _ := doc["name"].(string); name != "" {
 		id += "/" + name
 	}
+
 	return id
 }
 
@@ -1254,16 +1391,21 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 	if root != nil && root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
 		root = root.Content[0]
 	}
+
 	if root == nil || root.Kind != yaml.MappingNode {
 		return legacyRootIdentity
 	}
+
 	var apiVersion, kind, name string
+
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k := root.Content[i]
+
 		v := root.Content[i+1]
 		if k.Kind != yaml.ScalarNode || v.Kind != yaml.ScalarNode {
 			continue
 		}
+
 		switch k.Value {
 		case "apiVersion":
 			apiVersion = v.Value
@@ -1273,13 +1415,16 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 			name = v.Value
 		}
 	}
+
 	if apiVersion == "" && kind == "" {
 		return legacyRootIdentity
 	}
+
 	id := apiVersion + "/" + kind
 	if name != "" {
 		id += "/" + name
 	}
+
 	return id
 }
 
@@ -1295,6 +1440,7 @@ func reattachIdentityKeys(body, rendered map[string]any) {
 		if _, has := body[k]; has {
 			continue
 		}
+
 		if v, ok := rendered[k]; ok {
 			body[k] = v
 		}
@@ -1310,6 +1456,7 @@ func NodeFileHasOverlay(patchFile string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("reading node file %s: %w", patchFile, err)
 	}
+
 	return !isEffectivelyEmptyYAML(data), nil
 }
 
@@ -1328,15 +1475,19 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 		if len(trimmed) == 0 {
 			continue
 		}
+
 		if trimmed[0] == '#' {
 			continue
 		}
+
 		untrailed := string(bytes.TrimRight(line, " \t\r"))
 		if untrailed == "---" || untrailed == "..." {
 			continue
 		}
+
 		return false
 	}
+
 	return true
 }
 
@@ -1357,9 +1508,11 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		if cmdName == "" {
 			cmdName = "talm"
 		}
+
 		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
 			return nil, err
 		}
+
 		helmEngine.LookupFunc = newLookupFunction(ctx, c)
 	}
 
@@ -1367,6 +1520,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
+
 	if opts.Root != "" {
 		chartPath = opts.Root
 	}
@@ -1387,23 +1541,27 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	}
 
 	eng := helmEngine.Engine{}
+
 	out, err := eng.Render(chrt, rootValues)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(opts.TemplateFiles) == 0 {
-		return nil, fmt.Errorf("templates are not set for the command: please use `--file` or `--template` flag")
+		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
 	}
 
 	configPatches := []string{}
+
 	for _, templateFile := range opts.TemplateFiles {
 		// Use path.Join (not filepath.Join) because helm engine keys always use forward slashes
 		requestedTemplate := path.Join(chrt.Name(), NormalizeTemplatePath(templateFile))
+
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
 			return nil, fmt.Errorf("template %s not found", templateFile)
 		}
+
 		configPatches = append(configPatches, configPatch)
 	}
 
@@ -1425,13 +1583,16 @@ func loadValues(opts Options) (map[string]any, error) {
 	// Load values from files specified with -f or --values
 	for _, filePath := range opts.ValueFiles {
 		currentMap := make(map[string]any)
+
 		bytes, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read values file %s: %w", filePath, err)
 		}
+
 		if err := yaml.Unmarshal(bytes, &currentMap); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal values from file %s: %w", filePath, err)
 		}
+
 		base = mergeMaps(base, currentMap)
 	}
 
@@ -1441,6 +1602,7 @@ func loadValues(opts Options) (map[string]any, error) {
 		if err := json.Unmarshal([]byte(value), &currentMap); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal JSON value '%s': %w", value, err)
 		}
+
 		base = mergeMaps(base, currentMap)
 	}
 
@@ -1464,6 +1626,7 @@ func loadValues(opts Options) (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file for set-file value '%s': %w", value, err)
 		}
+
 		if err := strvals.ParseInto(fmt.Sprintf("%s=%s", value, content), base); err != nil {
 			return nil, fmt.Errorf("failed to parse set-file value '%s': %w", value, err)
 		}
@@ -1484,17 +1647,21 @@ func loadValues(opts Options) (map[string]any, error) {
 func mergeMaps(a, b map[string]any) map[string]any {
 	out := make(map[string]any, len(a))
 	maps.Copy(out, a)
+
 	for k, v := range b {
 		if vm, ok := v.(map[string]any); ok {
 			if bv, ok := out[k]; ok {
 				if bvm, ok := bv.(map[string]any); ok {
 					out[k] = mergeMaps(bvm, vm)
+
 					continue
 				}
 			}
 		}
+
 		out[k] = v
 	}
+
 	return out
 }
 
@@ -1505,8 +1672,10 @@ func isTalosConfigPatch(doc string) (bool, error) {
 	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
 		return false, err
 	}
+
 	_, hasMachine := parsed["machine"]
 	_, hasCluster := parsed["cluster"]
+
 	return hasMachine || hasCluster, nil
 }
 
@@ -1527,10 +1696,12 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 			if doc == "" {
 				continue
 			}
+
 			isTalos, parseErr := isTalosConfigPatch(doc)
 			if parseErr != nil {
 				return nil, nil, fmt.Errorf("invalid YAML in template output: %w\n\nTemplate output:\n%s", parseErr, doc)
 			}
+
 			if isTalos {
 				talosPatches = append(talosPatches, doc)
 			} else {
@@ -1538,6 +1709,7 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 			}
 		}
 	}
+
 	return talosPatches, extraDocs, nil
 }
 
@@ -1556,6 +1728,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if err != nil {
 			return nil, fmt.Errorf("invalid talos-version: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
@@ -1564,6 +1737,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to load secrets bundle: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 	}
 
@@ -1588,6 +1762,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
+
 		return nil, err
 	}
 
@@ -1596,11 +1771,14 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
+
 		return nil, err
 	}
+
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
 	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
 	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
 	}
@@ -1621,6 +1799,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		),
 		bundle.WithVerbose(false),
 	}
+
 	configBundle, err = bundle.NewBundle(configBundleOpts...)
 	if err != nil {
 		return nil, err
@@ -1638,18 +1817,23 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if err := yaml.Unmarshal(configOrigin, &config); err != nil {
 			return nil, err
 		}
+
 		if machine, ok := config["machine"].(map[string]any); ok {
 			machine["type"] = "unknown"
 		}
+
 		if cluster, ok := config["cluster"].(map[string]any); ok {
 			cluster["clusterName"] = ""
+
 			controlPlane, ok := cluster["controlPlane"].(map[string]any)
 			if !ok {
 				controlPlane = map[string]any{}
 				cluster["controlPlane"] = controlPlane
 			}
+
 			controlPlane["endpoint"] = ""
 		}
+
 		configOrigin, err = yaml.Marshal(&config)
 		if err != nil {
 			return nil, err
@@ -1687,6 +1871,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
 			return nil, err
 		}
+
 		dstPaths := make(map[string]*yaml.Node)
 		yamltools.CopyComments(&sourceNode, &targetNode, "", dstPaths)
 		yamltools.ApplyComments(&targetNode, "", dstPaths)
@@ -1695,9 +1880,11 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	buf := &bytes.Buffer{}
 	encoder := yaml.NewEncoder(buf)
 	encoder.SetIndent(2)
+
 	if err := encoder.Encode(&targetNode); err != nil {
 		return nil, err
 	}
+
 	_ = encoder.Close()
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
@@ -1740,13 +1927,15 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 	if val.Kind() == reflect.Struct {
 		if yamlField := val.FieldByName("yaml"); yamlField.IsValid() {
 			yamlValue := readUnexportedField(yamlField)
+
 			var unmarshalledData any
 			if err := yaml.Unmarshal([]byte(yamlValue.(string)), &unmarshalledData); err != nil {
 				return res, fmt.Errorf("error unmarshaling yaml: %w", err)
 			}
+
 			res["spec"] = unmarshalledData
 		} else {
-			return res, fmt.Errorf("field 'yaml' not found")
+			return res, errors.New("field 'yaml' not found")
 		}
 	}
 
@@ -1763,22 +1952,27 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
 				errCode := status.Code(callError)
+
 				errStr := callError.Error()
 				if errCode == codes.NotFound || errCode == codes.PermissionDenied ||
 					strings.Contains(errStr, "code = NotFound") || strings.Contains(errStr, "code = PermissionDenied") {
 					return nil
 				}
+
 				multiErr = multierror.Append(multiErr, callError)
+
 				return nil
 			}
 
 			res, err := extractResourceData(r)
 			if err != nil {
 				multiErr = multierror.Append(multiErr, fmt.Errorf("resource %s/%s: %w", r.Metadata().Type(), r.Metadata().ID(), err))
+
 				return nil
 			}
 
 			resources = append(resources, res)
+
 			return nil
 		}
 		callbackRD := func(definition *meta.ResourceDefinition) error {
@@ -1789,12 +1983,15 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		if helperErr != nil {
 			return map[string]any{}, helperErr
 		}
+
 		if err := multiErr.ErrorOrNil(); err != nil {
 			return map[string]any{}, err
 		}
+
 		if len(resources) == 0 {
 			return map[string]any{}, nil
 		}
+
 		if id != "" && len(resources) == 1 {
 			return resources[0], nil
 		}
@@ -1803,6 +2000,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		for i, res := range resources {
 			items[i] = res
 		}
+
 		return map[string]any{
 			"apiVersion": "v1",
 			"kind":       "List",

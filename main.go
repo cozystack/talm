@@ -131,6 +131,7 @@ func init() {
 		if originalPersistentPreRunE != nil {
 			return originalPersistentPreRunE(cmd, args)
 		}
+
 		return nil
 	}
 }
@@ -139,11 +140,14 @@ func initConfig() {
 	if len(os.Args) < 2 {
 		return
 	}
+
 	cmdName := os.Args[1]
+
 	cmd, _, err := rootCmd.Find([]string{cmdName})
 	if err != nil || cmd == nil {
 		return
 	}
+
 	if cmd.HasParent() && cmd.Parent() != rootCmd {
 		cmd = cmd.Parent()
 	}
@@ -164,6 +168,7 @@ func isCommandOrParent(cmd *cobra.Command, names ...string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -176,20 +181,25 @@ func loadConfig(filename string) error {
 	if err := yaml.Unmarshal(data, &commands.Config); err != nil {
 		return fmt.Errorf("error unmarshalling configuration: %w", err)
 	}
+
 	if commands.GlobalArgs.Talosconfig == "" {
 		commands.GlobalArgs.Talosconfig = commands.Config.GlobalOptions.Talosconfig
 	}
+
 	if commands.Config.TemplateOptions.KubernetesVersion == "" {
 		commands.Config.TemplateOptions.KubernetesVersion = constants.DefaultKubernetesVersion
 	}
+
 	if commands.Config.ApplyOptions.Timeout == "" {
 		commands.Config.ApplyOptions.Timeout = constants.ConfigTryTimeout.String()
 	} else {
 		var err error
+
 		commands.Config.ApplyOptions.TimeoutDuration, err = time.ParseDuration(commands.Config.ApplyOptions.Timeout)
 		if err != nil {
 			panic(err)
 		}
 	}
+
 	return nil
 }

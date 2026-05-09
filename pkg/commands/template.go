@@ -63,25 +63,32 @@ var templateCmd = &cobra.Command{
 		templateCmdFlags.stringValues = append(Config.TemplateOptions.StringValues, templateCmdFlags.stringValues...)
 		templateCmdFlags.fileValues = append(Config.TemplateOptions.FileValues, templateCmdFlags.fileValues...)
 		templateCmdFlags.jsonValues = append(Config.TemplateOptions.JsonValues, templateCmdFlags.jsonValues...)
+
 		templateCmdFlags.literalValues = append(Config.TemplateOptions.LiteralValues, templateCmdFlags.literalValues...)
 		if !cmd.Flags().Changed("talos-version") {
 			templateCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
+
 		if !cmd.Flags().Changed("with-secrets") {
 			templateCmdFlags.withSecrets = Config.TemplateOptions.WithSecrets
 		}
+
 		if !cmd.Flags().Changed("kubernetes-version") {
 			templateCmdFlags.kubernetesVersion = Config.TemplateOptions.KubernetesVersion
 		}
+
 		if !cmd.Flags().Changed("full") {
 			templateCmdFlags.full = Config.TemplateOptions.Full
 		}
+
 		if !cmd.Flags().Changed("debug") {
 			templateCmdFlags.debug = Config.TemplateOptions.Debug
 		}
+
 		if !cmd.Flags().Changed("offline") {
 			templateCmdFlags.offline = Config.TemplateOptions.Offline
 		}
+
 		templateCmdFlags.templatesFromArgs = len(templateCmdFlags.templateFiles) > 0
 		templateCmdFlags.nodesFromArgs = len(GlobalArgs.Nodes) > 0
 		templateCmdFlags.endpointsFromArgs = len(GlobalArgs.Endpoints) > 0
@@ -101,9 +108,11 @@ var templateCmd = &cobra.Command{
 		if templateCmdFlags.offline {
 			return templateFunc(args)(context.Background(), nil)
 		}
+
 		if templateCmdFlags.insecure {
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
+
 		if GlobalArgs.SkipVerify {
 			return WithClientSkipVerify(templateFunc(args))
 		}
@@ -120,6 +129,7 @@ func template(args []string) func(ctx context.Context, c *client.Client) error {
 		}
 
 		fmt.Println(output)
+
 		return nil
 	}
 }
@@ -138,29 +148,35 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 		}
 
 		firstFileProcessed := false
+
 		for _, configFile := range expandedFiles {
 			modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 			if err != nil {
 				return fmt.Errorf("modeline parsing failed: %w", err)
 			}
+
 			if !templateCmdFlags.templatesFromArgs {
 				if len(modelineConfig.Templates) == 0 {
-					return fmt.Errorf("modeline does not contain templates information")
+					return errors.New("modeline does not contain templates information")
 				} else {
 					templateCmdFlags.templateFiles = modelineConfig.Templates
 				}
 			}
+
 			if !templateCmdFlags.nodesFromArgs {
 				GlobalArgs.Nodes = modelineConfig.Nodes
 			}
+
 			if !templateCmdFlags.endpointsFromArgs {
 				GlobalArgs.Endpoints = modelineConfig.Endpoints
 			}
+
 			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s, templates=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
 
 			if len(GlobalArgs.Nodes) < 1 {
 				return errors.New("nodes are not set for the command: please use `--nodes` flag or configuration file to set the nodes to run the command against")
 			}
+
 			if len(templateCmdFlags.configFiles) != 0 && len(templateCmdFlags.templateFiles) < 1 {
 				return errors.New("templates are not set for the command: please use `--template` flag to set the templates to render manifest from")
 			}
@@ -180,6 +196,7 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 						if firstFileProcessed {
 							fmt.Println("---")
 						}
+
 						fmt.Printf("%s", output)
 					}
 
@@ -196,22 +213,27 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 			} else {
 				err = WithClient(template(args))
 			}
+
 			if err != nil {
 				return err
 			}
 
 			// Reset args
 			firstFileProcessed = true
+
 			if !templateCmdFlags.templatesFromArgs {
 				templateCmdFlags.templateFiles = []string{}
 			}
+
 			if !templateCmdFlags.nodesFromArgs {
 				GlobalArgs.Nodes = []string{}
 			}
+
 			if !templateCmdFlags.endpointsFromArgs {
 				GlobalArgs.Endpoints = []string{}
 			}
 		}
+
 		return nil
 	}
 }
@@ -248,6 +270,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 
 	// Convert template paths to relative paths from project root for modeline
 	templatePathsForModeline := make([]string, len(templateCmdFlags.templateFiles))
+
 	absRootDirModeline, err := filepath.Abs(Config.RootDir)
 	if err != nil {
 		// If we can't get absolute root, normalize original paths for modeline
@@ -266,6 +289,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				if err != nil {
 					// If we can't get absolute path, use original (normalized)
 					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
+
 					continue
 				}
 			}
@@ -274,6 +298,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 			if err != nil {
 				// If we can't get relative path, use original (normalized)
 				templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
+
 				continue
 			}
 			// Normalize the path (remove .. and .)
@@ -289,17 +314,21 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 					templateName,
 				}
 				found := false
+
 				for _, possiblePath := range possiblePaths {
 					fullPath := filepath.Join(absRootDirModeline, possiblePath)
 					if _, err := os.Stat(fullPath); err == nil {
 						relPath = possiblePath
 						found = true
+
 						break
 					}
 				}
+
 				if !found {
 					// Can't resolve, use original (normalized)
 					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
+
 					continue
 				}
 			} else {
@@ -308,6 +337,7 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 				if _, errModeline := os.Stat(absTemplatePath); errModeline != nil {
 					templateName := filepath.Base(templatePath)
 					possiblePath := filepath.Join("templates", templateName)
+
 					fullPath := filepath.Join(absRootDirModeline, possiblePath)
 					if _, errModeline := os.Stat(fullPath); errModeline == nil {
 						relPath = possiblePath
@@ -339,9 +369,11 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 	if err != nil {
 		return "", fmt.Errorf("failed to generate modeline: %w", err)
 	}
+
 	warn := "# THIS FILE IS AUTOGENERATED. PREFER TEMPLATE EDITS OVER MANUAL ONES."
 
 	output := fmt.Sprintf("%s\n%s\n%s\n", modeline, warn, string(result))
+
 	return output, nil
 }
 
@@ -375,7 +407,9 @@ func writeInplaceRendered(configFile string, output string) error {
 	if err := secureperm.WriteFile(configFile, []byte(output)); err != nil {
 		return fmt.Errorf("failed to write file %s: %w", configFile, err)
 	}
+
 	_, _ = fmt.Fprintf(os.Stderr, "Updated.\n")
+
 	return nil
 }
 
@@ -395,43 +429,55 @@ func writeInplaceRendered(configFile string, output string) error {
 // observable at integration time.
 func resolveEngineTemplatePaths(templateFiles []string, rootDir string) []string {
 	resolved := make([]string, len(templateFiles))
+
 	absRootDir, rootErr := filepath.Abs(rootDir)
 	if rootErr != nil {
 		for i, p := range templateFiles {
 			resolved[i] = engine.NormalizeTemplatePath(p)
 		}
+
 		return resolved
 	}
+
 	for i, templatePath := range templateFiles {
 		var absTemplatePath string
 		if filepath.IsAbs(templatePath) {
 			absTemplatePath = templatePath
 		} else {
 			var absErr error
+
 			absTemplatePath, absErr = filepath.Abs(templatePath)
 			if absErr != nil {
 				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 				continue
 			}
 		}
+
 		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 		if relErr != nil {
 			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 			continue
 		}
+
 		relPath = filepath.Clean(relPath)
 		if isOutsideRoot(relPath) {
 			templateName := filepath.Base(templatePath)
 			possiblePath := filepath.Join("templates", templateName)
+
 			fullPath := filepath.Join(absRootDir, possiblePath)
 			if _, statErr := os.Stat(fullPath); statErr == nil {
 				relPath = possiblePath
 			} else {
 				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 				continue
 			}
 		}
+
 		resolved[i] = engine.NormalizeTemplatePath(relPath)
 	}
+
 	return resolved
 }

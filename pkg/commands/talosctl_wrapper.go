@@ -47,6 +47,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 	// Copy all flags from original command and handle -f flag conflict
 	fileFlagExists := false
+
 	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 		// Check if this is the --file flag
 		if flag.Name == "file" {
@@ -76,6 +77,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 	// Add --file flag only if it doesn't already exist in the original command
 	var configFiles []string
+
 	if !fileFlagExists {
 		// Double-check that the flag doesn't exist after copying
 		if wrappedCmd.Flags().Lookup("file") == nil {
@@ -92,6 +94,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		if idx := strings.Index(cmdName, " "); idx > 0 {
 			baseCmdName = cmdName[:idx]
 		}
+
 		if baseCmdName == "kubeconfig" {
 			if !cmd.Flags().Changed("force") && cmd.Flags().Lookup("force") != nil {
 				if err := cmd.Flags().Set("force", "true"); err != nil {
@@ -143,6 +146,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		if originalPreRunE != nil {
 			return originalPreRunE(cmd, args)
 		}
+
 		return nil
 	}
 
@@ -197,6 +201,7 @@ func init() {
 			for i, r := range baseName {
 				if r == ' ' || r == '<' || r == '[' {
 					baseName = baseName[:i]
+
 					break
 				}
 			}
@@ -266,10 +271,12 @@ func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 
 	// Update server for all clusters
 	updated := false
+
 	for clusterName, cluster := range config.Clusters {
 		if cluster.Server != normalizedEndpoint {
 			cluster.Server = normalizedEndpoint
 			updated = true
+
 			fmt.Fprintf(os.Stderr, "Updated cluster %s server to %s\n", clusterName, normalizedEndpoint)
 		}
 	}
@@ -290,11 +297,13 @@ func addToGitignore(entry string) error {
 
 	// Read existing .gitignore if it exists
 	var content string
+
 	if _, err := os.Stat(gitignoreFile); err == nil {
 		existingContent, err := os.ReadFile(gitignoreFile)
 		if err != nil {
 			return fmt.Errorf("failed to read .gitignore: %w", err)
 		}
+
 		content = string(existingContent)
 
 		// Check if entry already exists
@@ -311,6 +320,7 @@ func addToGitignore(entry string) error {
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
+
 	content += entry + "\n"
 
 	// Write back
