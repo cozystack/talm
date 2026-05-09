@@ -229,6 +229,17 @@ var initCmd = &cobra.Command{
 				var conflicts []string
 				for path := range presetFiles {
 					parts := strings.SplitN(path, "/", 2)
+					// PresetFiles walks an embed.FS so it only ever
+					// returns real file paths (chart/file...), never
+					// bare directory entries. Defensive guard anyway:
+					// if a future change to PresetFiles ever surfaced a
+					// path with no separator, parts[1:] would be empty
+					// and dest would resolve to Config.RootDir — which
+					// always exists, producing a guaranteed false
+					// positive that blocks every init.
+					if len(parts) < 2 {
+						continue
+					}
 					chartName := parts[0]
 					var dest string
 					// Library chart files always land under charts/talm/.
