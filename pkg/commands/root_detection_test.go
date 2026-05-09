@@ -158,9 +158,10 @@ func TestContract_ParseFlagFromArgs(t *testing.T) {
 func TestContract_ResolveSecretsPath(t *testing.T) {
 	originalRoot := Config.RootDir
 	t.Cleanup(func() { Config.RootDir = originalRoot })
-	root := filepath.Join(string(filepath.Separator), "some", "project")
+	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
 
+	absSecrets := crossPlatformAbs("etc", "secrets.yaml")
 	cases := []struct {
 		name  string
 		input string
@@ -168,7 +169,7 @@ func TestContract_ResolveSecretsPath(t *testing.T) {
 	}{
 		{"empty defaults to secrets.yaml under root", "", filepath.Join(root, "secrets.yaml")},
 		{"relative anchored to root", filepath.Join("vault", "secrets.yaml"), filepath.Join(root, "vault", "secrets.yaml")},
-		{"absolute returned verbatim", filepath.Join(string(filepath.Separator), "etc", "secrets.yaml"), filepath.Join(string(filepath.Separator), "etc", "secrets.yaml")},
+		{"absolute returned verbatim", absSecrets, absSecrets},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

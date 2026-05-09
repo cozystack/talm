@@ -31,6 +31,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// crossPlatformAbs builds an absolute path that satisfies
+// filepath.IsAbs on both POSIX and Windows. On POSIX the joined
+// path is already absolute (leading `/`). On Windows the drive
+// letter is mandatory, so the helper prepends the volume of the
+// current working directory (typically `C:` on a CI runner).
+func crossPlatformAbs(parts ...string) string {
+	p := filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+	if filepath.IsAbs(p) {
+		return p
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(filepath.VolumeName(cwd), p)
+}
+
 // withConfigSnapshot captures the package-level Config and GlobalArgs
 // state before the test and restores them on cleanup. Without this
 // every test that mutates Config.RootDir / RootDirExplicit /
@@ -245,8 +262,8 @@ func TestContract_CheckRootConflict_ExplicitMatching(t *testing.T) {
 // the full literal so it survives both POSIX and Windows.
 func TestContract_CheckRootConflict_ExplicitConflict(t *testing.T) {
 	withConfigSnapshot(t)
-	explicit := filepath.Join(string(filepath.Separator), "explicit", "root")
-	detected := filepath.Join(string(filepath.Separator), "detected", "root")
+	explicit := crossPlatformAbs("explicit", "root")
+	detected := crossPlatformAbs("detected", "root")
 	Config.RootDir = explicit
 	err := checkRootConflict(detected, true)
 	if err == nil {
@@ -450,7 +467,7 @@ func TestContract_EnsureTalosconfigPath_DefaultsToRoot(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	root := filepath.Join(string(filepath.Separator), "some", "project")
+	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
 	Config.GlobalOptions.Talosconfig = ""
 	GlobalArgs.Talosconfig = ""
@@ -471,7 +488,7 @@ func TestContract_EnsureTalosconfigPath_RelativeAnchoredToRoot(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	root := filepath.Join(string(filepath.Separator), "some", "project")
+	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
 	GlobalArgs.Talosconfig = "talosconfig.encrypted"
 
@@ -490,7 +507,7 @@ func TestContract_EnsureTalosconfigPath_AbsolutePathPreserved(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
 	Config.RootDir = filepath.Join(string(filepath.Separator), "some", "project")
-	abs := filepath.Join(string(filepath.Separator), "etc", "talos", "config")
+	abs := crossPlatformAbs("etc", "talos", "config")
 	GlobalArgs.Talosconfig = abs
 
 	EnsureTalosconfigPath(cmd)
