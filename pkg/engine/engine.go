@@ -1380,7 +1380,22 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 // with — its only top-level identifier is `version`, which is at the
 // same nesting level as the machine/cluster blocks rather than peer
 // to a routable apiVersion/kind/name.
-const legacyRootIdentity = "__legacy_root__"
+const (
+	legacyRootIdentity = "__legacy_root__"
+
+	// yamlDocSep is the YAML document separator at column 0.
+	yamlDocSep = "---"
+	// helmKeyValues is the chart-rendering top-level Values context key.
+	helmKeyValues = "Values"
+	// helmKeyTalosVer is the chart-rendering top-level TalosVersion context key.
+	helmKeyTalosVer = "TalosVersion"
+	// cosiKindList is the COSI Kind value emitted when newLookupFunction
+	// wraps multi-item lookups into a List envelope for template iteration.
+	cosiKindList = "List"
+	// k8sKeyAPIVersion is the standard Kubernetes/COSI document key
+	// used as part of the (apiVersion, kind, name) identity tuple.
+	k8sKeyAPIVersion = "apiVersion"
+)
 
 // documentIdentity returns a stable string identifying a Talos config
 // document. The legacy v1alpha1 root config (a single document with
@@ -1398,7 +1413,7 @@ const legacyRootIdentity = "__legacy_root__"
 // without a `name` field collides with itself across body and rendered
 // streams instead of with every other unnamed doc of the same kind.
 func documentIdentity(doc map[string]any) string {
-	apiVersion, _ := doc["apiVersion"].(string)
+	apiVersion, _ := doc[k8sKeyAPIVersion].(string)
 
 	kind, _ := doc["kind"].(string)
 	if apiVersion == "" && kind == "" {
@@ -1515,7 +1530,7 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 		}
 
 		untrailed := string(bytes.TrimRight(line, " \t\r"))
-		if untrailed == "---" || untrailed == "..." {
+		if untrailed == yamlDocSep || untrailed == "..." {
 			continue
 		}
 
@@ -1574,8 +1589,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	}
 
 	rootValues := map[string]any{
-		"Values":       mergeMaps(chrt.Values, values),
-		"TalosVersion": opts.TalosVersion,
+		helmKeyValues:   mergeMaps(chrt.Values, values),
+		helmKeyTalosVer: opts.TalosVersion,
 	}
 
 	eng := helmEngine.Engine{}
@@ -2084,7 +2099,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 
 		return map[string]any{
 			"apiVersion": "v1",
-			"kind":       "List",
+			"kind":       cosiKindList,
 			"items":      items,
 		}, nil
 	}
