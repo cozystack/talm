@@ -345,13 +345,17 @@ func cleanupParseError(filename string, err error) error {
 	return fmt.Errorf("parse error at (%s): %s", location, errMsg)
 }
 
+// execErrorTokenCount is the number of colon-separated segments produced by
+// text/template's ExecError formatter: "template", location, message.
+const execErrorTokenCount = 3
+
 func cleanupExecError(filename string, err error) error {
 	if _, isExecError := err.(template.ExecError); !isExecError {
 		return err
 	}
 
-	tokens := strings.SplitN(err.Error(), ": ", 3)
-	if len(tokens) != 3 {
+	tokens := strings.SplitN(err.Error(), ": ", execErrorTokenCount)
+	if len(tokens) != execErrorTokenCount {
 		// This might happen if a non-templating error occurs
 		return fmt.Errorf("execution error in (%s): %s", filename, err)
 	}
