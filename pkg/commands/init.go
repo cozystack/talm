@@ -215,41 +215,45 @@ var initCmd = &cobra.Command{
 		// Skipped under --encrypt / --decrypt: those flags operate on
 		// an already-initialised project where every preset file is
 		// expected to exist. Running the pre-check there would refuse
-		// the very flows the flags are designed for. Load presetFiles
-		// up-front in either case so the later write loop can reuse
-		// the same map.
-		presetFiles, err := generated.PresetFiles()
-		if err != nil {
-			return fmt.Errorf("failed to get preset files: %w", err)
-		}
-		if !initCmdFlags.force && !initCmdFlags.encrypt && !initCmdFlags.decrypt {
-			var conflicts []string
-			for path := range presetFiles {
-				parts := strings.SplitN(path, "/", 2)
-				chartName := parts[0]
-				var dest string
-				// Library chart files always land under charts/talm/.
-				// Checked first so a hypothetical preset literally
-				// named "talm" cannot collide with the library
-				// chart's destination (AvailablePresets excludes
-				// "talm" today, but the dispatch should not depend
-				// on that invariant).
-				switch chartName {
-				case "talm":
-					dest = filepath.Join(Config.RootDir, "charts", path)
-				case initCmdFlags.preset:
-					dest = filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
-				default:
-					continue
-				}
-				if _, statErr := os.Stat(dest); statErr == nil {
-					conflicts = append(conflicts, dest)
-				}
+		// the very flows the flags are designed for. Both flags
+		// also early-return below before the write loop reaches
+		// presetFiles, so loading the map at all is wasted work
+		// under those flags — gate the load on the same condition.
+		var presetFiles map[string]string
+		if !initCmdFlags.encrypt && !initCmdFlags.decrypt {
+			presetFiles, err = generated.PresetFiles()
+			if err != nil {
+				return fmt.Errorf("failed to get preset files: %w", err)
 			}
-			if len(conflicts) > 0 {
-				slices.Sort(conflicts)
-				return fmt.Errorf("refusing to init: %d file(s) already exist in target directory; pass --force to overwrite, or --update to refresh only the talm library chart:\n  - %s",
-					len(conflicts), strings.Join(conflicts, "\n  - "))
+			if !initCmdFlags.force {
+				var conflicts []string
+				for path := range presetFiles {
+					parts := strings.SplitN(path, "/", 2)
+					chartName := parts[0]
+					var dest string
+					// Library chart files always land under charts/talm/.
+					// Checked first so a hypothetical preset literally
+					// named "talm" cannot collide with the library
+					// chart's destination (AvailablePresets excludes
+					// "talm" today, but the dispatch should not depend
+					// on that invariant).
+					switch chartName {
+					case "talm":
+						dest = filepath.Join(Config.RootDir, "charts", path)
+					case initCmdFlags.preset:
+						dest = filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
+					default:
+						continue
+					}
+					if _, statErr := os.Stat(dest); statErr == nil {
+						conflicts = append(conflicts, dest)
+					}
+				}
+				if len(conflicts) > 0 {
+					slices.Sort(conflicts)
+					return fmt.Errorf("refusing to init: %d file(s) already exist in target directory; pass --force to overwrite, or --update to refresh only the talm library chart:\n  - %s",
+						len(conflicts), strings.Join(conflicts, "\n  - "))
+				}
 			}
 		}
 
