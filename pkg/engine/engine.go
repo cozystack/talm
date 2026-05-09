@@ -535,6 +535,9 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 				found = append(found, collectDeleteDirectivePaths(valueNode, childRel)...)
 			}
 		}
+	case yaml.SequenceNode, yaml.ScalarNode, yaml.AliasNode:
+		// Directives live only inside mappings (as values of named keys).
+		// Sequences carry no key, scalars/aliases carry no children to walk.
 	}
 
 	return found
@@ -707,6 +710,9 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 		for i, child := range node.Content {
 			removed = append(removed, removePatchDeleteFromNode(child, fmt.Sprintf("%s/%d", parentPath, i), prunePaths)...)
 		}
+	case yaml.ScalarNode, yaml.AliasNode:
+		// Scalars and aliases have no children, so they cannot host a
+		// $patch:delete directive — nothing to remove.
 	}
 
 	return removed
@@ -1560,7 +1566,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
-			return nil, fmt.Errorf("template %s not found", templateFile)
+			return nil, errors.Newf("template %s not found", templateFile)
 		}
 
 		configPatches = append(configPatches, configPatch)
@@ -1929,9 +1935,14 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 		if yamlField := val.FieldByName("yaml"); yamlField.IsValid() {
 			yamlValue := readUnexportedField(yamlField)
 
+			yamlString, ok := yamlValue.(string)
+			if !ok {
+				return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
+			}
+
 			var unmarshalledData any
-			if err := yaml.Unmarshal([]byte(yamlValue.(string)), &unmarshalledData); err != nil {
-				return res, fmt.Errorf("error unmarshaling yaml: %w", err)
+			if err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData); err != nil {
+				return res, errors.Wrap(err, "unmarshaling yaml")
 			}
 
 			res["spec"] = unmarshalledData
