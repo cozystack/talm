@@ -37,7 +37,7 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	Config.RootDir = testProjectRoot
 
 	opts := buildApplyRenderOptions(
-		[]string{"templates/controlplane.yaml"},
+		[]string{testTemplateControlplaneRel},
 		testProjectRoot+"/secrets.yaml",
 	)
 
@@ -56,7 +56,7 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 	if opts.WithSecrets != testProjectRoot+"/secrets.yaml" {
 		t.Errorf("expected WithSecrets=%s/secrets.yaml, got %s", testProjectRoot, opts.WithSecrets)
 	}
-	if len(opts.TemplateFiles) != 1 || opts.TemplateFiles[0] != "templates/controlplane.yaml" {
+	if len(opts.TemplateFiles) != 1 || opts.TemplateFiles[0] != testTemplateControlplaneRel {
 		t.Errorf("expected TemplateFiles=[templates/controlplane.yaml], got %v", opts.TemplateFiles)
 	}
 	if opts.CommandName != testTalmApply {
@@ -65,7 +65,7 @@ func TestBuildApplyRenderOptions(t *testing.T) {
 }
 
 func TestResolveAuthTemplateNodes_CLINodesWin(t *testing.T) {
-	in := []string{testNodeAddrA, "10.0.0.2"}
+	in := []string{testNodeAddrA, testNodeAddrB}
 	got := resolveAuthTemplateNodes(in, nil)
 	if !slices.Equal(got, in) {
 		t.Errorf("got %v, want %v (CLI nodes must take precedence over talosconfig context)", got, in)
@@ -93,7 +93,7 @@ func TestBuildApplyPatchOptions(t *testing.T) {
 		applyCmdFlags.debug = origDebug
 	}()
 
-	applyCmdFlags.talosVersion = "v1.12"
+	applyCmdFlags.talosVersion = testTalosVersion
 	applyCmdFlags.kubernetesVersion = "1.31.0"
 	applyCmdFlags.debug = false
 
@@ -140,27 +140,27 @@ func TestResolveTemplatePaths(t *testing.T) {
 	}{
 		{
 			name:      "relative path with empty rootDir",
-			templates: []string{"templates/controlplane.yaml"},
+			templates: []string{testTemplateControlplaneRel},
 			rootDir:   "",
-			want:      []string{"templates/controlplane.yaml"},
+			want:      []string{testTemplateControlplaneRel},
 		},
 		{
 			name:      "relative path resolved against rootDir",
-			templates: []string{"templates/controlplane.yaml"},
+			templates: []string{testTemplateControlplaneRel},
 			rootDir:   tmpRoot,
-			want:      []string{"templates/controlplane.yaml"},
+			want:      []string{testTemplateControlplaneRel},
 		},
 		{
 			name:      "multiple paths with rootDir",
-			templates: []string{"templates/controlplane.yaml", "templates/worker.yaml"},
+			templates: []string{testTemplateControlplaneRel, testTemplateWorker},
 			rootDir:   tmpRoot,
-			want:      []string{"templates/controlplane.yaml", "templates/worker.yaml"},
+			want:      []string{testTemplateControlplaneRel, testTemplateWorker},
 		},
 		{
 			name:      "absolute path inside rootDir",
 			templates: []string{filepath.Join(tmpRoot, "templates", "controlplane.yaml")},
 			rootDir:   tmpRoot,
-			want:      []string{"templates/controlplane.yaml"},
+			want:      []string{testTemplateControlplaneRel},
 		},
 		{
 			// Constructed to be absolute on both POSIX and Windows so the
@@ -202,7 +202,7 @@ func TestWrapWithNodeContext_SetsNodesInContext(t *testing.T) {
 	origNodes := GlobalArgs.Nodes
 	defer func() { GlobalArgs.Nodes = origNodes }()
 
-	GlobalArgs.Nodes = []string{testNodeAddrA, "10.0.0.2"}
+	GlobalArgs.Nodes = []string{testNodeAddrA, testNodeAddrB}
 
 	capturedCtxCh := make(chan context.Context, 1)
 	inner := func(innerCtx context.Context, _ *client.Client) error {
@@ -227,7 +227,7 @@ func TestWrapWithNodeContext_SetsNodesInContext(t *testing.T) {
 		t.Fatal("expected outgoing gRPC metadata in context, got none")
 	}
 	gotNodes := md.Get("nodes")
-	wantNodes := []string{testNodeAddrA, "10.0.0.2"}
+	wantNodes := []string{testNodeAddrA, testNodeAddrB}
 	if !slices.Equal(gotNodes, wantNodes) {
 		t.Errorf("nodes in context metadata = %v, want %v", gotNodes, wantNodes)
 	}
@@ -259,7 +259,7 @@ func TestWrapWithNodeContext_DoesNotMutateGlobalArgs(t *testing.T) {
 
 	// Verify that the defensive copy is independent: mutating GlobalArgs
 	// after wrapper creation doesn't affect a subsequent call
-	GlobalArgs.Nodes = []string{"10.0.0.2"}
+	GlobalArgs.Nodes = []string{testNodeAddrB}
 
 	capturedCtxCh := make(chan context.Context, 1)
 	inner2 := func(innerCtx context.Context, _ *client.Client) error {
@@ -277,7 +277,7 @@ func TestWrapWithNodeContext_DoesNotMutateGlobalArgs(t *testing.T) {
 		t.Fatal("expected outgoing gRPC metadata in context")
 	}
 	gotNodes := md.Get("nodes")
-	if !slices.Equal(gotNodes, []string{"10.0.0.2"}) {
+	if !slices.Equal(gotNodes, []string{testNodeAddrB}) {
 		t.Errorf("nodes in context = %v, want [10.0.0.2]", gotNodes)
 	}
 }
@@ -360,7 +360,7 @@ func TestApplyTemplatesPerNode_LoopsOncePerNodeWithSingleNodeContext(t *testing.
 		t.Fatalf("write configFile: %v", err)
 	}
 
-	want := []string{testNodeAddrA, "10.0.0.2", testNodeAddrC}
+	want := []string{testNodeAddrA, testNodeAddrB, testNodeAddrC}
 	var renderCalls, applyCalls []string
 
 	render := func(ctx context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
@@ -404,7 +404,7 @@ func TestApplyTemplatesPerNode_NeverBatchesNodes(t *testing.T) {
 		t.Fatalf("write configFile: %v", err)
 	}
 
-	want := []string{testNodeAddrA, "10.0.0.2", testNodeAddrC}
+	want := []string{testNodeAddrA, testNodeAddrB, testNodeAddrC}
 	renderCount := 0
 	applyCount := 0
 
@@ -463,7 +463,7 @@ machine:
 	}
 
 	err := applyTemplatesPerNode(engine.Options{}, configFile,
-		[]string{testNodeAddrA, "10.0.0.2"},
+		[]string{testNodeAddrA, testNodeAddrB},
 		fakeAuthOpenClient(context.Background()), render, apply)
 	if err == nil {
 		t.Fatal("expected an error for multi-node + non-empty body, got nil")
@@ -499,7 +499,7 @@ func TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed(t *testing.T) {
 	}
 
 	if err := applyTemplatesPerNode(engine.Options{}, configFile,
-		[]string{testNodeAddrA, "10.0.0.2"},
+		[]string{testNodeAddrA, testNodeAddrB},
 		fakeAuthOpenClient(context.Background()), render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
@@ -570,7 +570,7 @@ func TestApplyTemplatesPerNode_MaintenanceModeOpensFreshClientPerNode(t *testing
 		t.Fatalf("write configFile: %v", err)
 	}
 
-	want := []string{testNodeAddrA, "10.0.0.2"}
+	want := []string{testNodeAddrA, testNodeAddrB}
 	var clientOpenedFor []string
 
 	openClient := func(node string, action func(ctx context.Context, c *client.Client) error) error {
@@ -610,7 +610,7 @@ func TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes(t *testing.T
 	saved := append([]string(nil), GlobalArgs.Nodes...)
 	defer func() { GlobalArgs.Nodes = saved }()
 
-	GlobalArgs.Nodes = []string{testNodeFixtureA, "original-B"}
+	GlobalArgs.Nodes = []string{testNodeFixtureA, testNodeFixtureB}
 
 	type call struct {
 		fingerprints []string
@@ -630,19 +630,19 @@ func TestOpenClientPerNodeMaintenance_NarrowsAndRestoresGlobalNodes(t *testing.T
 
 	openClient := openClientPerNodeMaintenance([]string{testNodeFixtureFingerprint}, fakeMaintenance)
 
-	for _, node := range []string{testNodeAddrA, "10.0.0.2"} {
+	for _, node := range []string{testNodeAddrA, testNodeAddrB} {
 		if err := openClient(node, func(_ context.Context, _ *client.Client) error { return nil }); err != nil {
 			t.Fatalf("openClient(%q): %v", node, err)
 		}
 	}
 
-	if !slices.Equal(GlobalArgs.Nodes, []string{testNodeFixtureA, "original-B"}) {
+	if !slices.Equal(GlobalArgs.Nodes, []string{testNodeFixtureA, testNodeFixtureB}) {
 		t.Errorf("GlobalArgs.Nodes not restored after maintenance loop: got %v", GlobalArgs.Nodes)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("maintenance fake should have been called twice, got %d times", len(calls))
 	}
-	for i, want := range []string{testNodeAddrA, "10.0.0.2"} {
+	for i, want := range []string{testNodeAddrA, testNodeAddrB} {
 		if !slices.Equal(calls[i].nodesAtCall, []string{want}) {
 			t.Errorf("call %d: GlobalArgs.Nodes at WithClientMaintenance time = %v, want [%q]", i, calls[i].nodesAtCall, want)
 		}
@@ -664,7 +664,7 @@ func TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError(t *testing.T) {
 	saved := append([]string(nil), GlobalArgs.Nodes...)
 	defer func() { GlobalArgs.Nodes = saved }()
 
-	GlobalArgs.Nodes = []string{testNodeFixtureA, "original-B"}
+	GlobalArgs.Nodes = []string{testNodeFixtureA, testNodeFixtureB}
 
 	failingMaintenance := func(_ []string, action func(ctx context.Context, c *client.Client) error) error {
 		return action(context.Background(), nil)
@@ -677,7 +677,7 @@ func TestOpenClientPerNodeMaintenance_RestoresGlobalNodesOnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failing action, got nil")
 	}
-	if !slices.Equal(GlobalArgs.Nodes, []string{testNodeFixtureA, "original-B"}) {
+	if !slices.Equal(GlobalArgs.Nodes, []string{testNodeFixtureA, testNodeFixtureB}) {
 		t.Errorf("GlobalArgs.Nodes not restored after error: got %v, want [original-A original-B]", GlobalArgs.Nodes)
 	}
 }

@@ -72,4 +72,22 @@ const (
 	// goconst's threshold so a single hoisted const documents the
 	// intent.
 	testFooLiteral = "foo"
+
+	// testNodeAddrB is the second canonical reserved-range IP used
+	// across multi-node fixtures; pairs with testNodeAddrA / testNodeAddrC.
+	testNodeAddrB = "10.0.0.2"
+
+	// testNodeFixtureB is the second restore-on-error fixture node;
+	// pairs with testNodeFixtureA.
+	testNodeFixtureB = "original-B"
+
+	// testTemplateControlplaneRel / testTemplateWorker /
+	// testTemplateMissing / testTemplateConfig are the canonical
+	// inside-root template paths used by the apply / template /
+	// contract suites. Hoisted to a single const so goconst sees one
+	// reference per literal.
+	testTemplateControlplaneRel = "templates/controlplane.yaml"
+	testTemplateWorker          = "templates/worker.yaml"
+	testTemplateMissing         = "templates/missing.yaml"
+	testTemplateConfig          = "templates/config.yaml"
 )
