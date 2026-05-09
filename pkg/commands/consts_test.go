@@ -14,14 +14,44 @@
 
 package commands
 
-// Shared test-only string constants. Centralized so the goconst linter
-// has a single canonical reference; renaming any of these touches one
-// location instead of dozens of test fixtures.
+// Shared string constants used across test files. Hoisted out of the
+// individual _test.go files so goconst is satisfied with one source of
+// truth — and so a future preset rename or override-image bump is one
+// edit instead of a sweep across every contract test.
 const (
-	// presetCozystack and presetGeneric are the two preset names that
-	// dominate the test suite. They have to match real preset names
-	// shipped under pkg/generated/charts/, so a typo here would make
-	// the affected tests pass against a phantom preset.
+	// Preset names from the embedded chart bundle. Tests use them as
+	// flag values and as expected results from preset-detection
+	// helpers. Test-only fixtures (this file is _test.go, so they
+	// are not visible to non-test code).
 	presetCozystack = "cozystack"
 	presetGeneric   = "generic"
+
+	// myClusterName is the canonical "valid DNS-1123 subdomain"
+	// fixture; every contract test that needs a non-trivial cluster
+	// name uses it so a future rename is one edit.
+	myClusterName = "my-cluster"
+
+	// installerImageABC is the override image fixture for
+	// applyImageOverride / validateImageOverride contract tests.
+	// It looks like a real factory.talos.dev reference but is bound
+	// to v1.13.0 specifically so test output stays deterministic.
+	installerImageABC = "factory.talos.dev/installer/abc:v1.13.0"
+
+	// encryptFlag / decryptFlag are the literal sub-test names AND
+	// the flag identifiers passed to the validator under test;
+	// keeping them constants lets a single rename ripple through the
+	// table-driven cases without drift.
+	encryptFlag = "encrypt"
+	decryptFlag = "decrypt"
+
+	// alphanumericLabel is a substring of the upstream
+	// k8s.io/apimachinery validator's error message. Every
+	// table-driven case that asserts the validator surfaced its
+	// message uses this string so a kubelet-bump that touches the
+	// upstream wording fails in one place.
+	alphanumericLabel = "alphanumeric"
+
+	// linuxGOOS mirrors runtime.GOOS for the linux-only contract
+	// reproducers (Getwd-after-rmdir, Abs-with-removed-CWD).
+	linuxGOOS = "linux"
 )
