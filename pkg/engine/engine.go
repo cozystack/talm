@@ -1595,6 +1595,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
+			//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
 			return nil, errors.Newf("template %s not found", templateFile)
 		}
 
@@ -1991,6 +1992,7 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 
 			yamlString, ok := yamlValue.(string)
 			if !ok {
+				//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
 				return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
 			}
 
