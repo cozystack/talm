@@ -567,7 +567,7 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 // segment regardless of the target's kind below it. This helper
 // reproduces the same predicate so a path declared no-op here is
 // guaranteed to be the same path the apply RPC would have erred on.
-func pathExistsInDoc(doc *yaml.Node, path string) bool {
+func pathExistsInDoc(doc *yaml.Node, pathStr string) bool {
 	if doc == nil {
 		return false
 	}
@@ -581,11 +581,11 @@ func pathExistsInDoc(doc *yaml.Node, path string) bool {
 		return false
 	}
 
-	if path == "" {
+	if pathStr == "" {
 		return true
 	}
 
-	for escaped := range strings.SplitSeq(path, "/") {
+	for escaped := range strings.SplitSeq(pathStr, "/") {
 		seg := jsonPointerUnescape(escaped)
 
 		if cur.Kind != yaml.MappingNode {
@@ -1620,12 +1620,12 @@ func loadValues(opts Options) (map[string]any, error) {
 	for _, filePath := range opts.ValueFiles {
 		currentMap := make(map[string]any)
 
-		bytes, err := os.ReadFile(filePath)
+		buf, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read values file %s: %w", filePath, err)
 		}
 
-		if err := yaml.Unmarshal(bytes, &currentMap); err != nil {
+		if err := yaml.Unmarshal(buf, &currentMap); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal values from file %s: %w", filePath, err)
 		}
 
@@ -1855,16 +1855,16 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		}
 
 		// Overwrite some fields to preserve them for diff
-		var config map[string]any
-		if err := yaml.Unmarshal(configOrigin, &config); err != nil {
+		var cfg map[string]any
+		if err := yaml.Unmarshal(configOrigin, &cfg); err != nil {
 			return nil, errors.Wrap(err, "unmarshaling original config")
 		}
 
-		if machine, ok := config["machine"].(map[string]any); ok {
-			machine["type"] = "unknown"
+		if mtype, ok := cfg["machine"].(map[string]any); ok {
+			mtype["type"] = "unknown"
 		}
 
-		if cluster, ok := config["cluster"].(map[string]any); ok {
+		if cluster, ok := cfg["cluster"].(map[string]any); ok {
 			cluster["clusterName"] = ""
 
 			controlPlane, ok := cluster["controlPlane"].(map[string]any)
@@ -1876,7 +1876,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			controlPlane["endpoint"] = ""
 		}
 
-		configOrigin, err = yaml.Marshal(&config)
+		configOrigin, err = yaml.Marshal(&cfg)
 		if err != nil {
 			return nil, errors.Wrap(err, "marshaling original config")
 		}
@@ -1920,14 +1920,14 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	buf := &bytes.Buffer{}
-	encoder := yaml.NewEncoder(buf)
-	encoder.SetIndent(2)
+	enc := yaml.NewEncoder(buf)
+	enc.SetIndent(2)
 
-	if err := encoder.Encode(&targetNode); err != nil {
+	if err := enc.Encode(&targetNode); err != nil {
 		return nil, errors.Wrap(err, "encoding target config")
 	}
 
-	_ = encoder.Close()
+	_ = enc.Close()
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
 	for _, extraDoc := range extraDocs {
