@@ -29,6 +29,24 @@ import (
 	"testing"
 )
 
+// File-local fixtures for root-detection contract tests. Centralised so
+// goconst stops flagging the high-occurrence literals (the test fixtures
+// repeat by design — a flag, its value, and a node path each appear many
+// times across table cases).
+const (
+	fixtureValueFoo      = "foo"
+	fixtureValueBar      = "bar"
+	fixtureNodePath      = "nodes/cp1.yaml"
+	fixtureFlagFile      = "--file"
+	fixtureShortFile     = "-f"
+	fixtureFlagOther     = "--other"
+	fixtureShortTemplate = "-t"
+	fixtureFileA         = "a.yaml"
+	fixtureFileB         = "b.yaml"
+	fixtureFirstYaml     = "first.yaml"
+	fixtureTemplatePath  = "templates/cluster.yaml"
+)
+
 // === parseCommaSeparatedValues ===
 
 // Contract: comma-separated values are split, trimmed, and empty
@@ -41,13 +59,13 @@ func TestContract_ParseCommaSeparatedValues(t *testing.T) {
 		want  []string
 	}{
 		{"empty", "", nil},
-		{"single", "foo", []string{"foo"}},
-		{"two values", "foo,bar", []string{"foo", "bar"}},
-		{"three with whitespace", " foo , bar , baz ", []string{"foo", "bar", "baz"}},
-		{"empty entries dropped", "foo,,bar,", []string{"foo", "bar"}},
+		{"single", fixtureValueFoo, []string{fixtureValueFoo}},
+		{"two values", fixtureValueFoo + "," + fixtureValueBar, []string{fixtureValueFoo, fixtureValueBar}},
+		{"three with whitespace", " " + fixtureValueFoo + " , " + fixtureValueBar + " , baz ", []string{fixtureValueFoo, fixtureValueBar, "baz"}},
+		{"empty entries dropped", fixtureValueFoo + ",," + fixtureValueBar + ",", []string{fixtureValueFoo, fixtureValueBar}},
 		{"only commas", ",,,", nil},
 		{"only whitespace", "   ", nil},
-		{"path-like values", "nodes/cp1.yaml,nodes/cp2.yaml", []string{"nodes/cp1.yaml", "nodes/cp2.yaml"}},
+		{"path-like values", fixtureNodePath + ",nodes/cp2.yaml", []string{fixtureNodePath, "nodes/cp2.yaml"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,63 +96,63 @@ func TestContract_ParseFlagFromArgs(t *testing.T) {
 	}{
 		{
 			name:      "short-form space-separated",
-			args:      []string{"-f", "nodes/cp1.yaml", "--other"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"nodes/cp1.yaml"},
+			args:      []string{fixtureShortFile, fixtureNodePath, fixtureFlagOther},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureNodePath},
 		},
 		{
 			name:      "long-form space-separated",
-			args:      []string{"--file", "nodes/cp1.yaml"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"nodes/cp1.yaml"},
+			args:      []string{fixtureFlagFile, fixtureNodePath},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureNodePath},
 		},
 		{
 			name:      "short-form equal-sign",
-			args:      []string{"-f=nodes/cp1.yaml"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"nodes/cp1.yaml"},
+			args:      []string{fixtureShortFile + "=" + fixtureNodePath},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureNodePath},
 		},
 		{
 			name:      "long-form equal-sign",
-			args:      []string{"--file=nodes/cp1.yaml"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"nodes/cp1.yaml"},
+			args:      []string{fixtureFlagFile + "=" + fixtureNodePath},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureNodePath},
 		},
 		{
 			name:      "comma-separated values via short form",
-			args:      []string{"-f", "a.yaml,b.yaml,c.yaml"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"a.yaml", "b.yaml", "c.yaml"},
+			args:      []string{fixtureShortFile, fixtureFileA + "," + fixtureFileB + ",c.yaml"},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureFileA, fixtureFileB, "c.yaml"},
 		},
 		{
 			name:      "absent flag",
-			args:      []string{"--other", "x"},
-			shortFlag: "-f", longFlag: "--file",
+			args:      []string{fixtureFlagOther, "x"},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
 			want: nil,
 		},
 		{
 			name:      "flag with no following value",
-			args:      []string{"-f"},
-			shortFlag: "-f", longFlag: "--file",
+			args:      []string{fixtureShortFile},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
 			want: nil,
 		},
 		{
 			name:      "flag followed by another flag (no value)",
-			args:      []string{"-f", "--other"},
-			shortFlag: "-f", longFlag: "--file",
+			args:      []string{fixtureShortFile, fixtureFlagOther},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
 			want: nil,
 		},
 		{
 			name:      "first occurrence wins",
-			args:      []string{"-f", "first.yaml", "-f", "second.yaml"},
-			shortFlag: "-f", longFlag: "--file",
-			want: []string{"first.yaml"},
+			args:      []string{fixtureShortFile, fixtureFirstYaml, fixtureShortFile, "second.yaml"},
+			shortFlag: fixtureShortFile, longFlag: fixtureFlagFile,
+			want: []string{fixtureFirstYaml},
 		},
 		{
 			name:      "templates flag (-t / --template)",
-			args:      []string{"-t", "templates/cluster.yaml"},
-			shortFlag: "-t", longFlag: "--template",
-			want: []string{"templates/cluster.yaml"},
+			args:      []string{fixtureShortTemplate, fixtureTemplatePath},
+			shortFlag: fixtureShortTemplate, longFlag: "--template",
+			want: []string{fixtureTemplatePath},
 		},
 	}
 	for _, tc := range cases {
@@ -161,14 +179,14 @@ func TestContract_ResolveSecretsPath(t *testing.T) {
 	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
 
-	absSecrets := crossPlatformAbs("etc", "secrets.yaml")
+	absSecrets := crossPlatformAbs("etc", localSecretsYamlName)
 	cases := []struct {
 		name  string
 		input string
 		want  string
 	}{
-		{"empty defaults to secrets.yaml under root", "", filepath.Join(root, "secrets.yaml")},
-		{"relative anchored to root", filepath.Join("vault", "secrets.yaml"), filepath.Join(root, "vault", "secrets.yaml")},
+		{"empty defaults to secrets.yaml under root", "", filepath.Join(root, localSecretsYamlName)},
+		{"relative anchored to root", filepath.Join("vault", localSecretsYamlName), filepath.Join(root, "vault", localSecretsYamlName)},
 		{"absolute returned verbatim", absSecrets, absSecrets},
 	}
 	for _, tc := range cases {
