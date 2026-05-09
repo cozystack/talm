@@ -277,7 +277,7 @@ func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.C
 	}
 }
 
-func generateOutput(ctx context.Context, c *client.Client, args []string) (string, error) {
+func generateOutput(ctx context.Context, c *client.Client, _ []string) (string, error) {
 	// Resolve secrets.yaml path relative to project root if not absolute
 	withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
 
