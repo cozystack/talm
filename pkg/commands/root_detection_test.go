@@ -152,20 +152,23 @@ func TestContract_ParseFlagFromArgs(t *testing.T) {
 
 // Contract: when the input is empty, the default file name is
 // "secrets.yaml". Relative paths are anchored against Config.RootDir;
-// absolute paths are returned as-is.
+// absolute paths are returned as-is. The function uses filepath.Join,
+// so the OS-native separator lands in the result — tests build
+// expected values via filepath.Join so they match on Windows too.
 func TestContract_ResolveSecretsPath(t *testing.T) {
 	originalRoot := Config.RootDir
 	t.Cleanup(func() { Config.RootDir = originalRoot })
-	Config.RootDir = "/some/project"
+	root := filepath.Join(string(filepath.Separator), "some", "project")
+	Config.RootDir = root
 
 	cases := []struct {
 		name  string
 		input string
 		want  string
 	}{
-		{"empty defaults to secrets.yaml under root", "", "/some/project/secrets.yaml"},
-		{"relative anchored to root", "vault/secrets.yaml", "/some/project/vault/secrets.yaml"},
-		{"absolute returned verbatim", "/etc/secrets.yaml", "/etc/secrets.yaml"},
+		{"empty defaults to secrets.yaml under root", "", filepath.Join(root, "secrets.yaml")},
+		{"relative anchored to root", filepath.Join("vault", "secrets.yaml"), filepath.Join(root, "vault", "secrets.yaml")},
+		{"absolute returned verbatim", filepath.Join(string(filepath.Separator), "etc", "secrets.yaml"), filepath.Join(string(filepath.Separator), "etc", "secrets.yaml")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -101,8 +101,12 @@ func TestContract_Schema_Versions112AndLaterRenderMultidoc(t *testing.T) {
 			assertContains(t, out, "kind: HostnameConfig")
 			assertContains(t, out, "kind: ResolverConfig")
 			// Document separator MUST appear at least once between
-			// machine.* and the first --- HostnameConfig.
-			if !strings.Contains(out, "\n---\n") {
+			// machine.* and the first --- HostnameConfig. The
+			// surrounding bytes can be \n or \r\n depending on the
+			// platform (helm engine emits the host's line ending on
+			// Windows), so match the literal `---` token rather than
+			// pinning a specific newline pair.
+			if !strings.Contains(out, "---") {
 				t.Errorf("multi-doc render missing `---` separator:\n%s", out)
 			}
 		})
@@ -137,8 +141,16 @@ func TestContract_Schema_LegacyIsSingleDocument(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			out := renderChartTemplate(t, chartPath, controlplaneTpl)
-			if strings.Contains(out, "\n---\n") {
-				t.Errorf("legacy render must not contain `---` separator:\n%s", out)
+			// Match a `---` token surrounded by ANY newline form
+			// (\n or \r\n) — Windows-rendered output uses CRLF and
+			// pinning `\n---\n` would falsely pass on Windows.
+			// Scan line-by-line: a single line that is exactly `---`
+			// means an internal document separator.
+			for line := range strings.SplitSeq(out, "\n") {
+				if strings.TrimRight(line, "\r") == "---" {
+					t.Errorf("legacy render must not contain `---` separator:\n%s", out)
+					break
+				}
 			}
 		})
 	}

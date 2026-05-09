@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -250,8 +251,13 @@ func TestContract_LoadValues_SetStringForcesString(t *testing.T) {
 // `.` in any path component would trigger strvals' nesting rules
 // (separate, well-known Helm behaviour); the test uses a dot-free
 // filename inside a dot-free directory chain so the assertion is
-// stable.
+// stable. Skipped on Windows: temp paths there contain `:` and `\\`
+// which strvals interprets as separators, splitting the path into
+// multiple keys.
 func TestContract_LoadValues_SetFileReadsContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("strvals.ParseInto interprets `:` and `\\` in Windows temp paths as separators; the contract holds, the test fixture cannot be expressed cross-platform")
+	}
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "data")
 	if err := os.Mkdir(subdir, 0o755); err != nil {

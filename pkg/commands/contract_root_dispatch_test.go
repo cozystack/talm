@@ -239,16 +239,23 @@ func TestContract_CheckRootConflict_ExplicitMatching(t *testing.T) {
 
 // Contract: when --root IS explicit and DIFFERS from detected, error
 // names both paths. The error guides the operator to either drop
-// --root or move the files.
+// --root or move the files. The function emits filepath.Abs of each
+// path, which on Windows resolves to a drive-prefixed `D:\...` form;
+// the assertion checks for the trailing path components rather than
+// the full literal so it survives both POSIX and Windows.
 func TestContract_CheckRootConflict_ExplicitConflict(t *testing.T) {
 	withConfigSnapshot(t)
-	Config.RootDir = "/explicit/root"
-	err := checkRootConflict("/detected/root", true)
+	explicit := filepath.Join(string(filepath.Separator), "explicit", "root")
+	detected := filepath.Join(string(filepath.Separator), "detected", "root")
+	Config.RootDir = explicit
+	err := checkRootConflict(detected, true)
 	if err == nil {
 		t.Fatal("expected error for conflicting roots")
 	}
-	if !strings.Contains(err.Error(), "/explicit/root") || !strings.Contains(err.Error(), "/detected/root") {
-		t.Errorf("error must name both paths, got: %v", err)
+	explicitAbs, _ := filepath.Abs(explicit)
+	detectedAbs, _ := filepath.Abs(detected)
+	if !strings.Contains(err.Error(), explicitAbs) || !strings.Contains(err.Error(), detectedAbs) {
+		t.Errorf("error must name both abs paths (%q, %q), got: %v", explicitAbs, detectedAbs, err)
 	}
 }
 
@@ -436,19 +443,22 @@ func TestContract_EnsureTalosconfigPath_NoOpWhenChanged(t *testing.T) {
 
 // Contract: when --talosconfig is unset and the chart-resolved
 // GlobalArgs.Talosconfig is also empty, the path defaults to
-// `<RootDir>/talosconfig`.
+// `<RootDir>/talosconfig`. Built via filepath.Join so the assertion
+// matches the OS-native separator on Windows too.
 func TestContract_EnsureTalosconfigPath_DefaultsToRoot(t *testing.T) {
 	withConfigSnapshot(t)
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	Config.RootDir = "/some/project"
+	root := filepath.Join(string(filepath.Separator), "some", "project")
+	Config.RootDir = root
 	Config.GlobalOptions.Talosconfig = ""
 	GlobalArgs.Talosconfig = ""
 
 	EnsureTalosconfigPath(cmd)
-	if GlobalArgs.Talosconfig != "/some/project/talosconfig" {
-		t.Errorf("expected /some/project/talosconfig, got %q", GlobalArgs.Talosconfig)
+	want := filepath.Join(root, "talosconfig")
+	if GlobalArgs.Talosconfig != want {
+		t.Errorf("expected %q, got %q", want, GlobalArgs.Talosconfig)
 	}
 }
 
@@ -461,12 +471,14 @@ func TestContract_EnsureTalosconfigPath_RelativeAnchoredToRoot(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	Config.RootDir = "/some/project"
+	root := filepath.Join(string(filepath.Separator), "some", "project")
+	Config.RootDir = root
 	GlobalArgs.Talosconfig = "talosconfig.encrypted"
 
 	EnsureTalosconfigPath(cmd)
-	if GlobalArgs.Talosconfig != "/some/project/talosconfig.encrypted" {
-		t.Errorf("expected /some/project/talosconfig.encrypted, got %q", GlobalArgs.Talosconfig)
+	want := filepath.Join(root, "talosconfig.encrypted")
+	if GlobalArgs.Talosconfig != want {
+		t.Errorf("expected %q, got %q", want, GlobalArgs.Talosconfig)
 	}
 }
 
@@ -477,12 +489,13 @@ func TestContract_EnsureTalosconfigPath_AbsolutePathPreserved(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	Config.RootDir = "/some/project"
-	GlobalArgs.Talosconfig = "/etc/talos/config"
+	Config.RootDir = filepath.Join(string(filepath.Separator), "some", "project")
+	abs := filepath.Join(string(filepath.Separator), "etc", "talos", "config")
+	GlobalArgs.Talosconfig = abs
 
 	EnsureTalosconfigPath(cmd)
-	if GlobalArgs.Talosconfig != "/etc/talos/config" {
-		t.Errorf("expected /etc/talos/config preserved, got %q", GlobalArgs.Talosconfig)
+	if GlobalArgs.Talosconfig != abs {
+		t.Errorf("expected %q preserved, got %q", abs, GlobalArgs.Talosconfig)
 	}
 }
 
