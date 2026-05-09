@@ -39,26 +39,26 @@ import (
 // kubelet/kube-proxy port is hardcoded to 6443.
 func TestContract_NormalizeEndpoint(t *testing.T) {
 	cases := []struct {
-		in, want string
+		name, in, want string
 	}{
-		{"1.2.3.4", "https://1.2.3.4:6443"},
-		{"1.2.3.4:50000", "https://1.2.3.4:6443"},
-		{"https://1.2.3.4:50000", "https://1.2.3.4:6443"},
-		{"http://1.2.3.4", "https://1.2.3.4:6443"},
-		{"https://node.example.com:6443", "https://node.example.com:6443"},
-		{"node.example.com", "https://node.example.com:6443"},
+		{"ipv4_no_port", "1.2.3.4", "https://1.2.3.4:6443"},
+		{"ipv4_with_port", "1.2.3.4:50000", "https://1.2.3.4:6443"},
+		{"ipv4_https_with_port", "https://1.2.3.4:50000", "https://1.2.3.4:6443"},
+		{"ipv4_http", "http://1.2.3.4", "https://1.2.3.4:6443"},
+		{"hostname_https_canonical", "https://node.example.com:6443", "https://node.example.com:6443"},
+		{"hostname_no_port", "node.example.com", "https://node.example.com:6443"},
 		// IPv6 with brackets — net.JoinHostPort re-adds them for any
 		// host containing a colon, so the canonical output is
 		// "https://[2001:db8::1]:6443". URI-bracketed IPv6 literals
 		// per RFC 3986 §3.2.2.
-		{"[2001:db8::1]:6443", "https://[2001:db8::1]:6443"},
+		{"ipv6_bracketed_with_port", "[2001:db8::1]:6443", "https://[2001:db8::1]:6443"},
 		// IPv6 without explicit port — bare bracketed literal. The
 		// no-port branch strips the outer brackets so JoinHostPort
 		// can add exactly one pair back.
-		{"[2001:db8::1]", "https://[2001:db8::1]:6443"},
+		{"ipv6_bracketed_no_port", "[2001:db8::1]", "https://[2001:db8::1]:6443"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			got := normalizeEndpoint(tc.in)
 			if got != tc.want {
 				t.Errorf("normalizeEndpoint(%q) = %q, want %q", tc.in, got, tc.want)
