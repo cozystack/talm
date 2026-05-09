@@ -178,7 +178,7 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 	return configBundle, machineType, nil
 }
 
-// Function to initialize configuration settings
+// InitializeConfigBundle initializes a Talos configuration bundle from opts.
 func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 	genOptions := []generate.Option{}
 
@@ -215,7 +215,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 	return bundle.NewBundle(configBundleOpts...)
 }
 
-// Function for serializing the configuration
+// SerializeConfiguration serializes the configuration bundle for machineType.
 func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Type) ([]byte, error) {
 	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
 }
@@ -1261,8 +1261,9 @@ func isPrimitiveSlice(s []any) bool {
 // and rendered's `[a, b]` order survives untouched. Strategic-merge's
 // own primitive-array semantics already cannot replace, only append,
 // so a body cannot impose a new order on a rendered list anyway —
-// even without this prune, the merge result would have been
-// `[a, b, b, a]` (rendered prepended, body appended in body order).
+// even without this prune, the merge result would have been the
+// concatenation `[a, b]` ++ `[b, a]` (rendered prepended, body appended
+// in body order).
 // The dedup makes the silent-undo more visible because it now reaches
 // the partial-edit case, but the underlying constraint is upstream.
 // Callers that need ordered overrides have to model the field as a
@@ -1901,7 +1902,7 @@ func readUnexportedField(field reflect.Value) any {
 	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
 }
 
-// builds resource with metadata, spec and stringSpec fields
+// extractResourceData builds resource with metadata, spec and stringSpec fields.
 func extractResourceData(r resource.Resource) (map[string]any, error) {
 	res := make(map[string]any)
 

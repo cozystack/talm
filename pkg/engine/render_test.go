@@ -5453,7 +5453,7 @@ func TestMultiDocCozystack_EndpointRequired(t *testing.T) {
 }
 
 // TestMultiDocCozystack_InvalidClusterNameOverride ensures invalid
-// clusterName overrides are rejected
+// clusterName overrides are rejected.
 func TestMultiDocCozystack_InvalidClusterNameOverride(t *testing.T) {
 	origLookup := helmEngine.LookupFunc
 	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
