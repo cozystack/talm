@@ -216,12 +216,20 @@ func init() {
 	}
 }
 
-// normalizeEndpoint normalizes an endpoint by removing any existing port and protocol, then adding https:// and :6443
+// normalizeEndpoint normalizes an endpoint by removing any existing
+// port and protocol, then adding https:// and :6443. IPv6 literals
+// are bracketed per RFC 3986 §3.2.2 (the assembly uses
+// net.JoinHostPort which auto-bracket-wraps any host that contains
+// a colon).
+//
 // Examples:
-//   - "1.2.3.4" -> "https://1.2.3.4:6443"
-//   - "1.2.3.4:50000" -> "https://1.2.3.4:6443"
-//   - "https://1.2.3.4:50000" -> "https://1.2.3.4:6443"
-//   - "http://1.2.3.4" -> "https://1.2.3.4:6443"
+//   - "1.2.3.4"                       -> "https://1.2.3.4:6443"
+//   - "1.2.3.4:50000"                 -> "https://1.2.3.4:6443"
+//   - "https://1.2.3.4:50000"         -> "https://1.2.3.4:6443"
+//   - "http://1.2.3.4"                -> "https://1.2.3.4:6443"
+//   - "node.example.com"              -> "https://node.example.com:6443"
+//   - "[2001:db8::1]:6443"            -> "https://[2001:db8::1]:6443"
+//   - "[2001:db8::1]"                 -> "https://[2001:db8::1]:6443"
 func normalizeEndpoint(endpoint string) string {
 	// Remove protocol if present
 	endpoint = strings.TrimPrefix(endpoint, "https://")
