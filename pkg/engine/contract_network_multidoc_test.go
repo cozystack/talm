@@ -57,7 +57,7 @@ func TestContract_NetworkMultidoc_HostnameUsesDiscoveredName(t *testing.T) {
 		return map[string]any{}, nil
 	}
 	out := renderCozystackWith(t, lookup, map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: HostnameConfig")
 	assertContains(t, out, `hostname: "node-prod-1"`)
@@ -91,7 +91,7 @@ func TestContract_NetworkMultidoc_HostnameFallbackToSynthesized(t *testing.T) {
 				return map[string]any{}, nil
 			}
 			out := renderCozystackWith(t, lookup, map[string]any{
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			assertContains(t, out, "kind: HostnameConfig")
 			assertContains(t, out, `hostname: "talos-`)
@@ -111,14 +111,14 @@ func TestContract_NetworkMultidoc_ResolverConfigPopulated(t *testing.T) {
 		if resource == "resolvers" && id == "resolvers" {
 			return map[string]any{
 				"spec": map[string]any{
-					"dnsServers": []any{"8.8.8.8", "1.1.1.1"},
+					"dnsServers": []any{"8.8.8.8", testIP1111},
 				},
 			}, nil
 		}
 		return map[string]any{}, nil
 	}
 	out := renderCozystackWith(t, lookup, map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: ResolverConfig")
 	assertContains(t, out, `- address: "8.8.8.8"`)
@@ -129,7 +129,7 @@ func TestContract_NetworkMultidoc_ResolverConfigPopulated(t *testing.T) {
 // resolvers are not discoverable (no DHCP yet, no static config).
 func TestContract_NetworkMultidoc_ResolverConfigEmptyFallback(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: ResolverConfig")
 	assertContains(t, out, "nameservers:")
@@ -147,7 +147,7 @@ func TestContract_NetworkMultidoc_ResolverConfigEmptyFallback(t *testing.T) {
 // and a default route to 192.168.201.1 — the canonical happy path.
 func TestContract_NetworkMultidoc_SinglePhysicalNICRendersLinkConfig(t *testing.T) {
 	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: LinkConfig")
 	assertContains(t, out, "name: eth0")
@@ -163,7 +163,7 @@ func TestContract_NetworkMultidoc_SinglePhysicalNICRendersLinkConfig(t *testing.
 // shadow each other.
 func TestContract_NetworkMultidoc_MultiNICRoutesOnGatewayLinkOnly(t *testing.T) {
 	out := renderCozystackWith(t, multiNicLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// Both links rendered.
 	assertContains(t, out, "name: eth0")
@@ -190,7 +190,7 @@ func TestContract_NetworkMultidoc_MultiNICRoutesOnGatewayLinkOnly(t *testing.T) 
 // with Talos's link controller convergence.
 func TestContract_NetworkMultidoc_BondRendersBondConfig(t *testing.T) {
 	out := renderCozystackWith(t, bondTopologyLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: BondConfig")
 	assertContains(t, out, "name: bond0")
@@ -207,7 +207,7 @@ func TestContract_NetworkMultidoc_BondRendersBondConfig(t *testing.T) {
 // documents. configurable_link_names filters them out via spec.slaveKind.
 func TestContract_NetworkMultidoc_BondSlavesNotEmittedAsLinkConfig(t *testing.T) {
 	out := renderCozystackWith(t, bondTopologyLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// Each slave appears under BondConfig.links, but not as a
 	// LinkConfig document. Substring "kind: LinkConfig\nname: eth0"
@@ -228,7 +228,7 @@ func TestContract_NetworkMultidoc_BondSlavesNotEmittedAsLinkConfig(t *testing.T)
 // the VLAN's parent name is the bond's metadata.id.
 func TestContract_NetworkMultidoc_VLANOnBondRendersVLANConfig(t *testing.T) {
 	out := renderCozystackWith(t, vlanOnBondTopologyLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: VLANConfig")
 	assertContains(t, out, "vlanID:")
@@ -246,7 +246,7 @@ func TestContract_NetworkMultidoc_VLANOnBondRendersVLANConfig(t *testing.T) {
 // in contract_errors_test.go).
 func TestContract_NetworkMultidoc_NonGatewayBridgeSkipped(t *testing.T) {
 	out := renderCozystackWith(t, bridgeLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// No BridgeConfig — feature unimplemented.
 	assertNotContains(t, out, "kind: BridgeConfig")
@@ -261,8 +261,8 @@ func TestContract_NetworkMultidoc_NonGatewayBridgeSkipped(t *testing.T) {
 // fixture carries the gateway on eth0, so the test pins link=eth0.
 func TestContract_NetworkMultidoc_Layer2VIPFromDiscovery(t *testing.T) {
 	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: Layer2VIPConfig")
 	assertContains(t, out, `name: "192.168.201.99"`)
@@ -290,9 +290,9 @@ func TestContract_NetworkMultidoc_Layer2VIPNeverOnWorker(t *testing.T) {
 // pin the same VIP on two links.
 func TestContract_NetworkMultidoc_Layer2VIPOverrideSuppressesDiscovery(t *testing.T) {
 	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: Layer2VIPConfig")
 	assertContains(t, out, `name: "192.168.201.99"`)
@@ -310,9 +310,9 @@ func TestContract_NetworkMultidoc_Layer2VIPOverrideSuppressesDiscovery(t *testin
 // host).
 func TestContract_NetworkMultidoc_Layer2VIPOverrideOnFreshNode(t *testing.T) {
 	out := renderCozystackWith(t, freshNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "kind: Layer2VIPConfig")
 	assertContains(t, out, "link: eth0.4000")
@@ -338,8 +338,8 @@ func TestContract_NetworkMultidoc_Layer2VIPOverrideOnFreshNode(t *testing.T) {
 // but MUST NOT appear under LinkConfig.addresses as a regular address.
 func TestContract_NetworkMultidoc_FloatingIPStrippedFromLinkAddresses(t *testing.T) {
 	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.10",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               "192.168.201.10",
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// Layer2VIPConfig declares the VIP.
 	assertContains(t, out, `name: "192.168.201.10"`)

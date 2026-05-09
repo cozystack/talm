@@ -97,7 +97,7 @@ func TestContract_Render_BadValueFileError(t *testing.T) {
 	_, err := Render(context.Background(), nil, Options{
 		Offline:       true,
 		Root:          chartRoot,
-		ValueFiles:    []string{"/path/that/does/not/exist.yaml"},
+		ValueFiles:    []string{testMissingValuesPath},
 		TemplateFiles: []string{"templates/config.yaml"},
 	})
 	if err == nil {

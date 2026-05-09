@@ -264,8 +264,8 @@ func TestContract_Cluster_CertSANs_LoopbackUnconditional_Cozystack(t *testing.T)
 // appending) would surface here.
 func TestContract_Cluster_CertSANs_AppendsUserValues_Cozystack(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"certSANs":          []any{"api.example.com", "10.0.0.1"},
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"certSANs":                 []any{"api.example.com", testIP10001},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "- 127.0.0.1")
 	assertContains(t, out, "- api.example.com")
@@ -293,8 +293,8 @@ func TestContract_Cluster_OIDC_AbsentByDefault_Cozystack(t *testing.T) {
 func TestContract_Cluster_OIDC_PresentWhenSet_Cozystack(t *testing.T) {
 	const issuer = "https://oidc.example.com"
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"oidcIssuerUrl":     issuer,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"oidcIssuerUrl":            issuer,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, `oidc-issuer-url: "`+issuer+`"`)
 	assertContains(t, out, `oidc-client-id: "kubernetes"`)
@@ -324,8 +324,8 @@ func TestContract_Cluster_AllocateNodeCIDRs_Default_Cozystack(t *testing.T) {
 // warning. The conditional emission is the contract.
 func TestContract_Cluster_AllocateNodeCIDRs_Disabled_Cozystack(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"allocateNodeCIDRs": false,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"allocateNodeCIDRs":        false,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "allocate-node-cidrs: false")
 	assertNotContains(t, out, "cluster-cidr:")
@@ -444,8 +444,8 @@ func TestContract_Cluster_GenericApiServerBlockExistsButEmpty(t *testing.T) {
 // without any 127.0.0.1 prepended.
 func TestContract_Cluster_GenericCertSANsAppendsVerbatim(t *testing.T) {
 	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
-		"certSANs":          []any{"api.example.com"},
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"certSANs":                 []any{"api.example.com"},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "- api.example.com")
 	assertNotContains(t, out, "- 127.0.0.1")

@@ -623,7 +623,7 @@ func TestCommittedTextFilesIgnoresUntrackedArtefacts(t *testing.T) {
 		t.Fatalf("write untracked: %v", err)
 	}
 
-	files, err := committedTextFiles(t.Context(), repo, map[string]bool{".md": true})
+	files, err := committedTextFiles(t.Context(), repo, map[string]bool{testMarkdownExt: true})
 	if err != nil {
 		t.Fatalf("committedTextFiles: %v", err)
 	}
@@ -935,16 +935,16 @@ func TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey(t *tes
 	body := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "enp0s31f6",
-				"addresses": []any{"88.99.249.47/26", "10.0.0.99/24"},
+				"interface":        "enp0s31f6",
+				testFieldAddresses: []any{testCIDR889924947_26, testCIDR1000099_24},
 			},
 		},
 	}
 	rendered := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "enp0s31f6",
-				"addresses": []any{"88.99.249.47/26"},
+				"interface":        "enp0s31f6",
+				testFieldAddresses: []any{testCIDR889924947_26},
 			},
 		},
 	}
@@ -965,11 +965,11 @@ func TestPruneIdenticalKeysAt_RecursesIntoObjectArrayMatchedByIdentityKey(t *tes
 	if iface["interface"] != "enp0s31f6" {
 		t.Errorf("identity key `interface` must survive the prune so the upstream merge can match the element, got %#v", iface["interface"])
 	}
-	addrs, ok := iface["addresses"].([]any)
+	addrs, ok := iface[testFieldAddresses].([]any)
 	if !ok {
-		t.Fatalf("expected addresses to remain as a slice (only the user-add 10.0.0.99/24 should survive), got %#v", iface["addresses"])
+		t.Fatalf("expected addresses to remain as a slice (only the user-add 10.0.0.99/24 should survive), got %#v", iface[testFieldAddresses])
 	}
-	if len(addrs) != 1 || addrs[0] != "10.0.0.99/24" {
+	if len(addrs) != 1 || addrs[0] != testCIDR1000099_24 {
 		t.Errorf("expected addresses to be pruned to just [10.0.0.99/24], got %#v", addrs)
 	}
 }
@@ -985,25 +985,25 @@ func TestPruneIdenticalKeysAt_DropsObjectArrayItemReducedToIdentity(t *testing.T
 	body := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "enp0s31f6",
-				"addresses": []any{"88.99.249.47/26"},
+				"interface":        "enp0s31f6",
+				testFieldAddresses: []any{testCIDR889924947_26},
 				"routes": []any{
-					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+					map[string]any{"network": testCIDR0000_0, "gateway": "88.99.249.1"},
 				},
 			},
 			map[string]any{
-				"interface": "eth1",
-				"addresses": []any{"10.0.0.5/24"},
+				"interface":        "eth1",
+				testFieldAddresses: []any{testCIDR10005_24},
 			},
 		},
 	}
 	rendered := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "enp0s31f6",
-				"addresses": []any{"88.99.249.47/26"},
+				"interface":        "enp0s31f6",
+				testFieldAddresses: []any{testCIDR889924947_26},
 				"routes": []any{
-					map[string]any{"network": "0.0.0.0/0", "gateway": "88.99.249.1"},
+					map[string]any{"network": testCIDR0000_0, "gateway": "88.99.249.1"},
 				},
 			},
 		},
@@ -1067,16 +1067,16 @@ func TestPruneIdenticalKeysAt_PreservesObjectArrayUserAdd(t *testing.T) {
 	body := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "eth1",
-				"addresses": []any{"10.0.0.5/24"},
+				"interface":        "eth1",
+				testFieldAddresses: []any{testCIDR10005_24},
 			},
 		},
 	}
 	rendered := map[string]any{
 		"interfaces": []any{
 			map[string]any{
-				"interface": "enp0s31f6",
-				"addresses": []any{"88.99.249.47/26"},
+				"interface":        "enp0s31f6",
+				testFieldAddresses: []any{testCIDR889924947_26},
 			},
 		},
 	}
@@ -1115,7 +1115,7 @@ func TestHasIdentityValue(t *testing.T) {
 		{"empty string", "", false},
 		{"non-empty string", "eth0", true},
 		{"empty map", map[string]any{}, false},
-		{"non-empty map", map[string]any{"hardwareAddr": "aa:bb:cc:dd:ee:ff"}, true},
+		{"non-empty map", map[string]any{"hardwareAddr": testMACFF}, true},
 		{"empty slice", []any{}, false},
 		{"non-empty slice", []any{"a"}, true},
 		{"int zero", 0, true},

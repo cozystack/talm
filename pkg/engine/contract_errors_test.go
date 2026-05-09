@@ -67,8 +67,8 @@ func renderExpectingError(t *testing.T, chartPath, talosVersion string, lookup f
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       merged,
-		"TalosVersion": talosVersion,
+		testKeyValues:       merged,
+		testKeyTalosVersion: talosVersion,
 	})
 	return err
 }
@@ -85,8 +85,8 @@ func TestContract_Errors_EndpointRequired(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, "", helmEngineEmptyLookup, map[string]any{
-				"endpoint":          "",
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"endpoint":                 "",
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected required-endpoint error, got nil")
@@ -115,14 +115,14 @@ func TestContract_Errors_AdvertisedSubnetsEmptyAndNoDiscovery(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, "", helmEngineEmptyLookup, map[string]any{
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{}, // explicit empty
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{}, // explicit empty
 			})
 			if err == nil {
 				t.Fatalf("expected advertisedSubnets-empty error, got nil")
 			}
 			msg := err.Error()
-			if !strings.Contains(msg, "advertisedSubnets") {
+			if !strings.Contains(msg, testFieldAdvertisedSubnets) {
 				t.Errorf("error must mention 'advertisedSubnets', got: %s", msg)
 			}
 			if !strings.Contains(msg, "default-gateway-bearing link") {
@@ -152,8 +152,8 @@ func legacyInterfacesLookup() func(string, string, string) (map[string]any, erro
 				"network": map[string]any{
 					"interfaces": []any{
 						map[string]any{
-							"interface": "eth0",
-							"addresses": []any{"192.168.1.10/24"},
+							"interface":        "eth0",
+							testFieldAddresses: []any{testCIDR19216811024},
 						},
 					},
 				},
@@ -178,8 +178,8 @@ func TestContract_Errors_MultidocLegacyInterfacesBlock(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, multidocTalos, legacyInterfacesLookup(), map[string]any{
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected legacy-interfaces fail, got nil")
@@ -221,17 +221,17 @@ func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error
 	}
 	links := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{br0},
 	}
 	routes := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "br0",
 					"family":      "inet4",
 					"table":       "main",
@@ -241,14 +241,14 @@ func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error
 	}
 	addresses := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "br0",
-					"address":  "192.168.1.10/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "br0",
+					testFieldAddress: testCIDR19216811024,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
@@ -264,7 +264,7 @@ func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error
 			}
 		case "routes":
 			return routes, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addresses, nil
 		}
 		return map[string]any{}, nil
@@ -282,8 +282,8 @@ func TestContract_Errors_MultidocBridgeAsGateway(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, multidocTalos, bridgeAsGatewayLookup(), map[string]any{
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected bridge-as-gateway fail, got nil")
@@ -324,17 +324,17 @@ func vlanMissingParentLookup() func(string, string, string) (map[string]any, err
 	}
 	links := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{vlan},
 	}
 	routes := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "vlan100",
 					"family":      "inet4",
 					"table":       "main",
@@ -367,8 +367,8 @@ func TestContract_Errors_MultidocVLANMissingParent(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, multidocTalos, vlanMissingParentLookup(), map[string]any{
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected vlan-missing-parent fail, got nil")
@@ -417,17 +417,17 @@ func vlanMissingVlanIDLookup() func(string, string, string) (map[string]any, err
 	}
 	links := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{parent, vlan},
 	}
 	routes := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "vlan100",
 					"family":      "inet4",
 					"table":       "main",
@@ -460,8 +460,8 @@ func TestContract_Errors_MultidocVLANMissingVlanID(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, multidocTalos, vlanMissingVlanIDLookup(), map[string]any{
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected vlan-missing-vlanID fail, got nil")

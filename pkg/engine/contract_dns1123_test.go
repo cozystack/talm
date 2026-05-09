@@ -49,8 +49,8 @@ func TestContract_DNS1123_ClusterName_HappyPaths(t *testing.T) {
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-				"clusterName":       name,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"clusterName":              name,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			assertContains(t, out, `clusterName: "`+name+`"`)
 		})
@@ -69,20 +69,20 @@ func TestContract_DNS1123_ClusterName_RejectsInvalid(t *testing.T) {
 		clusterName string
 		wantInError string // substring that must appear in the failure message
 	}{
-		{"uppercase", "MyCluster", "DNS-1123 subdomain"},
-		{"underscore", "my_cluster", "DNS-1123 subdomain"},
-		{"leading dash", "-bad", "DNS-1123 subdomain"},
-		{"trailing dash", "bad-", "DNS-1123 subdomain"},
-		{"space", "my cluster", "DNS-1123 subdomain"},
-		{"empty label between dots", "foo..bar", "DNS-1123 subdomain"},
+		{"uppercase", "MyCluster", testDNS1123Subdomain},
+		{"underscore", "my_cluster", testDNS1123Subdomain},
+		{"leading dash", "-bad", testDNS1123Subdomain},
+		{"trailing dash", "bad-", testDNS1123Subdomain},
+		{"space", "my cluster", testDNS1123Subdomain},
+		{"empty label between dots", "foo..bar", testDNS1123Subdomain},
 		{"subdomain too long", strings.Repeat("a", 254), "253"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
-				"clusterName":       tc.clusterName,
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"clusterName":              tc.clusterName,
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected render to fail for clusterName=%q", tc.clusterName)
@@ -106,9 +106,9 @@ func TestContract_DNS1123_ClusterName_RejectsInvalid(t *testing.T) {
 // coercion surfaces here.
 func TestContract_DNS1123_ClusterName_NumericYAMLScalarCoerced(t *testing.T) {
 	err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
-		"clusterName":       123,
-		"endpoint":          testEndpoint,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"clusterName":              123,
+		"endpoint":                 testEndpoint,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	if err == nil {
 		// Note: "123" is actually a valid DNS-1123 subdomain (digits
@@ -131,9 +131,9 @@ func TestContract_DNS1123_ClusterName_NumericYAMLScalarCoerced(t *testing.T) {
 // downstream validator wiring.
 func TestContract_DNS1123_ClusterName_InvalidNumericFailsCleanly(t *testing.T) {
 	err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
-		"clusterName":       -1,
-		"endpoint":          testEndpoint,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"clusterName":              -1,
+		"endpoint":                 testEndpoint,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	if err == nil {
 		t.Fatal("expected fail for clusterName=-1")
@@ -141,7 +141,7 @@ func TestContract_DNS1123_ClusterName_InvalidNumericFailsCleanly(t *testing.T) {
 	if strings.Contains(err.Error(), "len of type") {
 		t.Errorf("template crashed on numeric value; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "DNS-1123 subdomain") {
+	if !strings.Contains(err.Error(), testDNS1123Subdomain) {
 		t.Errorf("expected DNS-1123 subdomain message after coercion, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "clusterName") {
@@ -161,16 +161,16 @@ func TestContract_DNS1123_ClusterDomain_RejectsInvalid(t *testing.T) {
 		clusterDomain string
 		wantInError   string
 	}{
-		{"uppercase", "Cozy.Local", "DNS-1123 subdomain"},
-		{"underscore", "cozy_local", "DNS-1123 subdomain"},
+		{"uppercase", "Cozy.Local", testDNS1123Subdomain},
+		{"underscore", "cozy_local", testDNS1123Subdomain},
 		{"empty", "", "non-empty DNS-1123 subdomain"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
-				"clusterDomain":     tc.clusterDomain,
-				"endpoint":          testEndpoint,
-				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"clusterDomain":            tc.clusterDomain,
+				"endpoint":                 testEndpoint,
+				testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 			})
 			if err == nil {
 				t.Fatalf("expected render to fail for clusterDomain=%q", tc.clusterDomain)
@@ -193,7 +193,7 @@ func TestContract_DNS1123_ClusterDomain_RejectsInvalid(t *testing.T) {
 // quoting convention.
 func TestContract_DNS1123_ClusterDomain_DefaultPasses(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, `dnsDomain: "cozy.local"`)
 }
@@ -205,9 +205,9 @@ func TestContract_DNS1123_ClusterDomain_DefaultPasses(t *testing.T) {
 // only the cozystack template surfaces on generic too.
 func TestContract_DNS1123_GenericClusterName_RejectsInvalid(t *testing.T) {
 	err := renderExpectingError(t, genericChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
-		"clusterName":       "Invalid_Name",
-		"endpoint":          testEndpoint,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"clusterName":              "Invalid_Name",
+		"endpoint":                 testEndpoint,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	if err == nil {
 		t.Fatal("expected render to fail")
@@ -215,7 +215,7 @@ func TestContract_DNS1123_GenericClusterName_RejectsInvalid(t *testing.T) {
 	if !strings.Contains(err.Error(), "clusterName") {
 		t.Errorf("error must name 'clusterName' field, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "DNS-1123 subdomain") {
+	if !strings.Contains(err.Error(), testDNS1123Subdomain) {
 		t.Errorf("error must mention DNS-1123 subdomain, got: %v", err)
 	}
 }

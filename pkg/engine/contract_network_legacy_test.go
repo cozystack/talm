@@ -48,12 +48,12 @@ func TestContract_NetworkLegacy_HostnameAndNameserversAlwaysEmitted(t *testing.T
 		case resource == "hostname" && id == "hostname":
 			return map[string]any{"spec": map[string]any{"hostname": "node-prod-1"}}, nil
 		case resource == "resolvers" && id == "resolvers":
-			return map[string]any{"spec": map[string]any{"dnsServers": []any{"8.8.8.8", "1.1.1.1"}}}, nil
+			return map[string]any{"spec": map[string]any{"dnsServers": []any{"8.8.8.8", testIP1111}}}, nil
 		}
 		return map[string]any{}, nil
 	}
 	out := renderLegacyCozystackControlplane(t, lookup, map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "network:")
 	assertContains(t, out, `hostname: "node-prod-1"`)
@@ -74,7 +74,7 @@ func TestContract_NetworkLegacy_HostnameAndNameserversAlwaysEmitted(t *testing.T
 // — not the comment that contains the same substring.
 func TestContract_NetworkLegacy_NoInterfacesOnFreshBoot(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, freshNicLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// machine.network must exist (the section header is unconditional).
 	assertContains(t, out, "network:")
@@ -93,7 +93,7 @@ func TestContract_NetworkLegacy_NoInterfacesOnFreshBoot(t *testing.T) {
 // floatingIP is set.
 func TestContract_NetworkLegacy_PlainNICInterfaceShape(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "interfaces:")
 	assertContains(t, out, "- interface: eth0")
@@ -109,8 +109,8 @@ func TestContract_NetworkLegacy_PlainNICInterfaceShape(t *testing.T) {
 // floatingIP is set (Talos enforces VIP on controlplane only).
 func TestContract_NetworkLegacy_FloatingIPInlineVipOnControlplane(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "vip:")
 	assertContains(t, out, "ip: 192.168.201.99")
@@ -121,8 +121,8 @@ func TestContract_NetworkLegacy_FloatingIPInlineVipOnControlplane(t *testing.T) 
 // machineType check" regression that would fragment cluster identity.
 func TestContract_NetworkLegacy_NoVipOnWorker(t *testing.T) {
 	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/worker.yaml", simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "interfaces:")
 	assertContains(t, out, "- interface: eth0")
@@ -138,7 +138,7 @@ func TestContract_NetworkLegacy_NoVipOnWorker(t *testing.T) {
 // top-level interface — it lives inside its parent's `vlans:` list.
 func TestContract_NetworkLegacy_VLANNestedUnderParentInterface(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, multiNicWithVLANLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// multiNicWithVLANLookup carries the default route on a VLAN link
 	// stacked on a physical NIC; legacy renders the parent NIC at top
@@ -158,7 +158,7 @@ func TestContract_NetworkLegacy_VLANNestedUnderParentInterface(t *testing.T) {
 // bond owns them.
 func TestContract_NetworkLegacy_BondNestedBondBlock(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, bondTopologyLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "- interface: bond0")
 	assertContains(t, out, "bond:")
@@ -181,9 +181,9 @@ func TestContract_NetworkLegacy_BondNestedBondBlock(t *testing.T) {
 // legacy-schema mirror of multi-doc Layer2VIPConfig override.
 func TestContract_NetworkLegacy_VipLinkOverrideEmitsSeparateEntry(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// Both interfaces[] entries present.
 	assertContains(t, out, "- interface: eth0")
@@ -204,9 +204,9 @@ func TestContract_NetworkLegacy_VipLinkOverrideEmitsSeparateEntry(t *testing.T) 
 // identical entry would be redundant.
 func TestContract_NetworkLegacy_VipLinkOverrideMatchingDefaultLinkNoExtraEntry(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, simpleNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.99",
-		"vipLink":           "eth0",
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":               testIP19216820199,
+		"vipLink":                  "eth0",
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	// Only one interface entry total, with inline vip.
 	if got := strings.Count(out, "- interface: eth0"); got != 1 {
@@ -232,11 +232,11 @@ func TestContract_NetworkLegacy_VipLinkOverrideMatchingDefaultLinkNoExtraEntry(t
 // chart's auto-derived format" — those are different paths.
 func TestContract_NetworkLegacy_ExistingInterfacesShortCircuit(t *testing.T) {
 	out := renderLegacyCozystackControlplane(t, legacyInterfacesLookup(), map[string]any{
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "interfaces:")
 	// Operator's interface name surfaces (without the leading `- `:
 	// addresses sorts first in the YAML round-trip).
 	assertContains(t, out, "interface: eth0")
-	assertContains(t, out, "192.168.1.10/24")
+	assertContains(t, out, testCIDR19216811024)
 }

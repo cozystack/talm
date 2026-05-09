@@ -292,7 +292,7 @@ func TestContract_LoadValues_SetFileMissingErrors(t *testing.T) {
 
 // Contract: missing -f value file is an error naming the path.
 func TestContract_LoadValues_ValueFileMissingErrors(t *testing.T) {
-	_, err := loadValues(Options{ValueFiles: []string{"/path/that/does/not/exist.yaml"}})
+	_, err := loadValues(Options{ValueFiles: []string{testMissingValuesPath}})
 	if err == nil {
 		t.Fatal("expected error for missing values file")
 	}

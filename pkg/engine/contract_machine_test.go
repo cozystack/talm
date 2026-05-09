@@ -186,8 +186,8 @@ func TestContract_Machine_Sysctls_NrHugepages_AbsentByDefault_Cozystack(t *testi
 // (non-zero), so 0 stays absent.
 func TestContract_Machine_Sysctls_NrHugepages_PresentWhenSet_Cozystack(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"nr_hugepages":      1024,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"nr_hugepages":             1024,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, `vm.nr_hugepages: "1024"`)
 }
@@ -291,8 +291,8 @@ func TestContract_Machine_Install_Image_DefaultsToCozystackBuild(t *testing.T) {
 func TestContract_Machine_Install_Image_Override_Cozystack(t *testing.T) {
 	const customImage = "registry.example.com/talos:custom-build"
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
-		"image":             customImage,
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"image":                    customImage,
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "image: "+customImage)
 }
@@ -356,8 +356,8 @@ func TestContract_Machine_GenericCertSANs_AbsentByDefault(t *testing.T) {
 // cluster.apiServer.certSANs (controlplane only) with no extra entries.
 func TestContract_Machine_GenericCertSANs_AppendsBothLevels(t *testing.T) {
 	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
-		"certSANs":          []any{"san.example.com"},
-		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"certSANs":                 []any{"san.example.com"},
+		testFieldAdvertisedSubnets: []any{testAdvertisedSubnet},
 	})
 	assertContains(t, out, "- san.example.com")
 	assertNotContains(t, out, "- 127.0.0.1")

@@ -107,13 +107,13 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	rootValues := chartutil.Values{
-		"Values":       values,
-		"TalosVersion": tv,
+		testKeyValues:       values,
+		testKeyTalosVersion: tv,
 	}
 
 	eng := helmEngine.Engine{}
@@ -166,13 +166,13 @@ func renderChartTemplateWithLookup(t *testing.T, chartPath string, templateFile 
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	rootValues := chartutil.Values{
-		"Values":       values,
-		"TalosVersion": tv,
+		testKeyValues:       values,
+		testKeyTalosVersion: tv,
 	}
 
 	eng := helmEngine.Engine{}
@@ -442,11 +442,11 @@ func TestLegacyCozystack_NrHugepages(t *testing.T) {
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
 	values["endpoint"] = testEndpoint
-	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values": values,
+		testKeyValues: values,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -473,12 +473,12 @@ func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 	maps.Copy(values, chrt.Values)
 	values["nr_hugepages"] = 1024
 	values["endpoint"] = testEndpoint
-	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -614,7 +614,7 @@ machine:
 	}
 
 	rootValues := map[string]any{
-		"Values": chrt.Values,
+		testKeyValues: chrt.Values,
 	}
 
 	t.Run("offline_produces_empty_interface", func(t *testing.T) {
@@ -651,12 +651,12 @@ machine:
 			if resource == "routes" && name == "" {
 				return map[string]any{
 					"apiVersion": "v1",
-					"kind":       "List",
+					"kind":       testCOSIKindList,
 					"items": []any{
 						map[string]any{
 							"spec": map[string]any{
 								"dst":         "",
-								"gateway":     "192.168.1.1",
+								"gateway":     testIP1921681_1,
 								"outLinkName": "eth0",
 								"table":       "main",
 							},
@@ -721,12 +721,12 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 			"kind":  "bond",
 			"index": 10,
 			"bondMaster": map[string]any{
-				"mode":           "802.3ad",
+				"mode":           testBondMode8023ad,
 				"xmitHashPolicy": "layer3+4",
 				"lacpRate":       "fast",
 				"miimon":         100,
 			},
-			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"hardwareAddr": testMACFF,
 			"busPath":      "pci-0000:00:1f.6",
 		},
 	}
@@ -736,7 +736,7 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 			"kind":         "physical",
 			"slaveKind":    "bond",
 			"masterIndex":  10,
-			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"hardwareAddr": testMAC00,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -746,18 +746,18 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 			"kind":         "physical",
 			"slaveKind":    "bond",
 			"masterIndex":  10,
-			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"hardwareAddr": testMAC01,
 			"busPath":      "pci-0000:00:1f.1",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "bond0",
 					"family":      "inet4",
 					"table":       "main",
@@ -767,31 +767,31 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{bondLink, eth0, eth1},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "bond0",
-					"address":  "192.168.1.100/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "bond0",
+					testFieldAddress: testCIDR1921681100_24,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.1.100/24"},
+			testFieldAddresses: []any{testCIDR1921681100_24},
 		},
 	}
 	resolvers := map[string]any{
 		"spec": map[string]any{
-			"dnsServers": []any{"8.8.8.8", "1.1.1.1"},
+			"dnsServers": []any{"8.8.8.8", testIP1111},
 		},
 	}
 	return func(resource, namespace, id string) (map[string]any, error) {
@@ -806,7 +806,7 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -830,9 +830,9 @@ func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, er
 			"kind":  "bond",
 			"index": 10,
 			"bondMaster": map[string]any{
-				"mode": "802.3ad",
+				"mode": testBondMode8023ad,
 			},
-			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"hardwareAddr": testMACFF,
 			"busPath":      "pci-0000:00:1f.6",
 		},
 	}
@@ -851,7 +851,7 @@ func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, er
 			"kind":         "physical",
 			"slaveKind":    "bond",
 			"masterIndex":  10,
-			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"hardwareAddr": testMAC00,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -861,18 +861,18 @@ func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, er
 			"kind":         "physical",
 			"slaveKind":    "bond",
 			"masterIndex":  10,
-			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"hardwareAddr": testMAC01,
 			"busPath":      "pci-0000:00:1f.1",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "10.0.0.1",
+					"gateway":     testIP10001,
 					"outLinkName": "bond0.100",
 					"family":      "inet4",
 					"table":       "main",
@@ -882,26 +882,26 @@ func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, er
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{bondLink, vlanLink, eth0, eth1},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "bond0.100",
-					"address":  "10.0.0.50/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "bond0.100",
+					testFieldAddress: testCIDR100050_24,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"10.0.0.50/24"},
+			testFieldAddresses: []any{testCIDR100050_24},
 		},
 	}
 	resolvers := map[string]any{
@@ -923,7 +923,7 @@ func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, er
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -954,8 +954,8 @@ func TestMultiDocCozystack_BondTopology(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -991,8 +991,8 @@ func TestMultiDocCozystack_VlanOnBondTopology(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1025,8 +1025,8 @@ func TestMultiDocGeneric_BondTopology(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1058,8 +1058,8 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1085,7 +1085,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 		"metadata": map[string]any{"id": "eth0"},
 		"spec": map[string]any{
 			"kind":         "physical",
-			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"hardwareAddr": testMAC00,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -1093,7 +1093,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 		"metadata": map[string]any{"id": "eth1"},
 		"spec": map[string]any{
 			"kind":         "physical",
-			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"hardwareAddr": testMAC01,
 			"busPath":      "pci-0000:00:1f.1",
 		},
 	}
@@ -1107,7 +1107,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
@@ -1121,7 +1121,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -1140,35 +1140,35 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, eth1, eth2},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "eth0",
-					"address":  "192.168.1.10/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "eth0",
+					testFieldAddress: testCIDR19216811024,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "eth1",
-					"address":  "10.99.0.5/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "eth1",
+					testFieldAddress: "10.99.0.5/24",
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "eth2",
-					"address":  "192.168.2.10/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "eth2",
+					testFieldAddress: "192.168.2.10/24",
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
@@ -1189,7 +1189,7 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		}
 		return map[string]any{}, nil
@@ -1240,7 +1240,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 		"metadata": map[string]any{"id": "eth0"},
 		"spec": map[string]any{
 			"kind":         "physical",
-			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"hardwareAddr": testMAC00,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -1248,7 +1248,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 		"metadata": map[string]any{"id": "eth1"},
 		"spec": map[string]any{
 			"kind":         "physical",
-			"hardwareAddr": "aa:bb:cc:dd:ee:01",
+			"hardwareAddr": testMAC01,
 			"busPath":      "pci-0000:00:1f.1",
 		},
 	}
@@ -1256,12 +1256,12 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 		"metadata": map[string]any{"id": "bond0"},
 		"spec": map[string]any{
 			"kind":         "bond",
-			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"hardwareAddr": testMACFF,
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			// IPv6 default route ordered first so a missing family filter in
 			// gateway_by_link would return fe80::1 instead of the IPv4
@@ -1279,7 +1279,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.1.1",
+					"gateway":     testIP1921681_1,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -1288,7 +1288,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 			},
 			map[string]any{
 				"spec": map[string]any{
-					"dst":         "10.0.0.0/24",
+					"dst":         testCIDR10000_24,
 					"gateway":     "",
 					"outLinkName": "eth1",
 					"family":      "inet4",
@@ -1320,7 +1320,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "203.0.113.0/24",
-					"gateway":     "10.0.0.1",
+					"gateway":     testIP10001,
 					"outLinkName": "eth1",
 					"family":      "inet4",
 					"table":       "main",
@@ -1331,23 +1331,23 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, eth1, bond0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.1.10/24", "family": "inet4", "scope": "global"}},
-			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.0.0.5/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR19216811024, "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", testFieldAddress: testCIDR10005_24, "family": "inet4", "scope": "global"}},
 			// IPv6 link-local on a configurable link — addresses_by_link must
 			// filter scope=link out so callers never configure fe80::/64.
-			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "fe80::aa:bbff:fecc:dd01/64", "family": "inet6", "scope": "link"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", testFieldAddress: "fe80::aa:bbff:fecc:dd01/64", "family": "inet6", "scope": "link"}},
 			// Address with no scope set at all — must also be filtered out
 			// (defensive: real Talos always emits scope, but missing-field
 			// safety matters for user mocks and future API changes).
-			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.99.99.99/32", "family": "inet4"}},
-			map[string]any{"spec": map[string]any{"linkName": "lo", "address": "127.0.0.1/8", "family": "inet4", "scope": "host"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", testFieldAddress: "10.99.99.99/32", "family": "inet4"}},
+			map[string]any{"spec": map[string]any{"linkName": "lo", testFieldAddress: "127.0.0.1/8", "family": "inet4", "scope": "host"}},
 		},
 	}
 	return func(resource, _, id string) (map[string]any, error) {
@@ -1366,7 +1366,7 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		}
 		return map[string]any{}, nil
@@ -1560,7 +1560,7 @@ func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
 		// route's family; without that, the rendered LinkConfig.addresses
 		// is empty (no IPv6 addresses exist on the node) and the chart
 		// produces a config that does not configure the primary NIC at all.
-		if !strings.Contains(output, "192.168.201.10/24") {
+		if !strings.Contains(output, testCIDR192168201024) {
 			t.Errorf("expected rendered address 192.168.201.10/24 (default_addresses_by_gateway must follow the IPv4 default route), got:\n%s", output)
 		}
 	})
@@ -1580,7 +1580,7 @@ func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
 		if strings.Contains(output, "gateway: fe80::1") {
 			t.Errorf("generic chart: rendered route uses IPv6 gateway fe80::1:\n%s", output)
 		}
-		if !strings.Contains(output, "192.168.201.10/24") {
+		if !strings.Contains(output, testCIDR192168201024) {
 			t.Errorf("generic chart: expected rendered address 192.168.201.10/24, got:\n%s", output)
 		}
 	})
@@ -1609,7 +1609,7 @@ func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
 		if strings.Contains(output, "gateway: fe80::1") {
 			t.Errorf("rendered route uses IPv6 gateway fe80::1, got:\n%s", output)
 		}
-		if !strings.Contains(output, "192.168.201.10/24") {
+		if !strings.Contains(output, testCIDR192168201024) {
 			t.Errorf("expected rendered address 192.168.201.10/24, got:\n%s", output)
 		}
 	})
@@ -1655,10 +1655,10 @@ func TestMultiDocRendersAllConfigurableLinks(t *testing.T) {
 	}
 	// Each link's addresses must come from its own discovery, not from
 	// the gateway link's addresses.
-	if !strings.Contains(output, "192.168.201.10/24") {
+	if !strings.Contains(output, testCIDR192168201024) {
 		t.Errorf("expected eth0 address 192.168.201.10/24 in merged output:\n%s", output)
 	}
-	if !strings.Contains(output, "10.0.0.5/24") {
+	if !strings.Contains(output, testCIDR10005_24) {
 		t.Errorf("expected eth1 address 10.0.0.5/24 (storage NIC) in merged output — by-link addresses were dropped:\n%s", output)
 	}
 }
@@ -1689,7 +1689,7 @@ func TestMultiDocEmitsVLANConfigForDiscoveredVLAN(t *testing.T) {
 	if !strings.Contains(output, "parent: eth0") {
 		t.Errorf("expected parent: eth0 on the VLANConfig, got:\n%s", output)
 	}
-	if !strings.Contains(output, "192.168.100.2/24") {
+	if !strings.Contains(output, testCIDR1921681002_24) {
 		t.Errorf("expected VLAN address 192.168.100.2/24 on the VLANConfig, got:\n%s", output)
 	}
 }
@@ -1705,11 +1705,11 @@ func TestMultiDocEmitsVLANConfigForDiscoveredVLAN(t *testing.T) {
 // causing a config tug-of-war between leader and follower nodes.
 func TestMultiDocLinkConfigStripsFloatingIPFromAddresses(t *testing.T) {
 	output := renderCozystackWith(t, vipActiveOnLinkLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 	})
 
 	// Permanent address must remain.
-	if !strings.Contains(output, "192.168.201.10/24") {
+	if !strings.Contains(output, testCIDR192168201024) {
 		t.Errorf("expected permanent address 192.168.201.10/24 on LinkConfig, got:\n%s", output)
 	}
 	// floatingIP/32 must NOT appear under any LinkConfig.addresses.
@@ -1743,14 +1743,14 @@ func TestMultiDocFailsWhenBridgeCarriesDefaultRoute(t *testing.T) {
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail when a bridge carries the IPv4 default route — silent drop of every network document for the gateway link is the regression this guardrail prevents")
@@ -1799,14 +1799,14 @@ func TestMultiDocFailsWhenVLANHasNoVlanID(t *testing.T) {
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail when a VLAN link is missing vlanID — the field is required by Talos and an emitted VLANConfig without it is rejected on apply")
@@ -1823,7 +1823,7 @@ func TestMultiDocFailsWhenVLANHasNoVlanID(t *testing.T) {
 // existing TestMultiDocCozystack_Layer2VIPConfigWhenFloatingIPSet.
 func TestMultiDocLayer2VIPLinkOnBondDefaultGateway(t *testing.T) {
 	output := renderCozystackWith(t, bondWithSlavesLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 	})
 
 	if !strings.Contains(output, "kind: Layer2VIPConfig") {
@@ -1853,14 +1853,14 @@ func TestMultiDocFailsWhenVLANHasNoParent(t *testing.T) {
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail when a VLAN link is missing a resolvable parent — emitting VLANConfig without the required parent field is rejected by Talos at apply time")
@@ -1997,14 +1997,14 @@ func TestMultiDocFailsOnLegacyInterfacesInRunningConfig(t *testing.T) {
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	if arr, ok := values[testFieldAdvertisedSubnets].([]any); !ok || len(arr) == 0 {
+		values[testFieldAdvertisedSubnets] = []any{testAdvertisedSubnet}
 	}
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail when running config carries legacy machine.network.interfaces[] — silent drop of user's interfaces is the regression this guardrail is for")
@@ -2425,7 +2425,7 @@ cluster:
 		if got := strings.Count(out, "127.0.0.1"); got != 2 {
 			t.Errorf("expected 127.0.0.1 to appear twice (once under each certSANs), got %d:\n%s", got, out)
 		}
-		if got := strings.Count(out, "1.1.1.1"); got != 1 {
+		if got := strings.Count(out, testIP1111); got != 1 {
 			t.Errorf("nameservers entry 1.1.1.1 duplicated (count=%d):\n%s", got, out)
 		}
 		if got := strings.Count(out, "8.8.8.8"); got != 1 {
@@ -2539,13 +2539,13 @@ cluster:
 			t.Fatalf("MergeFileAsPatch: %v", err)
 		}
 		out := string(merged)
-		if got := strings.Count(out, "88.99.249.47/26"); got != 1 {
+		if got := strings.Count(out, testCIDR889924947_26); got != 1 {
 			t.Errorf("rendered interface address 88.99.249.47/26 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
 		}
 		if got := strings.Count(out, "88.99.249.1"); got != 1 {
 			t.Errorf("rendered route gateway 88.99.249.1 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
 		}
-		if !strings.Contains(out, "10.0.0.99/24") {
+		if !strings.Contains(out, testCIDR1000099_24) {
 			t.Errorf("user-added address 10.0.0.99/24 missing from merged output:\n%s", out)
 		}
 	})
@@ -2603,7 +2603,7 @@ cluster:
 			t.Fatalf("MergeFileAsPatch: %v", err)
 		}
 		out := string(merged)
-		if got := strings.Count(out, "192.168.100.2/24"); got != 1 {
+		if got := strings.Count(out, testCIDR1921681002_24); got != 1 {
 			t.Errorf("rendered vlan address 192.168.100.2/24 duplicated by partial-edit round-trip (count=%d):\n%s", got, out)
 		}
 		if !strings.Contains(out, "192.168.100.3/24") {
@@ -3183,7 +3183,7 @@ cluster:
 		// addresses intact (upstream will then reject it at validation,
 		// but that's not the prune's concern). The prune must not
 		// silently consume it onto rendered's eth0.
-		if !strings.Contains(out, "10.0.0.5/24") {
+		if !strings.Contains(out, testCIDR10005_24) {
 			t.Errorf("body item without identity field silently consumed onto rendered's eth0:\n%s", out)
 		}
 		if !strings.Contains(out, "10.0.0.1/24") {
@@ -3263,7 +3263,7 @@ cluster:
 		if !strings.Contains(out, "interface: eth0") {
 			t.Errorf("user-added interface eth0 silently lost (deviceSelector fallback consumed it):\n%s", out)
 		}
-		if got := strings.Count(out, "10.0.0.5/24"); got != 2 {
+		if got := strings.Count(out, testCIDR10005_24); got != 2 {
 			t.Errorf("expected 10.0.0.5/24 to appear twice (once under each interface), got %d:\n%s", got, out)
 		}
 		// rendered's eth1 must remain.
@@ -3394,10 +3394,10 @@ cluster:
 		if !strings.Contains(out, "eth1") {
 			t.Errorf("user-added interface eth1 missing from merged output:\n%s", out)
 		}
-		if !strings.Contains(out, "10.0.0.5/24") {
+		if !strings.Contains(out, testCIDR10005_24) {
 			t.Errorf("user-added address 10.0.0.5/24 missing from merged output:\n%s", out)
 		}
-		if got := strings.Count(out, "88.99.249.47/26"); got != 1 {
+		if got := strings.Count(out, testCIDR889924947_26); got != 1 {
 			t.Errorf("rendered address 88.99.249.47/26 duplicated when body adds a new interface (count=%d):\n%s", got, out)
 		}
 	})
@@ -3521,7 +3521,7 @@ machine:
 		if strings.Contains(out, "hostname: rescue") {
 			t.Errorf("rendered hostname survived merge: %s", out)
 		}
-		if got := strings.Count(out, "1.1.1.1"); got != 1 {
+		if got := strings.Count(out, testIP1111); got != 1 {
 			t.Errorf("nameservers 1.1.1.1 duplicated despite identity-pruning (count=%d):\n%s", got, out)
 		}
 	})
@@ -3769,7 +3769,7 @@ machine:
 	if strings.Contains(out, "$patch: delete") {
 		t.Errorf("merged output still carries the directive literal — Talos will reject it on ApplyConfiguration:\n%s", out)
 	}
-	if !strings.Contains(out, "1.1.1.1") {
+	if !strings.Contains(out, testIP1111) {
 		t.Errorf("nameservers (an untouched sibling field) lost from merge:\n%s", out)
 	}
 }
@@ -3962,7 +3962,7 @@ func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+			ctx := client.WithNodes(context.Background(), testIP10001, "10.0.0.2")
 			opts := Options{
 				Offline:     false,
 				CommandName: tt.commandName,
@@ -3981,7 +3981,7 @@ func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 		// If a caller passes "talm apply", the error must not carry any
 		// other subcommand name — historically the call site here emitted
 		// "talm template" unconditionally.
-		ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+		ctx := client.WithNodes(context.Background(), testIP10001, "10.0.0.2")
 		opts := Options{Offline: false, CommandName: "talm apply"}
 		_, err := Render(ctx, nil, opts)
 		if err == nil {
@@ -4040,18 +4040,18 @@ func simpleNicLookup() func(string, string, string) (map[string]any, error) {
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4061,26 +4061,26 @@ func simpleNicLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "eth0",
-					"address":  "192.168.201.10/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "eth0",
+					testFieldAddress: testCIDR192168201024,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4100,7 +4100,7 @@ func simpleNicLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4128,13 +4128,13 @@ func dualStackNicLookup() func(string, string, string) (map[string]any, error) {
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			// IPv6 default route ordered first — a missing family
 			// filter in default_gateway would return fe80::1.
@@ -4151,7 +4151,7 @@ func dualStackNicLookup() func(string, string, string) (map[string]any, error) {
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4162,26 +4162,26 @@ func dualStackNicLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
-					"linkName": "eth0",
-					"address":  "192.168.201.10/24",
-					"family":   "inet4",
-					"scope":    "global",
+					"linkName":       "eth0",
+					testFieldAddress: testCIDR192168201024,
+					"family":         "inet4",
+					"scope":          "global",
 				},
 			},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4201,7 +4201,7 @@ func dualStackNicLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4230,7 +4230,7 @@ func multiNicLookup() func(string, string, string) (map[string]any, error) {
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 			"mtu":          1500,
 		},
@@ -4240,19 +4240,19 @@ func multiNicLookup() func(string, string, string) (map[string]any, error) {
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        2,
-			"hardwareAddr": "aa:bb:cc:00:00:02",
+			"hardwareAddr": testMAC000002,
 			"busPath":      "pci-0000:00:1f.1",
 			"mtu":          9000,
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4261,8 +4261,8 @@ func multiNicLookup() func(string, string, string) (map[string]any, error) {
 			},
 			map[string]any{
 				"spec": map[string]any{
-					"dst":         "10.0.0.0/24",
-					"gateway":     "10.0.0.1",
+					"dst":         testCIDR10000_24,
+					"gateway":     testIP10001,
 					"outLinkName": "eth1",
 					"family":      "inet4",
 					"table":       "main",
@@ -4273,20 +4273,20 @@ func multiNicLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, eth1},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
-			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "10.0.0.5/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", testFieldAddress: testCIDR10005_24, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4308,7 +4308,7 @@ func multiNicLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4336,7 +4336,7 @@ func multiNicWithVLANLookup() func(string, string, string) (map[string]any, erro
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 			"mtu":          1500,
 		},
@@ -4353,7 +4353,7 @@ func multiNicWithVLANLookup() func(string, string, string) (map[string]any, erro
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
@@ -4369,20 +4369,20 @@ func multiNicWithVLANLookup() func(string, string, string) (map[string]any, erro
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, vlan},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "88.99.249.47/26", "family": "inet4", "scope": "global"}},
-			map[string]any{"spec": map[string]any{"linkName": "eth0.4000", "address": "192.168.100.2/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR889924947_26, "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0.4000", testFieldAddress: testCIDR1921681002_24, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.100.2/24"},
+			testFieldAddresses: []any{testCIDR1921681002_24},
 		},
 	}
 	resolvers := map[string]any{
@@ -4404,7 +4404,7 @@ func multiNicWithVLANLookup() func(string, string, string) (map[string]any, erro
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4434,18 +4434,18 @@ func legacyInterfacesInRunningConfigLookup() func(string, string, string) (map[s
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4455,14 +4455,14 @@ func legacyInterfacesInRunningConfigLookup() func(string, string, string) (map[s
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	machineConfig := map[string]any{
@@ -4474,7 +4474,7 @@ func legacyInterfacesInRunningConfigLookup() func(string, string, string) (map[s
 							"interface": "eth0",
 							"mtu":       9000,
 							"vlans": []any{
-								map[string]any{"vlanId": 4000, "addresses": []any{"192.168.100.2/24"}},
+								map[string]any{"vlanId": 4000, testFieldAddresses: []any{testCIDR1921681002_24}},
 							},
 						},
 					},
@@ -4484,7 +4484,7 @@ func legacyInterfacesInRunningConfigLookup() func(string, string, string) (map[s
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4504,7 +4504,7 @@ func legacyInterfacesInRunningConfigLookup() func(string, string, string) (map[s
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4537,7 +4537,7 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 			"slaveKind":    "bond",
 			"masterIndex":  3,
@@ -4549,7 +4549,7 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        2,
-			"hardwareAddr": "aa:bb:cc:00:00:02",
+			"hardwareAddr": testMAC000002,
 			"busPath":      "pci-0000:00:1f.1",
 			"slaveKind":    "bond",
 			"masterIndex":  3,
@@ -4561,10 +4561,10 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 		"spec": map[string]any{
 			"kind":         "bond",
 			"index":        3,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"mtu":          9000,
 			"bondMaster": map[string]any{
-				"mode":           "802.3ad",
+				"mode":           testBondMode8023ad,
 				"xmitHashPolicy": "layer2+3",
 				"miimon":         100,
 			},
@@ -4572,12 +4572,12 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "bond0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4588,19 +4588,19 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, eth1, bond0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "bond0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "bond0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4624,7 +4624,7 @@ func bondWithSlavesLookup() func(string, string, string) (map[string]any, error)
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4652,7 +4652,7 @@ func bondWithoutBondMasterLookup() func(string, string, string) (map[string]any,
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 			"slaveKind":    "bond",
 			"masterIndex":  2,
@@ -4663,17 +4663,17 @@ func bondWithoutBondMasterLookup() func(string, string, string) (map[string]any,
 		"spec": map[string]any{
 			"kind":         "bond",
 			"index":        2,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "bond0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4683,19 +4683,19 @@ func bondWithoutBondMasterLookup() func(string, string, string) (map[string]any,
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, bond0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "bond0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "bond0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4717,7 +4717,7 @@ func bondWithoutBondMasterLookup() func(string, string, string) (map[string]any,
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4743,7 +4743,7 @@ func bridgeLookup() func(string, string, string) (map[string]any, error) {
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -4756,12 +4756,12 @@ func bridgeLookup() func(string, string, string) (map[string]any, error) {
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4771,19 +4771,19 @@ func bridgeLookup() func(string, string, string) (map[string]any, error) {
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, br0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4805,7 +4805,7 @@ func bridgeLookup() func(string, string, string) (map[string]any, error) {
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4832,18 +4832,18 @@ func vipActiveOnLinkLookup() func(string, string, string) (map[string]any, error
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4853,20 +4853,20 @@ func vipActiveOnLinkLookup() func(string, string, string) (map[string]any, error
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.5/32", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: "192.168.201.5/32", "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4886,7 +4886,7 @@ func vipActiveOnLinkLookup() func(string, string, string) (map[string]any, error
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4917,12 +4917,12 @@ func bridgeWithGatewayLookup() func(string, string, string) (map[string]any, err
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "br0",
 					"family":      "inet4",
 					"table":       "main",
@@ -4932,19 +4932,19 @@ func bridgeWithGatewayLookup() func(string, string, string) (map[string]any, err
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{br0},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "br0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "br0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -4964,7 +4964,7 @@ func bridgeWithGatewayLookup() func(string, string, string) (map[string]any, err
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -4989,7 +4989,7 @@ func vlanWithoutVlanIDLookup() func(string, string, string) (map[string]any, err
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -5003,12 +5003,12 @@ func vlanWithoutVlanIDLookup() func(string, string, string) (map[string]any, err
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -5018,19 +5018,19 @@ func vlanWithoutVlanIDLookup() func(string, string, string) (map[string]any, err
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, vlan},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -5052,7 +5052,7 @@ func vlanWithoutVlanIDLookup() func(string, string, string) (map[string]any, err
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -5079,7 +5079,7 @@ func vlanWithoutParentLookup() func(string, string, string) (map[string]any, err
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -5095,12 +5095,12 @@ func vlanWithoutParentLookup() func(string, string, string) (map[string]any, err
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -5110,19 +5110,19 @@ func vlanWithoutParentLookup() func(string, string, string) (map[string]any, err
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, vlan},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -5144,7 +5144,7 @@ func vlanWithoutParentLookup() func(string, string, string) (map[string]any, err
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -5176,7 +5176,7 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        1,
-			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"hardwareAddr": testMAC000001,
 			"busPath":      "pci-0000:00:1f.0",
 		},
 	}
@@ -5185,13 +5185,13 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 		"spec": map[string]any{
 			"kind":         "physical",
 			"index":        2,
-			"hardwareAddr": "aa:bb:cc:00:00:02",
+			"hardwareAddr": testMAC000002,
 			"busPath":      "pci-0000:00:1f.1",
 		},
 	}
 	routesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
 			map[string]any{
 				"spec": map[string]any{
@@ -5206,7 +5206,7 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 			map[string]any{
 				"spec": map[string]any{
 					"dst":         "",
-					"gateway":     "192.168.201.1",
+					"gateway":     testIP1921682011,
 					"outLinkName": "eth0",
 					"family":      "inet4",
 					"table":       "main",
@@ -5217,20 +5217,20 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 	}
 	linksList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{eth0, eth1},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items": []any{
-			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
-			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "2001:db8::a/64", "family": "inet6", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", testFieldAddress: testCIDR192168201024, "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", testFieldAddress: "2001:db8::a/64", "family": "inet6", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
 		"spec": map[string]any{
-			"addresses": []any{"192.168.201.10/24"},
+			testFieldAddresses: []any{testCIDR192168201024},
 		},
 	}
 	resolvers := map[string]any{
@@ -5252,7 +5252,7 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 				return linksList, nil
 			}
 			return map[string]any{}, nil
-		case "addresses":
+		case testFieldAddresses:
 			return addressesList, nil
 		case "nodeaddress":
 			if id == "default" {
@@ -5276,12 +5276,12 @@ func dualStackTwoNicsLookup() func(string, string, string) (map[string]any, erro
 func freshNicLookup() func(string, string, string) (map[string]any, error) {
 	emptyList := map[string]any{
 		"apiVersion": "v1",
-		"kind":       "List",
+		"kind":       testCOSIKindList,
 		"items":      []any{},
 	}
 	return func(resource, namespace, id string) (map[string]any, error) {
 		switch resource {
-		case "routes", "links", "addresses":
+		case "routes", "links", testFieldAddresses:
 			return emptyList, nil
 		}
 		return map[string]any{}, nil
@@ -5315,8 +5315,8 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -5345,8 +5345,8 @@ func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[st
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -5363,7 +5363,7 @@ func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[st
 // kubelet.validSubnets value.
 func TestMultiDocCozystack_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{},
+		testFieldAdvertisedSubnets: []any{},
 	})
 
 	// The discovered CIDR must appear under kubelet.validSubnets and
@@ -5379,7 +5379,7 @@ func TestMultiDocCozystack_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 // the same fallback behavior on etcd.advertisedSubnets.
 func TestMultiDocCozystack_AdvertisedSubnetsFallsBackToDiscovery(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{},
+		testFieldAdvertisedSubnets: []any{},
 	})
 
 	// etcd.advertisedSubnets section must appear (controlplane only)
@@ -5402,7 +5402,7 @@ func TestMultiDocCozystack_AdvertisedSubnetsFallsBackToDiscovery(t *testing.T) {
 // in the two subnet-selector fields.
 func TestMultiDocCozystack_ValuesAdvertisedSubnetsOverridesDiscovery(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{"10.0.0.0/8"},
+		testFieldAdvertisedSubnets: []any{"10.0.0.0/8"},
 	})
 
 	// Expect 10.0.0.0/8 to appear at least twice — once in
@@ -5441,8 +5441,8 @@ func TestMultiDocCozystack_EndpointRequired(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail with required() error when endpoint is empty")
@@ -5465,12 +5465,12 @@ func TestMultiDocCozystack_InvalidClusterNameOverride(t *testing.T) {
 	}
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
-	values["clusterName"] = "InvalidClusterName"
+	values["clusterName"] = testInvalidClusterName
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail with required() error when clusterName is invalid")
@@ -5504,12 +5504,12 @@ func TestMultiDocGeneric_InvalidClusterNameOverride(t *testing.T) {
 	}
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
-	values["clusterName"] = "InvalidClusterName"
+	values["clusterName"] = testInvalidClusterName
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail with required() error when clusterName is invalid")
@@ -5536,7 +5536,7 @@ func TestMultiDocGeneric_ValidClusterNameOverride(t *testing.T) {
 // the generic copy of the shared machine/cluster block.
 func TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 	result := renderGenericWith(t, simpleNicLookup(), map[string]any{
-		"advertisedSubnets": []any{},
+		testFieldAdvertisedSubnets: []any{},
 	})
 
 	assertContains(t, result, "validSubnets:")
@@ -5554,7 +5554,7 @@ func TestMultiDocGeneric_ValidSubnetsFallsBackToDiscovery(t *testing.T) {
 // the VIP on a not-yet-existing VLAN sub-interface.
 func TestMultiDocGeneric_VIPLinkOverride(t *testing.T) {
 	result := renderGenericWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 		"vipLink":    "eth0.4000",
 	})
 
@@ -5583,8 +5583,8 @@ func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
 	eng := helmEngine.Engine{}
 	// Render with chrt.Values exactly as shipped — no test injection.
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       chrt.Values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       chrt.Values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected render to fail on shipped defaults — values.yaml must not ship a placeholder endpoint that silently satisfies required()")
@@ -5600,7 +5600,7 @@ func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
 // default but must not break the VIP feature itself.
 func TestMultiDocCozystack_Layer2VIPConfigWhenFloatingIPSet(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 	})
 
 	assertContains(t, result, "kind: Layer2VIPConfig")
@@ -5629,7 +5629,7 @@ func TestMultiDocCozystack_NoVIPOnFreshDefaults(t *testing.T) {
 // so the rendered Layer2VIPConfig matches the post-apply network.
 func TestMultiDocCozystack_VIPLinkOverride(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 		"vipLink":    "eth0.4000",
 	})
 
@@ -5663,9 +5663,9 @@ func TestMultiDocCozystack_VIPLinkOverrideOnFreshNode(t *testing.T) {
 	// render reaches the VIP block we want to exercise instead of
 	// erroring out earlier.
 	result := renderCozystackWith(t, freshNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.5",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{"192.168.201.0/24"},
+		"floatingIP":               testIP1921682015,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testCIDR1921682010_24},
 	})
 
 	assertContains(t, result, "kind: Layer2VIPConfig")
@@ -5698,8 +5698,8 @@ func renderLegacyChart(t *testing.T, chartDir, templateName string, lookup func(
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "",
+		testKeyValues:       values,
+		testKeyTalosVersion: "",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -5716,7 +5716,7 @@ func renderLegacyChart(t *testing.T, chartDir, templateName string, lookup func(
 // `talosVersion: ""` chart setting silently lose the override.
 func TestLegacyCozystack_VIPLinkOverride(t *testing.T) {
 	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 		"vipLink":    "eth0.4000",
 	})
 
@@ -5737,7 +5737,7 @@ func TestLegacyCozystack_VIPLinkOverride(t *testing.T) {
 // fresh `talm init -p generic` user actually takes.
 func TestLegacyGeneric_VIPLinkOverride(t *testing.T) {
 	result := renderLegacyChart(t, "../../charts/generic", "generic/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 		"vipLink":    "eth0.4000",
 	})
 
@@ -5755,9 +5755,9 @@ func TestLegacyGeneric_VIPLinkOverride(t *testing.T) {
 // this same template is about to bring up.
 func TestLegacyCozystack_VIPLinkOverrideOnFreshNode(t *testing.T) {
 	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", freshNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.5",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{"192.168.201.0/24"},
+		"floatingIP":               testIP1921682015,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testCIDR1921682010_24},
 	})
 
 	assertContains(t, result, "interfaces:")
@@ -5773,7 +5773,7 @@ func TestLegacyCozystack_VIPLinkOverrideOnFreshNode(t *testing.T) {
 // VIP on the right link.
 func TestLegacyCozystack_VIPLinkMatchesDiscovery(t *testing.T) {
 	result := renderLegacyChart(t, "../../charts/cozystack", "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 		"vipLink":    "eth0",
 	})
 
@@ -5843,9 +5843,9 @@ func TestMergeFileAsPatch_TypedDocPartialEditPreservesIdentityKeys(t *testing.T)
 // LinkConfig documents.
 func TestMultiDocCozystack_VIPLinkOverrideDoesNotAutoEmitLinkConfig(t *testing.T) {
 	result := renderCozystackWith(t, freshNicLookup(), map[string]any{
-		"floatingIP":        "192.168.201.5",
-		"vipLink":           "eth0.4000",
-		"advertisedSubnets": []any{"192.168.201.0/24"},
+		"floatingIP":               testIP1921682015,
+		"vipLink":                  "eth0.4000",
+		testFieldAdvertisedSubnets: []any{testCIDR1921682010_24},
 	})
 
 	if strings.Contains(result, "name: eth0.4000") {
@@ -5859,7 +5859,7 @@ func TestMultiDocCozystack_VIPLinkOverrideDoesNotAutoEmitLinkConfig(t *testing.T
 // default-gateway-bearing interface), unchanged from prior releases.
 func TestMultiDocCozystack_VIPLinkDefaultsToDiscovery(t *testing.T) {
 	result := renderCozystackWith(t, simpleNicLookup(), map[string]any{
-		"floatingIP": "192.168.201.5",
+		"floatingIP": testIP1921682015,
 	})
 
 	assertContains(t, result, "kind: Layer2VIPConfig")
@@ -5880,17 +5880,17 @@ func TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses(t *testi
 			"spec": map[string]any{
 				"kind":         "physical",
 				"index":        1,
-				"hardwareAddr": "aa:bb:cc:00:00:01",
+				"hardwareAddr": testMAC000001,
 				"busPath":      "pci-0000:00:1f.0",
 			},
 		}
 		routesList := map[string]any{
 			"apiVersion": "v1",
-			"kind":       "List",
+			"kind":       testCOSIKindList,
 			"items": []any{
 				map[string]any{
 					"spec": map[string]any{
-						"dst": "", "gateway": "192.168.201.1",
+						"dst": "", "gateway": testIP1921682011,
 						"outLinkName": "eth0", "family": "inet4", "table": "main",
 					},
 				},
@@ -5898,14 +5898,14 @@ func TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses(t *testi
 		}
 		addressesList := map[string]any{
 			"apiVersion": "v1",
-			"kind":       "List",
+			"kind":       testCOSIKindList,
 			"items": []any{
 				map[string]any{"spec": map[string]any{
-					"linkName": "eth0", "address": "192.168.201.10/24",
+					"linkName": "eth0", testFieldAddress: testCIDR192168201024,
 					"family": "inet4", "scope": "global",
 				}},
 				map[string]any{"spec": map[string]any{
-					"linkName": "eth0", "address": "192.168.201.11/24",
+					"linkName": "eth0", testFieldAddress: "192.168.201.11/24",
 					"family": "inet4", "scope": "global",
 				}},
 			},
@@ -5919,13 +5919,13 @@ func TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses(t *testi
 					return eth0, nil
 				}
 				if id == "" {
-					return map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{eth0}}, nil
+					return map[string]any{"apiVersion": "v1", "kind": testCOSIKindList, "items": []any{eth0}}, nil
 				}
-			case "addresses":
+			case testFieldAddresses:
 				return addressesList, nil
 			case "nodeaddress":
 				if id == "default" {
-					return map[string]any{"spec": map[string]any{"addresses": []any{"192.168.201.10/24"}}}, nil
+					return map[string]any{"spec": map[string]any{testFieldAddresses: []any{testCIDR192168201024}}}, nil
 				}
 			case "resolvers":
 				if id == "resolvers" {
@@ -5937,7 +5937,7 @@ func TestMultiDocCozystack_DedupesDuplicateSubnetsFromMultipleAddresses(t *testi
 	}()
 
 	result := renderCozystackWith(t, multiAddrLookup, map[string]any{
-		"advertisedSubnets": []any{},
+		testFieldAdvertisedSubnets: []any{},
 	})
 
 	// Two addresses in the same subnet must collapse to one list entry.
@@ -5967,12 +5967,12 @@ func TestMultiDocCozystack_EmptyDiscoveryErrors(t *testing.T) {
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
 	values["endpoint"] = testEndpoint
-	values["advertisedSubnets"] = []any{}
+	values[testFieldAdvertisedSubnets] = []any{}
 
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err == nil {
 		t.Fatal("expected required() error when advertisedSubnets is empty and discovery yields nothing")
@@ -5981,7 +5981,7 @@ func TestMultiDocCozystack_EmptyDiscoveryErrors(t *testing.T) {
 	// phrase about the default route — two independent substrings
 	// that together pin the guidance the error is supposed to deliver.
 	// If a future reword drops either signal, this test catches it.
-	if !strings.Contains(err.Error(), "advertisedSubnets") {
+	if !strings.Contains(err.Error(), testFieldAdvertisedSubnets) {
 		t.Errorf("error should mention advertisedSubnets field; got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "default route") {
@@ -6006,12 +6006,12 @@ func TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery(t *testing.T) 
 	values := make(map[string]any)
 	maps.Copy(values, chrt.Values)
 	values["endpoint"] = testEndpoint
-	values["advertisedSubnets"] = []any{}
+	values[testFieldAdvertisedSubnets] = []any{}
 
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
+		testKeyValues:       values,
+		testKeyTalosVersion: "v1.12",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)

@@ -106,7 +106,7 @@ func TestContract_Schema_Versions112AndLaterRenderMultidoc(t *testing.T) {
 			// platform (helm engine emits the host's line ending on
 			// Windows), so match the literal `---` token rather than
 			// pinning a specific newline pair.
-			if !strings.Contains(out, "---") {
+			if !strings.Contains(out, testYAMLDocSeparator) {
 				t.Errorf("multi-doc render missing `---` separator:\n%s", out)
 			}
 		})
@@ -147,7 +147,7 @@ func TestContract_Schema_LegacyIsSingleDocument(t *testing.T) {
 			// Scan line-by-line: a single line that is exactly `---`
 			// means an internal document separator.
 			for line := range strings.SplitSeq(out, "\n") {
-				if strings.TrimRight(line, "\r") == "---" {
+				if strings.TrimRight(line, "\r") == testYAMLDocSeparator {
 					t.Errorf("legacy render must not contain `---` separator:\n%s", out)
 					break
 				}
