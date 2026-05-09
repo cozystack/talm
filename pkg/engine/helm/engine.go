@@ -27,7 +27,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/pkg/errors"
+	"github.com/cockroachdb/errors"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -330,11 +330,22 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 	return rendered, nil
 }
 
+// errParseTemplate and errExecTemplate are the sentinel errors that
+// cleanupParseError and cleanupExecError wrap when reformatting the
+// raw text/template diagnostics produced during chart rendering. The
+// sentinels exist so err113 (no dynamic errors) is satisfied while
+// preserving the exact "<kind> error <in|at> (...)" text the public
+// tests assert against.
+var (
+	errParseTemplate = errors.New("parse error")
+	errExecTemplate  = errors.New("execution error")
+)
+
 func cleanupParseError(filename string, err error) error {
 	tokens := strings.Split(err.Error(), ": ")
 	if len(tokens) == 1 {
-		// This might happen if a non-templating error occurs
-		return fmt.Errorf("parse error in (%s): %s", filename, err)
+		// This might happen if a non-templating error occurs.
+		return fmt.Errorf("%w in (%s): %w", errParseTemplate, filename, err)
 	}
 	// The first token is "template"
 	// The second token is either "filename:lineno" or "filename:lineNo:columnNo"
@@ -342,7 +353,7 @@ func cleanupParseError(filename string, err error) error {
 	// The remaining tokens make up a stacktrace-like chain, ending with the relevant error
 	errMsg := tokens[len(tokens)-1]
 
-	return fmt.Errorf("parse error at (%s): %s", location, errMsg)
+	return fmt.Errorf("%w at (%s): %s", errParseTemplate, location, errMsg)
 }
 
 // execErrorTokenCount is the number of colon-separated segments produced by
@@ -350,14 +361,15 @@ func cleanupParseError(filename string, err error) error {
 const execErrorTokenCount = 3
 
 func cleanupExecError(filename string, err error) error {
-	if _, isExecError := err.(template.ExecError); !isExecError {
+	var execErr template.ExecError
+	if !errors.As(err, &execErr) {
 		return err
 	}
 
 	tokens := strings.SplitN(err.Error(), ": ", execErrorTokenCount)
 	if len(tokens) != execErrorTokenCount {
-		// This might happen if a non-templating error occurs
-		return fmt.Errorf("execution error in (%s): %s", filename, err)
+		// This might happen if a non-templating error occurs.
+		return fmt.Errorf("%w in (%s): %w", errExecTemplate, filename, err)
 	}
 
 	// The first token is "template"
@@ -366,7 +378,7 @@ func cleanupExecError(filename string, err error) error {
 
 	parts := warnRegex.FindStringSubmatch(tokens[2])
 	if len(parts) >= 2 {
-		return fmt.Errorf("execution error at (%s): %s", location, parts[1])
+		return fmt.Errorf("%w at (%s): %s", errExecTemplate, location, parts[1])
 	}
 
 	return err
