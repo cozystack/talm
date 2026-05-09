@@ -115,7 +115,7 @@ func warnWrap(warn string) string {
 
 // 'include' needs to be defined in the scope of a 'tpl' template as
 // well as regular file-loaded templates.
-func includeFun(t *template.Template, includedNames map[string]int) func(string, any) (string, error) {
+func includeFun(tmpl *template.Template, includedNames map[string]int) func(string, any) (string, error) {
 	return func(name string, data any) (string, error) {
 		var buf strings.Builder
 
@@ -129,7 +129,7 @@ func includeFun(t *template.Template, includedNames map[string]int) func(string,
 			includedNames[name] = 1
 		}
 
-		err := t.ExecuteTemplate(&buf, name, data)
+		err := tmpl.ExecuteTemplate(&buf, name, data)
 		includedNames[name]--
 
 		return buf.String(), err
@@ -140,7 +140,7 @@ func includeFun(t *template.Template, includedNames map[string]int) func(string,
 // defined by their enclosing contexts.
 func tplFun(parent *template.Template, includedNames map[string]int, strict bool) func(string, any) (string, error) {
 	return func(tpl string, vals any) (string, error) {
-		t, err := parent.Clone()
+		tmpl, err := parent.Clone()
 		if err != nil {
 			return "", errors.Wrapf(err, "cannot clone template")
 		}
@@ -150,16 +150,16 @@ func tplFun(parent *template.Template, includedNames map[string]int, strict bool
 		//nolint:godox // upstream Helm tracks a Go stdlib workaround; comment is intentional.
 		// TODO: Remove workaround (and the strict parameter) once we build only with golang versions with a fix.
 		if strict {
-			t.Option("missingkey=error")
+			tmpl.Option("missingkey=error")
 		} else {
-			t.Option("missingkey=zero")
+			tmpl.Option("missingkey=zero")
 		}
 
-		// Re-inject 'include' so that it can close over our clone of t;
+		// Re-inject 'include' so that it can close over our clone of tmpl;
 		// this lets any 'define's inside tpl be 'include'd.
-		t.Funcs(template.FuncMap{
-			"include": includeFun(t, includedNames),
-			"tpl":     tplFun(t, includedNames, strict),
+		tmpl.Funcs(template.FuncMap{
+			"include": includeFun(tmpl, includedNames),
+			"tpl":     tplFun(tmpl, includedNames, strict),
 		})
 
 		// We need a .New template, as template text which is just blanks
@@ -168,14 +168,14 @@ func tplFun(parent *template.Template, includedNames map[string]int, strict bool
 		// https://pkg.go.dev/text/template#Template.Parse
 		// Use the parent's name for lack of a better way to identify the tpl
 		// text string. (Maybe we could use a hash appended to the name?)
-		t, err = t.New(parent.Name()).Parse(tpl)
+		tmpl, err = tmpl.New(parent.Name()).Parse(tpl)
 		if err != nil {
 			return "", errors.Wrapf(err, "cannot parse template %q", tpl)
 		}
 
 		var buf strings.Builder
 
-		err = t.Execute(&buf, vals)
+		err = tmpl.Execute(&buf, vals)
 		if err != nil {
 			return "", errors.Wrapf(err, "error during tpl function execution for %q", tpl)
 		}
@@ -186,13 +186,13 @@ func tplFun(parent *template.Template, includedNames map[string]int, strict bool
 }
 
 // initFunMap creates the Engine's FuncMap and adds context-specific functions.
-func (e Engine) initFunMap(t *template.Template) {
+func (e Engine) initFunMap(tmpl *template.Template) {
 	funcMap := funcMap()
 	includedNames := make(map[string]int)
 
-	// Add the template-rendering functions here so we can close over t.
-	funcMap["include"] = includeFun(t, includedNames)
-	funcMap["tpl"] = tplFun(t, includedNames, e.Strict)
+	// Add the template-rendering functions here so we can close over tmpl.
+	funcMap["include"] = includeFun(tmpl, includedNames)
+	funcMap["tpl"] = tplFun(tmpl, includedNames, e.Strict)
 
 	// Add the `required` function here so we can use lintMode
 	funcMap["required"] = func(warn string, val any) (any, error) {
@@ -261,7 +261,7 @@ func (e Engine) initFunMap(t *template.Template) {
 		return p.Masked().String(), nil
 	}
 
-	t.Funcs(funcMap)
+	tmpl.Funcs(funcMap)
 }
 
 // render takes a map of templates/values and renders them.
@@ -279,16 +279,16 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 		}
 	}()
 
-	t := template.New("gotpl")
+	tmpl := template.New("gotpl")
 	if e.Strict {
-		t.Option("missingkey=error")
+		tmpl.Option("missingkey=error")
 	} else {
 		// Not that zero will attempt to add default values for types it knows,
 		// but will still emit <no value> for others. We mitigate that later.
-		t.Option("missingkey=zero")
+		tmpl.Option("missingkey=zero")
 	}
 
-	e.initFunMap(t)
+	e.initFunMap(tmpl)
 
 	// We want to parse the templates in a predictable order. The order favors
 	// higher-level (in file system) templates over deeply nested templates.
@@ -297,7 +297,7 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 	for _, filename := range keys {
 		r := tpls[filename]
 
-		_, err := t.New(filename).Parse(r.tpl)
+		_, err := tmpl.New(filename).Parse(r.tpl)
 		if err != nil {
 			return map[string]string{}, cleanupParseError(filename, err)
 		}
@@ -316,7 +316,7 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 
 		var buf strings.Builder
 
-		err := t.ExecuteTemplate(&buf, filename, vals)
+		err := tmpl.ExecuteTemplate(&buf, filename, vals)
 		if err != nil {
 			return map[string]string{}, cleanupExecError(filename, err)
 		}
@@ -463,17 +463,17 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 	}
 
 	newParentID := c.ChartFullPath()
-	for _, t := range c.Templates {
-		if t == nil {
+	for _, tplFile := range c.Templates {
+		if tplFile == nil {
 			continue
 		}
 
-		if !isTemplateValid(c, t.Name) {
+		if !isTemplateValid(c, tplFile.Name) {
 			continue
 		}
 
-		templates[path.Join(newParentID, t.Name)] = renderable{
-			tpl:      string(t.Data),
+		templates[path.Join(newParentID, tplFile.Name)] = renderable{
+			tpl:      string(tplFile.Data),
 			vals:     next,
 			basePath: path.Join(newParentID, "templates"),
 		}

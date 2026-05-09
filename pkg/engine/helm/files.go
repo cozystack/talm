@@ -74,20 +74,20 @@ func (f files) Get(name string) string {
 // {{ $name }}: |
 // {{ .Files.Get($name) | indent 4 }}{{ end }}.
 func (f files) Glob(pattern string) files {
-	g, err := glob.Compile(pattern, '/')
+	matcher, err := glob.Compile(pattern, '/')
 	if err != nil {
-		g, _ = glob.Compile("**")
+		matcher, _ = glob.Compile("**")
 	}
 
-	nf := newFiles(nil)
+	matched := newFiles(nil)
 
 	for name, contents := range f {
-		if g.Match(name) {
-			nf[name] = contents
+		if matcher.Match(name) {
+			matched[name] = contents
 		}
 	}
 
-	return nf
+	return matched
 }
 
 // AsConfig turns a Files group and flattens it to a YAML map suitable for
