@@ -97,6 +97,58 @@ func TestContract_DNS1123_ClusterName_RejectsInvalid(t *testing.T) {
 	}
 }
 
+// Contract: an unquoted numeric YAML scalar (e.g. `clusterName: 123`
+// in values.yaml) is parsed by Helm as an int, not a string. The
+// helper coerces .value through `printf "%v"` before any length /
+// regex check, so the validator emits a normal DNS-1123 fail with
+// the field name and the stringified value instead of crashing the
+// template at `len of type int`. Pin so a regression that drops the
+// coercion surfaces here.
+func TestContract_DNS1123_ClusterName_NumericYAMLScalarCoerced(t *testing.T) {
+	err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
+		"clusterName":       123,
+		"endpoint":          testEndpoint,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if err == nil {
+		// Note: "123" is actually a valid DNS-1123 subdomain (digits
+		// are allowed). If the helper coerces correctly AND the value
+		// passes validation, the render succeeds — that is also
+		// acceptable. The bug we are pinning against is the
+		// `len of type int` crash; either successful render or a
+		// DNS-1123 fail is fine, the template panic is not.
+		return
+	}
+	if strings.Contains(err.Error(), "len of type int") {
+		t.Errorf("template crashed on numeric value instead of coercing to string; got: %v", err)
+	}
+}
+
+// Contract: an invalid numeric value (e.g. negative numbers render
+// with a leading dash, which DNS-1123 rejects) coerces and then
+// fails with the regular DNS-1123 message naming the field and
+// quoting the stringified value. Pin both the coercion AND the
+// downstream validator wiring.
+func TestContract_DNS1123_ClusterName_InvalidNumericFailsCleanly(t *testing.T) {
+	err := renderExpectingError(t, cozystackChartPath, multidocTalos, helmEngineEmptyLookup, map[string]any{
+		"clusterName":       -1,
+		"endpoint":          testEndpoint,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if err == nil {
+		t.Fatal("expected fail for clusterName=-1")
+	}
+	if strings.Contains(err.Error(), "len of type") {
+		t.Errorf("template crashed on numeric value; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "DNS-1123 subdomain") {
+		t.Errorf("expected DNS-1123 subdomain message after coercion, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "clusterName") {
+		t.Errorf("error must name 'clusterName' field, got: %v", err)
+	}
+}
+
 // === clusterDomain: helper applied (cozystack only) ===
 
 // Contract: cozystack's clusterDomain (network.dnsDomain) flows

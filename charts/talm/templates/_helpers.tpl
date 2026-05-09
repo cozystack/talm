@@ -499,14 +499,20 @@ busPath: {{ $link.spec.busPath }}
        is no Talos-side cluster-name length cap that aligns with
        a 63-char floor. Stay symmetric with Go-side validation.
 
+       Coercion: .value is rendered through `printf "%v"` before
+       length / regex checks so an unquoted numeric YAML scalar
+       (e.g. `clusterName: 123`) becomes the string "123" instead
+       of crashing the template at `len of type int`. The eq-""
+       emptiness check also avoids treating numeric 0 as falsy.
+
        Usage:
            {{ include "talm.validate.dns1123subdomain"
               (dict "value" .Values.clusterName "field" "clusterName") }}
        */ -}}
 {{- define "talm.validate.dns1123subdomain" -}}
-{{- $value := .value -}}
 {{- $field := .field -}}
-{{- if not $value -}}
+{{- $value := printf "%v" .value -}}
+{{- if eq $value "" -}}
 {{- fail (printf "values.yaml: %s must be a non-empty DNS-1123 subdomain (must be lowercase, only [a-z0-9-.], start and end with [a-z0-9], max 253 chars)" $field) -}}
 {{- end -}}
 {{- if gt (len $value) 253 -}}
