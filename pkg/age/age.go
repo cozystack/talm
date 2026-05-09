@@ -58,7 +58,8 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 
 	// Check if key already exists
-	if _, err := os.Stat(keyFile); err == nil {
+	_, statErr := os.Stat(keyFile)
+	if statErr == nil {
 		// Key exists, load it
 		identity, err := LoadKey(rootDir)
 		if err != nil {
@@ -73,8 +74,9 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 		return nil, false, errors.Wrap(err, "generate age identity")
 	}
 
-	if err := secureperm.WriteFile(keyFile, []byte(formatKeyFile(identity, time.Now()))); err != nil {
-		return nil, false, errors.Wrap(err, "write key file")
+	writeErr := secureperm.WriteFile(keyFile, []byte(formatKeyFile(identity, time.Now())))
+	if writeErr != nil {
+		return nil, false, errors.Wrap(writeErr, "write key file")
 	}
 
 	return identity, true, nil
@@ -355,12 +357,14 @@ func encryptString(plaintext string, recipient *age.X25519Recipient) (string, er
 		return "", errors.Wrap(err, "create encrypt writer")
 	}
 
-	if _, err := writer.Write([]byte(plaintext)); err != nil {
-		return "", errors.Wrap(err, "write plaintext")
+	_, writeErr := writer.Write([]byte(plaintext))
+	if writeErr != nil {
+		return "", errors.Wrap(writeErr, "write plaintext")
 	}
 
-	if err := writer.Close(); err != nil {
-		return "", errors.Wrap(err, "close encrypt writer")
+	closeErr := writer.Close()
+	if closeErr != nil {
+		return "", errors.Wrap(closeErr, "close encrypt writer")
 	}
 
 	// Encode to base64 for safe YAML storage
@@ -429,7 +433,8 @@ func RotateKeys(rootDir string) error {
 	// successful-with-failed-cleanup states leave these files
 	// behind; the docstring above explains how to distinguish.
 	for _, p := range []string{keyBackup, encryptedBackup} {
-		if _, err := os.Stat(p); err == nil {
+		_, statErr := os.Stat(p)
+		if statErr == nil {
 			return errors.Wrapf(ErrLeftoverRotationBackup, "leftover rotation-backup at %q", p)
 		}
 	}
@@ -444,7 +449,8 @@ func RotateKeys(rootDir string) error {
 		return errors.Wrap(err, "read encrypted file")
 	}
 	var encryptedSecrets map[string]any
-	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
+	err = yaml.Unmarshal(encryptedData, &encryptedSecrets)
+	if err != nil {
 		return errors.Wrap(err, "parse encrypted YAML")
 	}
 	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
@@ -471,17 +477,20 @@ func RotateKeys(rootDir string) error {
 	// either both originals exist as `*.rotation-backup` after this
 	// block or neither move took effect (for the second rename: we
 	// undo the first if it errors).
-	if err := os.Rename(keyFile, keyBackup); err != nil {
+	err = os.Rename(keyFile, keyBackup)
+	if err != nil {
 		return errors.Wrap(err, "back up key file before rotation")
 	}
-	if err := os.Rename(encryptedFile, encryptedBackup); err != nil {
+	err = os.Rename(encryptedFile, encryptedBackup)
+	if err != nil {
 		// Roll back the key rename so the project is untouched.
 		// Capture the rollback error too — if it fails the
 		// operator is left with keyBackup but no keyFile, and the
 		// caller-facing error must say so explicitly (otherwise
 		// a Phase 0 refusal on retry would be the first sign of
 		// the partial state).
-		if rbErr := os.Rename(keyBackup, keyFile); rbErr != nil {
+		rbErr := os.Rename(keyBackup, keyFile)
+		if rbErr != nil {
 			//nolint:wrapcheck // errors.WithHintf wraps an already-wrapped chain (errors.Wrapf below); cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
 			return errors.WithHintf(
 				errors.Wrapf(errors.WithSecondaryError(err, rbErr),
@@ -523,10 +532,12 @@ func RotateKeys(rootDir string) error {
 	// Phase 4: write new key, then new encrypted file. Both via
 	// secureperm.WriteFile (atomic + 0o600). On any failure the
 	// `restore` closure puts the originals back.
-	if err := secureperm.WriteFile(keyFile, []byte(formatKeyFile(newIdentity, time.Now()))); err != nil {
+	err = secureperm.WriteFile(keyFile, []byte(formatKeyFile(newIdentity, time.Now())))
+	if err != nil {
 		return restore("write new key", err)
 	}
-	if err := secureperm.WriteFile(encryptedFile, encryptedDataNew); err != nil {
+	err = secureperm.WriteFile(encryptedFile, encryptedDataNew)
+	if err != nil {
 		return restore("write new encrypted file", err)
 	}
 
@@ -537,10 +548,12 @@ func RotateKeys(rootDir string) error {
 	// usable; the leftover backups must be removed manually before
 	// the next rotation can run (Phase 0 will refuse otherwise).
 	var cleanupErrs []string
-	if err := os.Remove(keyBackup); err != nil {
+	err = os.Remove(keyBackup)
+	if err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", keyBackup, err))
 	}
-	if err := os.Remove(encryptedBackup); err != nil {
+	err = os.Remove(encryptedBackup)
+	if err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
 	}
 	if len(cleanupErrs) > 0 {
@@ -587,7 +600,8 @@ func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 	}
 
 	var plain map[string]any
-	if err := yaml.Unmarshal(plainData, &plain); err != nil {
+	err = yaml.Unmarshal(plainData, &plain)
+	if err != nil {
 		return errors.Wrap(err, "parse plain YAML")
 	}
 
@@ -601,7 +615,8 @@ func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 		return errors.Wrap(err, "marshal encrypted YAML")
 	}
 
-	if err := secureperm.WriteFile(encryptedFilePath, encryptedData); err != nil {
+	err = secureperm.WriteFile(encryptedFilePath, encryptedData)
+	if err != nil {
 		return errors.Wrap(err, "write encrypted file")
 	}
 
@@ -614,7 +629,8 @@ func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 // helpers rely on across init/apply/talosconfig flows.
 func loadOrGenerateIdentity(rootDir string) (*age.X25519Identity, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+	_, statErr := os.Stat(keyFile)
+	if os.IsNotExist(statErr) {
 		identity, _, err := GenerateKey(rootDir)
 		if err != nil {
 			return nil, errors.Wrap(err, "generate key")
@@ -636,7 +652,8 @@ func loadOrGenerateIdentity(rootDir string) (*age.X25519Identity, error) {
 // the full plain tree, so the project recovers from a corrupted
 // destination on the next encrypt round.
 func incrementalEncryptMap(plain map[string]any, encryptedFilePath string, identity *age.X25519Identity) (map[string]any, error) {
-	if _, err := os.Stat(encryptedFilePath); err != nil {
+	_, statErr := os.Stat(encryptedFilePath)
+	if statErr != nil {
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
 	encryptedData, err := os.ReadFile(encryptedFilePath)
@@ -644,7 +661,8 @@ func incrementalEncryptMap(plain map[string]any, encryptedFilePath string, ident
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
 	var existing map[string]any
-	if err := yaml.Unmarshal(encryptedData, &existing); err != nil {
+	err = yaml.Unmarshal(encryptedData, &existing)
+	if err != nil {
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
 	return mergeAndEncryptYAMLMap(plain, existing, identity)
@@ -709,7 +727,8 @@ func decryptYAMLPair(rootDir, encryptedFile, plainFile string) error {
 	}
 
 	var encryptedYAML map[string]any
-	if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err != nil {
+	err = yaml.Unmarshal(encryptedData, &encryptedYAML)
+	if err != nil {
 		return errors.Wrap(err, "parse encrypted YAML")
 	}
 
@@ -723,7 +742,8 @@ func decryptYAMLPair(rootDir, encryptedFile, plainFile string) error {
 		return errors.Wrap(err, "marshal decrypted YAML")
 	}
 
-	if err := secureperm.WriteFile(plainFilePath, decryptedData); err != nil {
+	err = secureperm.WriteFile(plainFilePath, decryptedData)
+	if err != nil {
 		return errors.Wrap(err, "write decrypted file")
 	}
 
