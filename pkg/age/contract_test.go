@@ -32,6 +32,7 @@ package age_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -388,21 +389,13 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 
 // === RotateKeys ===
 
-// Contract: RotateKeys preserves plaintext round-trip after the
-// call: whatever key happens to be on disk afterwards is sufficient
-// to decrypt the encrypted file. This is the minimum integrity
-// guarantee operators rely on.
-//
-// KNOWN BUG (not pinned, on purpose): RotateKeys at age.go:485 does
-// NOT actually replace talm.key. It calls GenerateKey, which is a
-// load-or-create operation: if talm.key already exists,
-// GenerateKey loads and returns it instead of generating a fresh
-// identity. So today RotateKeys re-encrypts the secrets file with
-// the SAME key. The test does not assert "public key changes" — if
-// it did, this would fail today, and pinning a passing assertion
-// would lock in the bug. Track separately and fix in a dedicated
-// commit.
-func TestContract_Age_RotateKeys_PreservesPlaintextRoundTrip(t *testing.T) {
+// Contract: RotateKeys actually rotates the on-disk key — the
+// public key after the call is different from before — AND the
+// plaintext round-trips end-to-end with whatever key is on disk
+// afterwards. The test exercises both invariants so a regression
+// that reintroduces the load-or-create no-op surfaces as the
+// public-key inequality fail.
+func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) {
 	dir := t.TempDir()
 	plain := []byte("secret: rotate-me\n")
 	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600); err != nil {
@@ -411,9 +404,22 @@ func TestContract_Age_RotateKeys_PreservesPlaintextRoundTrip(t *testing.T) {
 	if err := age.EncryptSecretsFile(dir); err != nil {
 		t.Fatal(err)
 	}
+	oldPub, err := age.GetPublicKeyFromFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := age.RotateKeys(dir); err != nil {
 		t.Fatalf("RotateKeys: %v", err)
+	}
+
+	// Public key must have changed — the whole point of rotation.
+	newPub, err := age.GetPublicKeyFromFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldPub == newPub {
+		t.Errorf("RotateKeys did not replace the on-disk key\nold: %s\nnew: %s", oldPub, newPub)
 	}
 
 	// Decrypt with whatever key is on disk now — plaintext must round-trip.
@@ -436,6 +442,224 @@ func TestContract_Age_RotateKeys_PreservesPlaintextRoundTrip(t *testing.T) {
 	}
 	if !mapsEqual(orig, after) {
 		t.Errorf("plaintext changed across rotation\norig: %v\nafter: %v", orig, after)
+	}
+}
+
+// Contract: after a successful rotation both the new key file and
+// the new encrypted secrets file are mode 0o600. Defense-in-depth
+// — age encryption is the security layer, but world-readable
+// secrets material on shared workstations invites mistakes. Pin so
+// a regression that reverts the secureperm.WriteFile call to a raw
+// os.WriteFile with 0o644 surfaces here.
+//
+// Skipped on Windows: NTFS does not honour Unix permission bits,
+// so os.FileInfo.Mode().Perm() always returns 0o666 regardless of
+// the actual DACL. The secureperm package has its own Windows-side
+// owner-only DACL test (pkg/secureperm/secureperm_windows_test.go)
+// that exercises the equivalent contract via the platform's
+// security descriptor APIs.
+func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.RotateKeys(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"talm.key", "secrets.encrypted.yaml"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o, want 0600", name, got)
+		}
+	}
+}
+
+// Contract: EncryptSecretsFile produces secrets.encrypted.yaml at
+// mode 0o600. Pinning so all three code paths that write the same
+// file (this function, RotateKeys, EncryptYAMLFile) agree on the
+// same defense-in-depth permission. Skipped on Windows for the
+// same NTFS reason as BothFilesMode0600.
+func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("secrets.encrypted.yaml mode = %o, want 0600", got)
+	}
+}
+
+// Contract: EncryptYAMLFile produces its target encrypted file at
+// mode 0o600. Same defense-in-depth contract as
+// EncryptSecretsFile — the function is the generic kubeconfig /
+// arbitrary-YAML variant of the secrets-encrypt path.
+func TestContract_Age_EncryptYAMLFile_Mode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kubeconfig.yaml"), []byte("k: v\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptYAMLFile(dir, "kubeconfig.yaml", "kubeconfig.encrypted.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "kubeconfig.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("kubeconfig.encrypted.yaml mode = %o, want 0600", got)
+	}
+}
+
+// Contract: a successful rotation leaves NO `*.rotation-backup`
+// files in the project root. Backups are an in-progress recovery
+// artefact only; their presence after the function returns nil
+// would clutter the project and confuse subsequent runs.
+func TestContract_Age_RotateKeys_NoLeftoverBackups(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.RotateKeys(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"talm.key.rotation-backup", "secrets.encrypted.yaml.rotation-backup"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("rotation left backup file %q on disk", name)
+		}
+	}
+}
+
+// Contract: when something already occupies a path the rotation
+// will need to use (here we stage a directory at the backup
+// destination), RotateKeys refuses immediately and leaves the
+// originals untouched on disk. The directory case is interesting
+// because os.Stat returns nil error for directories just as for
+// regular files, so the Phase 0 leftover-backup check fires and
+// rejects the run before any rename happens. Pinning that the
+// originals survive any such early refusal.
+//
+// The genuine Phase 5 cleanup-failure path (where rotation
+// commits but os.Remove of a backup file errors) is not
+// reachable through public-API fault injection — it requires
+// either a chmod between Phase 4 and Phase 5 or a swap of the
+// backup file for a directory in the same window, neither of
+// which is exposed. The Phase 5 error wording is exercised by
+// inspection only (see the docstring of RotateKeys).
+//
+// Skipped under root because directory permissions used in
+// adjacent injection paths are ignored by the kernel for euid 0.
+func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — directory permissions and os.Remove behaviour differ")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stage a directory at the destination of one of the backup
+	// renames. Phase 0 sees something at the path (os.Stat returns
+	// nil error for directories) and refuses with the leftover
+	// message. The originals are not touched.
+	dirAtBackupPath := filepath.Join(dir, "talm.key.rotation-backup")
+	if err := os.MkdirAll(dirAtBackupPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dirAtBackupPath) }()
+
+	originalKey, err := os.ReadFile(filepath.Join(dir, "talm.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalEnc, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := age.RotateKeys(dir); err == nil {
+		t.Fatal("expected RotateKeys to fail when a directory blocks the backup path")
+	}
+	gotKey, err := os.ReadFile(filepath.Join(dir, "talm.key"))
+	if err != nil {
+		t.Fatalf("talm.key missing after failed rotation: %v", err)
+	}
+	gotEnc, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatalf("secrets.encrypted.yaml missing after failed rotation: %v", err)
+	}
+	if string(gotKey) != string(originalKey) {
+		t.Errorf("talm.key changed despite failed rotation")
+	}
+	if string(gotEnc) != string(originalEnc) {
+		t.Errorf("secrets.encrypted.yaml changed despite failed rotation")
+	}
+}
+
+// Contract: if a `*.rotation-backup` file is present at the start
+// of a run, RotateKeys refuses with a precise error pointing at
+// the leftover path. The error wording covers both possible
+// origins of the leftover (interrupted run OR successful run with
+// failed cleanup), so the operator does not need to consult two
+// different recovery procedures. This protects the recovery state
+// from being silently overwritten by the second run.
+func TestContract_Age_RotateKeys_RefusesOnLeftoverBackup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an interrupted previous rotation by creating a
+	// dangling `talm.key.rotation-backup`.
+	leftover := filepath.Join(dir, "talm.key.rotation-backup")
+	if err := os.WriteFile(leftover, []byte("orphaned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := age.RotateKeys(dir)
+	if err == nil {
+		t.Fatal("expected RotateKeys to refuse with leftover backup present")
+	}
+	if !strings.Contains(err.Error(), "rotation-backup") {
+		t.Errorf("error must reference the leftover backup path, got: %v", err)
+	}
+	// The error must mention BOTH possible origins of the leftover
+	// so the operator can disambiguate without consulting docs.
+	if !strings.Contains(err.Error(), "interrupted") || !strings.Contains(err.Error(), "cleanup") {
+		t.Errorf("error must mention both 'interrupted' and 'cleanup' as possible origins, got: %v", err)
+	}
+	// The leftover must still be on disk — refusal must not delete it.
+	if _, statErr := os.Stat(leftover); statErr != nil {
+		t.Errorf("leftover backup was removed despite refusal: %v", statErr)
 	}
 }
 

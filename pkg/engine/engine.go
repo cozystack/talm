@@ -94,9 +94,15 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 		patchOption = "--config-patch-worker"
 	}
 
-	// Print patches
+	// Print patches. Skip empty entries — a template that conditionally
+	// emits nothing legitimately produces "" in the slice, and indexing
+	// patch[0] on an empty string would panic right at the moment the
+	// operator is using --debug to investigate something.
 	for _, patch := range patches {
-		if string(patch[0]) == "@" {
+		if patch == "" {
+			continue
+		}
+		if patch[0] == '@' {
 			// Apply patch is always one
 			fmt.Printf(" %s=%s\n", patchOption, patch)
 		} else {

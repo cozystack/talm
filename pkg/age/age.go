@@ -59,19 +59,25 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 		return nil, false, fmt.Errorf("failed to generate age identity: %w", err)
 	}
 
-	publicKey := identity.Recipient().String()
-
-	// Format key file in age keygen format
-	now := time.Now()
-	keyData := fmt.Sprintf("# created: %s\n", now.Format(time.RFC3339))
-	keyData += fmt.Sprintf("# public key: %s\n", publicKey)
-	keyData += identity.String() + "\n"
-
-	if err := secureperm.WriteFile(keyFile, []byte(keyData)); err != nil {
+	if err := secureperm.WriteFile(keyFile, []byte(formatKeyFile(identity, time.Now()))); err != nil {
 		return nil, false, fmt.Errorf("failed to write key file: %w", err)
 	}
 
 	return identity, true, nil
+}
+
+// formatKeyFile renders the canonical age keygen layout: a creation
+// timestamp comment, a public key comment, and the AGE-SECRET-KEY-1
+// secret line, each terminated by a newline. Extracted from
+// GenerateKey so RotateKeys can produce the same layout for the
+// new identity it generates in memory.
+func formatKeyFile(identity *age.X25519Identity, now time.Time) string {
+	return fmt.Sprintf(
+		"# created: %s\n# public key: %s\n%s\n",
+		now.Format(time.RFC3339),
+		identity.Recipient().String(),
+		identity.String(),
+	)
 }
 
 // LoadKey loads age identity from talm.key file
@@ -221,8 +227,13 @@ func EncryptSecretsFile(rootDir string) error {
 		return fmt.Errorf("failed to marshal encrypted secrets: %w", err)
 	}
 
-	// Write encrypted file
-	if err := os.WriteFile(encryptedFile, encryptedData, 0o644); err != nil {
+	// Write encrypted file via secureperm.WriteFile so it lands at
+	// mode 0o600 (defense-in-depth — age encryption is the security
+	// layer, but world-readable secrets material on shared
+	// workstations invites mistakes). RotateKeys uses the same
+	// helper for the same file, keeping the on-disk mode invariant
+	// across every code path that writes secrets.encrypted.yaml.
+	if err := secureperm.WriteFile(encryptedFile, encryptedData); err != nil {
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
@@ -482,51 +493,148 @@ func decryptString(encryptedBase64 string, identity *age.X25519Identity) (string
 }
 
 // RotateKeys rotates encryption keys in secrets.encrypted.yaml
+// RotateKeys atomically rotates the age key encrypting
+// secrets.encrypted.yaml. The old key is replaced with a freshly
+// generated identity, and the secrets file is re-encrypted under
+// the new key.
+//
+// Atomicity strategy: every disk-mutating step uses os.Rename or
+// secureperm.WriteFile (which is itself atomic temp+rename). The
+// previous key+encrypted pair is renamed aside into
+// `*.rotation-backup` files BEFORE the new files are committed; if
+// any later step fails the originals are restored.
+//
+// The function returns nil only after the new pair is committed
+// AND both backup files have been removed. If either commit or
+// cleanup fails the function returns a non-nil error, so the only
+// state in which `*.rotation-backup` files outlive the call is
+// when the call ITSELF returned an error. Operators who find
+// leftover `*.rotation-backup` files in that state should:
+//
+//   - inspect both `talm.key` and the backup; if `talm.key` exists
+//     and is newer than the backup, rotation succeeded and only
+//     cleanup failed — remove the `*.rotation-backup` files;
+//   - otherwise rotation was interrupted before commit — rename
+//     the backups back into place to recover the original state.
+//
+// Both new files are written via secureperm.WriteFile so they end
+// up at mode 0o600 (defense-in-depth — age encryption is the
+// security layer, but world-readable secrets material on shared
+// workstations invites mistakes).
 func RotateKeys(rootDir string) error {
-	// Load old key first (before generating new one)
+	keyFile := filepath.Join(rootDir, keyFileName)
+	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
+	keyBackup := keyFile + ".rotation-backup"
+	encryptedBackup := encryptedFile + ".rotation-backup"
+
+	// Refuse to start if leftover rotation backups exist — the
+	// operator must inspect them and decide what to keep before
+	// another rotation runs, otherwise this run would silently
+	// overwrite the recovery state. Both interrupted and
+	// successful-with-failed-cleanup states leave these files
+	// behind; the docstring above explains how to distinguish.
+	for _, p := range []string{keyBackup, encryptedBackup} {
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("found leftover rotation backup %q from a previous run (either interrupted, or successful with a failed cleanup step); inspect and remove (or restore) before retrying", p)
+		}
+	}
+
+	// Phase 1: read and decrypt with old key, all in memory.
 	oldIdentity, err := LoadKey(rootDir)
 	if err != nil {
 		return fmt.Errorf("failed to load old key: %w", err)
 	}
-
-	// Decrypt with old key
-	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
-
 	encryptedData, err := os.ReadFile(encryptedFile)
 	if err != nil {
 		return fmt.Errorf("failed to read encrypted file: %w", err)
 	}
-
 	var encryptedSecrets map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
 		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
 	}
-
-	// Decrypt values with old key
 	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt with old key: %w", err)
 	}
 
-	// Generate new key (this overwrites talm.key)
-	newIdentity, _, err := GenerateKey(rootDir)
+	// Phase 2: generate new identity and encrypt new ciphertext —
+	// still all in memory. No disk mutation yet.
+	newIdentity, err := age.GenerateX25519Identity()
 	if err != nil {
-		return fmt.Errorf("failed to generate new key: %w", err)
+		return fmt.Errorf("failed to generate new identity: %w", err)
 	}
-
-	// Encrypt with new key
 	encryptedSecretsNew, err := encryptYAMLValues(decryptedSecrets, newIdentity.Recipient())
 	if err != nil {
 		return fmt.Errorf("failed to encrypt with new key: %w", err)
 	}
-
 	encryptedDataNew, err := yaml.Marshal(encryptedSecretsNew)
 	if err != nil {
-		return fmt.Errorf("failed to marshal encrypted secrets: %w", err)
+		return fmt.Errorf("failed to marshal new encrypted secrets: %w", err)
 	}
 
-	if err := os.WriteFile(encryptedFile, encryptedDataNew, 0o644); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
+	// Phase 3: move originals aside as backups. Atomic rename, so
+	// either both originals exist as `*.rotation-backup` after this
+	// block or neither move took effect (for the second rename: we
+	// undo the first if it errors).
+	if err := os.Rename(keyFile, keyBackup); err != nil {
+		return fmt.Errorf("failed to back up key file before rotation: %w", err)
+	}
+	if err := os.Rename(encryptedFile, encryptedBackup); err != nil {
+		// Roll back the key rename so the project is untouched.
+		// Capture the rollback error too — if it fails the
+		// operator is left with keyBackup but no keyFile, and the
+		// caller-facing error must say so explicitly (otherwise
+		// a Phase 0 refusal on retry would be the first sign of
+		// the partial state).
+		if rbErr := os.Rename(keyBackup, keyFile); rbErr != nil {
+			return fmt.Errorf("failed to back up encrypted file before rotation: %w; AND rollback of key-file rename failed: %v — manual recovery: rename %q -> %q", err, rbErr, keyBackup, keyFile)
+		}
+		return fmt.Errorf("failed to back up encrypted file before rotation: %w (key file rename rolled back)", err)
+	}
+
+	// restore is a recovery helper used when any later step fails:
+	// rename the backups back into place and return the original
+	// error wrapped with a recovery note. We never silently swallow
+	// the restore's own error — if recovery fails the operator
+	// needs to know.
+	restore := func(stage string, cause error) error {
+		_ = os.Remove(keyFile)       // best-effort: remove half-written new key if any
+		_ = os.Remove(encryptedFile) // ditto for encrypted file
+		errKey := os.Rename(keyBackup, keyFile)
+		errEnc := os.Rename(encryptedBackup, encryptedFile)
+		if errKey != nil || errEnc != nil {
+			return fmt.Errorf("rotation failed at %s: %w; AND restore from backup partially failed (key: %v, encrypted: %v) — manual recovery: rename %q -> %q and %q -> %q",
+				stage, cause, errKey, errEnc, keyBackup, keyFile, encryptedBackup, encryptedFile)
+		}
+		return fmt.Errorf("rotation failed at %s: %w (originals restored)", stage, cause)
+	}
+
+	// Phase 4: write new key, then new encrypted file. Both via
+	// secureperm.WriteFile (atomic + 0o600). On any failure the
+	// `restore` closure puts the originals back.
+	if err := secureperm.WriteFile(keyFile, []byte(formatKeyFile(newIdentity, time.Now()))); err != nil {
+		return restore("write new key", err)
+	}
+	if err := secureperm.WriteFile(encryptedFile, encryptedDataNew); err != nil {
+		return restore("write new encrypted file", err)
+	}
+
+	// Phase 5: rotation committed — remove backups. If removal
+	// fails we return an error so the caller (and a future
+	// RotateKeys run) sees an unambiguous "rotation succeeded but
+	// backups linger" signal. The new pair on disk is correct and
+	// usable; the leftover backups must be removed manually before
+	// the next rotation can run (Phase 0 will refuse otherwise).
+	var cleanupErrs []string
+	if err := os.Remove(keyBackup); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", keyBackup, err))
+	}
+	if err := os.Remove(encryptedBackup); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
+	}
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s; remove these files manually before the next rotation",
+			strings.Join(cleanupErrs, "; "))
 	}
 
 	return nil
@@ -610,8 +718,11 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		return fmt.Errorf("failed to marshal encrypted YAML: %w", err)
 	}
 
-	// Write encrypted file
-	if err := os.WriteFile(encryptedFilePath, encryptedData, 0o644); err != nil {
+	// Write encrypted file via secureperm.WriteFile (mode 0o600).
+	// Same defense-in-depth rationale as EncryptSecretsFile and
+	// RotateKeys — every code path that writes encrypted secrets
+	// material agrees on the same on-disk permission.
+	if err := secureperm.WriteFile(encryptedFilePath, encryptedData); err != nil {
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
