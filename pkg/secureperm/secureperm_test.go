@@ -28,7 +28,8 @@ func TestWriteFile_PersistsContent(t *testing.T) {
 	path := filepath.Join(dir, "secret.txt")
 	payload := []byte("topsecret")
 
-	if err := secureperm.WriteFile(path, payload); err != nil {
+	err := secureperm.WriteFile(path, payload)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -45,17 +46,20 @@ func TestLockDown_OnExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "existing.txt")
 
-	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+	err := os.WriteFile(path, []byte("data"), 0o644)
+	if err != nil {
 		t.Fatalf("seed file: %v", err)
 	}
-	if err := secureperm.LockDown(path); err != nil {
+	err = secureperm.LockDown(path)
+	if err != nil {
 		t.Fatalf("LockDown: %v", err)
 	}
 
 	// Re-read to confirm the file is still accessible to the owner after
 	// tightening. On Unix this is trivial; on Windows this verifies the
 	// DACL did not accidentally exclude the current user.
-	if _, err := os.ReadFile(path); err != nil {
+	_, err = os.ReadFile(path)
+	if err != nil {
 		t.Fatalf("owner cannot read locked file: %v", err)
 	}
 }

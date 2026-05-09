@@ -16,9 +16,9 @@ func TestParseModeline(t *testing.T) {
 			name: "valid modeline with all known keys",
 			line: `# talm: nodes=["192.168.100.2"], endpoints=["1.2.3.4","127.0.0.1","192.168.100.2"], templates=["templates/controlplane.yaml","templates/worker.yaml"]`,
 			want: &Config{
-				Nodes:     []string{"192.168.100.2"},
-				Endpoints: []string{"1.2.3.4", "127.0.0.1", "192.168.100.2"},
-				Templates: []string{"templates/controlplane.yaml", "templates/worker.yaml"},
+				Nodes:     []string{testNodeIP2},
+				Endpoints: []string{testNodeIP1, testLoopback, testNodeIP2},
+				Templates: []string{testTemplateControlPln, "templates/worker.yaml"},
 			},
 			wantErr: false,
 		},
@@ -26,8 +26,8 @@ func TestParseModeline(t *testing.T) {
 			name: "modeline with unknown key",
 			line: `# talm: nodes=["192.168.100.2"], endpoints=["1.2.3.4","127.0.0.1","192.168.100.2"], unknown=["value"]`,
 			want: &Config{
-				Nodes:     []string{"192.168.100.2"},
-				Endpoints: []string{"1.2.3.4", "127.0.0.1", "192.168.100.2"},
+				Nodes:     []string{testNodeIP2},
+				Endpoints: []string{testNodeIP1, testLoopback, testNodeIP2},
 			},
 			wantErr: false,
 		},
