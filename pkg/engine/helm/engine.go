@@ -415,6 +415,7 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 	subCharts := make(map[string]any)
 	chartMetaData := struct {
 		chart.Metadata
+
 		IsRoot bool
 	}{*c.Metadata, c.IsRoot()}
 
