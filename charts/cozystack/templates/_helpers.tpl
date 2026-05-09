@@ -98,7 +98,7 @@ cluster:
   network:
     cni:
       name: none
-    dnsDomain: {{ include "talm.validate.dns1123subdomain" (dict "value" .Values.clusterDomain "field" "clusterDomain") }}
+    dnsDomain: {{ include "talm.validate.dns1123subdomain" (dict "value" .Values.clusterDomain "field" "clusterDomain") | quote }}
     podSubnets:
       {{- toYaml .Values.podSubnets | nindent 6 }}
     serviceSubnets:

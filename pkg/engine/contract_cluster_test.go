@@ -237,7 +237,7 @@ func TestContract_Cluster_ClusterDomain_Cozystack(t *testing.T) {
 	for _, cell := range cozystackCells() {
 		t.Run(cell.name, func(t *testing.T) {
 			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
-			assertContains(t, out, "dnsDomain: cozy.local")
+			assertContains(t, out, `dnsDomain: "cozy.local"`)
 		})
 	}
 }

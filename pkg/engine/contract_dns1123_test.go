@@ -134,13 +134,16 @@ func TestContract_DNS1123_ClusterDomain_RejectsInvalid(t *testing.T) {
 }
 
 // Contract: the default cozy.local value passes validation
-// unchanged. A regression that tightened the regex would break
-// every fresh cozystack install.
+// unchanged and is rendered as a quoted string. The quote pin
+// guards against a value that happens to look numeric (e.g. a
+// subdomain consisting only of digits) being parsed as a YAML
+// number by downstream consumers; cluster names follow the same
+// quoting convention.
 func TestContract_DNS1123_ClusterDomain_DefaultPasses(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
 		"advertisedSubnets": []any{testAdvertisedSubnet},
 	})
-	assertContains(t, out, "dnsDomain: cozy.local")
+	assertContains(t, out, `dnsDomain: "cozy.local"`)
 }
 
 // === generic chart: same helper, same contract ===
