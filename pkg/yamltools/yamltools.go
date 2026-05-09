@@ -7,7 +7,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
+)
+
+// Patch directive sentinels emitted by DiffYAMLs to mark deletions in the
+// resulting YAML so downstream JSON-merge-patch consumers can apply them.
+const (
+	patchKey       = "$patch"
+	patchValDelete = "delete"
 )
 
 // CopyComments updates the comments in dstNode considering the structure of whitespace.
@@ -60,12 +68,15 @@ func mergeComments(oldComment, newComment string) string {
 // DiffYAMLs compares two YAML documents and outputs the differences.
 func DiffYAMLs(original, modified []byte) ([]byte, error) {
 	var origNode, modNode yaml.Node
-	if err := yaml.Unmarshal(original, &origNode); err != nil {
-		return nil, err
+
+	err := yaml.Unmarshal(original, &origNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal original YAML")
 	}
 
-	if err := yaml.Unmarshal(modified, &modNode); err != nil {
-		return nil, err
+	err = yaml.Unmarshal(modified, &modNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal modified YAML")
 	}
 
 	clearComments(&origNode)
@@ -80,8 +91,9 @@ func DiffYAMLs(original, modified []byte) ([]byte, error) {
 	encoder := yaml.NewEncoder(buffer)
 	encoder.SetIndent(2)
 
-	if err := encoder.Encode(diff); err != nil {
-		return nil, err
+	err = encoder.Encode(diff)
+	if err != nil {
+		return nil, errors.Wrap(err, "encode YAML diff")
 	}
 
 	_ = encoder.Close()
@@ -115,6 +127,10 @@ func compareNodes(orig, mod *yaml.Node) *yaml.Node {
 		if orig.Value != mod.Value {
 			return mod
 		}
+	case yaml.DocumentNode, yaml.AliasNode:
+		// Document and alias nodes are not produced at this level — DiffYAMLs
+		// strips the document wrapper before recursing, and aliases are not
+		// supported by the diff format. Fall through to the no-diff result.
 	}
 
 	return nil
@@ -124,8 +140,8 @@ func createDeleteNode() *yaml.Node {
 	return &yaml.Node{
 		Kind: yaml.MappingNode,
 		Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Value: "$patch"},
-			{Kind: yaml.ScalarNode, Value: "delete"},
+			{Kind: yaml.ScalarNode, Value: patchKey},
+			{Kind: yaml.ScalarNode, Value: patchValDelete},
 		},
 	}
 }
@@ -214,8 +230,7 @@ func nodeSet(node *yaml.Node) map[string]bool {
 // addNodeToDiff adds a node to the diff result.
 func addNodeToDiff(diff *yaml.Node, key string, node *yaml.Node) {
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
-	diff.Content = append(diff.Content, keyNode)
-	diff.Content = append(diff.Content, node)
+	diff.Content = append(diff.Content, keyNode, node)
 }
 
 // nodeMap creates a map from a YAML mapping node for easy lookup.
