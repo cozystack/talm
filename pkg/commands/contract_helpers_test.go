@@ -211,10 +211,22 @@ func TestContract_AddToGitignore_PathPrefixMatch(t *testing.T) {
 
 // === getClusterNameFromChart ===
 
-// Contract: getClusterNameFromChart reads the top-level `name` from
-// Chart.yaml. Distinct from readChartYamlPreset (which reads
-// dependencies): this returns the chart's OWN name. Used as a
-// fallback in the talosconfig regenerate path.
+// Contract: getClusterNameFromChart resolves the cluster name with
+// `values.yaml: clusterName` taking precedence over `Chart.yaml: name`.
+// Distinct from readChartYamlPreset (which reads dependencies): this
+// returns the chart's OWN name. Used as a fallback in the talosconfig
+// regenerate path so a re-generated talosconfig matches the cluster
+// name baked into the rendered chart output.
+//
+// The resolution order is values.yaml.clusterName -> Chart.yaml.name
+// -> "" (fallback). The order matters: an operator who overrides
+// clusterName via values.yaml expects the regenerated talosconfig
+// context to use that override, not the chart-directory name.
+
+// Contract: when only Chart.yaml exists (no values.yaml), the
+// function returns Chart.yaml.name. This is the legacy behaviour
+// preserved for projects that have not yet adopted the values.yaml
+// override.
 func TestContract_GetClusterNameFromChart_ReadsTopLevelName(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
@@ -228,9 +240,88 @@ func TestContract_GetClusterNameFromChart_ReadsTopLevelName(t *testing.T) {
 	}
 }
 
-// Contract: missing Chart.yaml returns empty string (NOT an error).
-// Callers chain with a fallback default — silent empty is the
-// signal that the chart was not found.
+// Contract: when both files exist and values.yaml declares a
+// non-empty clusterName, the values.yaml override wins. Pin the
+// priority so a regression that re-orders the lookup surfaces here.
+func TestContract_GetClusterNameFromChart_ValuesYamlOverridesChartYaml(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-name-loser\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("clusterName: values-name-winner\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := getClusterNameFromChart()
+	if got != "values-name-winner" {
+		t.Errorf("expected values.yaml clusterName to win, got %q", got)
+	}
+}
+
+// Contract: when values.yaml exists but clusterName is empty (the
+// shipped default in cozystack/generic charts), the function falls
+// through to Chart.yaml.name. Pinning so the empty-string short
+// circuit is preserved — without it, every fresh install with the
+// default values.yaml would resolve to "" and downstream callers
+// would silently substitute their own placeholder.
+func TestContract_GetClusterNameFromChart_EmptyValuesClusterNameFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("clusterName: \"\"\nendpoint: \"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := getClusterNameFromChart()
+	if got != "chart-fallback" {
+		t.Errorf("expected fallback to Chart.yaml name, got %q", got)
+	}
+}
+
+// Contract: when values.yaml has no clusterName key at all (any
+// shape that does not declare it), the function falls through to
+// Chart.yaml.name. The yaml.Unmarshal into the typed struct returns
+// the zero string for the missing field, which must be treated the
+// same as an explicit empty value.
+func TestContract_GetClusterNameFromChart_AbsentValuesKeyFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("endpoint: \"https://example.com:6443\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := getClusterNameFromChart()
+	if got != "chart-fallback" {
+		t.Errorf("expected fallback to Chart.yaml name, got %q", got)
+	}
+}
+
+// Contract: a malformed values.yaml does not poison the lookup —
+// the function silently moves on to Chart.yaml.name. Treating a
+// values.yaml syntax error as "no override" means the regenerate
+// path stays usable even when the operator has a half-edited
+// values.yaml on disk.
+func TestContract_GetClusterNameFromChart_MalformedValuesFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte(":bad: yaml :"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := getClusterNameFromChart()
+	if got != "chart-fallback" {
+		t.Errorf("expected fallback on malformed values.yaml, got %q", got)
+	}
+}
+
+// Contract: missing Chart.yaml AND missing values.yaml returns
+// empty string (NOT an error). Callers chain with a fallback default
+// — silent empty is the signal that no chart context exists.
 func TestContract_GetClusterNameFromChart_MissingReturnsEmpty(t *testing.T) {
 	setRoot(t, t.TempDir())
 	if got := getClusterNameFromChart(); got != "" {
@@ -238,8 +329,9 @@ func TestContract_GetClusterNameFromChart_MissingReturnsEmpty(t *testing.T) {
 	}
 }
 
-// Contract: malformed YAML also returns empty string. Same silent
-// fallback as missing — the caller does not need to distinguish.
+// Contract: malformed Chart.yaml returns empty string (when
+// values.yaml does not provide an override). Same silent fallback
+// as missing — the caller does not need to distinguish.
 func TestContract_GetClusterNameFromChart_MalformedReturnsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
