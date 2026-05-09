@@ -130,8 +130,20 @@ var initCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to determine current working directory: %w", err)
 		}
-		absCwd, _ := filepath.Abs(cwd)
-		absRootDir, _ := filepath.Abs(Config.RootDir)
+		absCwd, err := filepath.Abs(cwd)
+		if err != nil {
+			return fmt.Errorf("failed to resolve absolute path of current working directory: %w", err)
+		}
+		// Config.RootDir may be a relative path (defaults to ".");
+		// filepath.Abs calls os.Getwd internally for relative inputs,
+		// which can fail under TOCTOU (CWD removed between the call
+		// above and here). Treat that the same as the Getwd guard
+		// above — fail closed rather than silently zero out absRootDir
+		// and let the comparison go the wrong way.
+		absRootDir, err := filepath.Abs(Config.RootDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve absolute path of project root %q: %w", Config.RootDir, err)
+		}
 		if !Config.RootDirExplicit && absRootDir != absCwd {
 			// %s, not %q: %q calls strconv.Quote which escapes
 			// backslashes in Windows paths (C:\Users\... renders as
