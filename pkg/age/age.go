@@ -491,88 +491,23 @@ func RotateKeys(rootDir string) error {
 	keyBackup := keyFile + ".rotation-backup"
 	encryptedBackup := encryptedFile + ".rotation-backup"
 
-	// Refuse to start if leftover rotation backups exist — the
-	// operator must inspect them and decide what to keep before
-	// another rotation runs, otherwise this run would silently
-	// overwrite the recovery state. Both interrupted and
-	// successful-with-failed-cleanup states leave these files
-	// behind; the docstring above explains how to distinguish.
-	for _, p := range []string{keyBackup, encryptedBackup} {
-		_, statErr := os.Stat(p)
-		if statErr == nil {
-			return errors.Wrapf(ErrLeftoverRotationBackup, "leftover rotation-backup at %q", p)
-		}
+	// Phase 0: refuse if any leftover backup is still on disk.
+	err := refuseIfLeftoverBackups(keyBackup, encryptedBackup)
+	if err != nil {
+		return err
 	}
 
-	// Phase 1: read and decrypt with old key, all in memory.
-	oldIdentity, err := LoadKey(rootDir)
+	// Phases 1+2: read+decrypt with old key, generate new identity,
+	// re-encrypt under it. All in memory; no disk mutation yet.
+	newIdentity, encryptedDataNew, err := prepareRotationCiphertext(rootDir, encryptedFile)
 	if err != nil {
-		return errors.Wrap(err, "load old key")
+		return err
 	}
 
-	encryptedData, err := os.ReadFile(encryptedFile)
+	// Phase 3: move originals aside as backups.
+	err = swapOriginalsAside(keyFile, encryptedFile, keyBackup, encryptedBackup)
 	if err != nil {
-		return errors.Wrap(err, "read encrypted file")
-	}
-
-	var encryptedSecrets map[string]any
-
-	err = yaml.Unmarshal(encryptedData, &encryptedSecrets)
-	if err != nil {
-		return errors.Wrap(err, "parse encrypted YAML")
-	}
-
-	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
-	if err != nil {
-		return errors.Wrap(err, "decrypt with old key")
-	}
-
-	// Phase 2: generate new identity and encrypt new ciphertext —
-	// still all in memory. No disk mutation yet.
-	newIdentity, err := age.GenerateX25519Identity()
-	if err != nil {
-		return errors.Wrap(err, "generate new identity")
-	}
-
-	encryptedSecretsNew, err := encryptYAMLValues(decryptedSecrets, newIdentity.Recipient())
-	if err != nil {
-		return errors.Wrap(err, "encrypt with new key")
-	}
-
-	encryptedDataNew, err := yaml.Marshal(encryptedSecretsNew)
-	if err != nil {
-		return errors.Wrap(err, "marshal new encrypted secrets")
-	}
-
-	// Phase 3: move originals aside as backups. Atomic rename, so
-	// either both originals exist as `*.rotation-backup` after this
-	// block or neither move took effect (for the second rename: we
-	// undo the first if it errors).
-	err = os.Rename(keyFile, keyBackup)
-	if err != nil {
-		return errors.Wrap(err, "back up key file before rotation")
-	}
-
-	err = os.Rename(encryptedFile, encryptedBackup)
-	if err != nil {
-		// Roll back the key rename so the project is untouched.
-		// Capture the rollback error too — if it fails the
-		// operator is left with keyBackup but no keyFile, and the
-		// caller-facing error must say so explicitly (otherwise
-		// a Phase 0 refusal on retry would be the first sign of
-		// the partial state).
-		rbErr := os.Rename(keyBackup, keyFile)
-		if rbErr != nil {
-			//nolint:wrapcheck // errors.WithHintf wraps an already-wrapped chain (errors.Wrapf below); cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
-			return errors.WithHintf(
-				errors.Wrapf(errors.WithSecondaryError(err, rbErr),
-					"back up encrypted file before rotation; AND rollback of key-file rename failed"),
-				"manual recovery: rename %q -> %q",
-				keyBackup, keyFile,
-			)
-		}
-
-		return errors.Wrap(err, "back up encrypted file before rotation (key file rename rolled back)")
+		return err
 	}
 
 	// restore is a recovery helper used when any later step fails:
@@ -581,30 +516,7 @@ func RotateKeys(rootDir string) error {
 	// the restore's own error — if recovery fails the operator
 	// needs to know.
 	restore := func(stage string, cause error) error {
-		_ = os.Remove(keyFile)       // best-effort: remove half-written new key if any
-		_ = os.Remove(encryptedFile) // ditto for encrypted file
-
-		errKey := os.Rename(keyBackup, keyFile)
-		errEnc := os.Rename(encryptedBackup, encryptedFile)
-
-		if errKey != nil || errEnc != nil {
-			combined := cause
-			if errKey != nil {
-				combined = errors.WithSecondaryError(combined, errors.Wrap(errKey, "restore key from backup"))
-			}
-
-			if errEnc != nil {
-				combined = errors.WithSecondaryError(combined, errors.Wrap(errEnc, "restore encrypted file from backup"))
-			}
-
-			return errors.WithHintf(
-				errors.Wrapf(combined, "rotation failed at %s; AND restore from backup partially failed", stage),
-				"manual recovery: rename %q -> %q and %q -> %q",
-				keyBackup, keyFile, encryptedBackup, encryptedFile,
-			)
-		}
-
-		return errors.Wrapf(cause, "rotation failed at %s (originals restored)", stage)
+		return restoreFromBackups(stage, cause, keyFile, encryptedFile, keyBackup, encryptedBackup)
 	}
 
 	// Phase 4: write new key, then new encrypted file. Both via
@@ -620,15 +532,147 @@ func RotateKeys(rootDir string) error {
 		return restore("write new encrypted file", err)
 	}
 
-	// Phase 5: rotation committed — remove backups. If removal
-	// fails we return an error so the caller (and a future
-	// RotateKeys run) sees an unambiguous "rotation succeeded but
-	// backups linger" signal. The new pair on disk is correct and
-	// usable; the leftover backups must be removed manually before
-	// the next rotation can run (Phase 0 will refuse otherwise).
+	// Phase 5: rotation committed — remove backups.
+	return removeRotationBackups(keyBackup, encryptedBackup)
+}
+
+// refuseIfLeftoverBackups returns ErrLeftoverRotationBackup (wrapped
+// with the offending path) when either backup path already exists on
+// disk. Both interrupted and successful-with-failed-cleanup states
+// leave these files behind; the operator must decide what to keep
+// before another rotation runs, otherwise this run would silently
+// overwrite the recovery state.
+func refuseIfLeftoverBackups(keyBackup, encryptedBackup string) error {
+	for _, p := range []string{keyBackup, encryptedBackup} {
+		_, statErr := os.Stat(p)
+		if statErr == nil {
+			return errors.Wrapf(ErrLeftoverRotationBackup, "leftover rotation-backup at %q", p)
+		}
+	}
+
+	return nil
+}
+
+// prepareRotationCiphertext loads talm.key, reads + parses the
+// encrypted YAML, decrypts with the old key, generates a new
+// identity, and re-encrypts under it. Everything stays in memory; no
+// disk mutation yet. Returns the new identity (so the caller can
+// write talm.key) and the marshalled new ciphertext (so the caller
+// can write secrets.encrypted.yaml).
+func prepareRotationCiphertext(rootDir, encryptedFile string) (*age.X25519Identity, []byte, error) {
+	oldIdentity, err := LoadKey(rootDir)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "load old key")
+	}
+
+	encryptedData, err := os.ReadFile(encryptedFile)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "read encrypted file")
+	}
+
+	var encryptedSecrets map[string]any
+
+	err = yaml.Unmarshal(encryptedData, &encryptedSecrets)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "parse encrypted YAML")
+	}
+
+	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "decrypt with old key")
+	}
+
+	newIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "generate new identity")
+	}
+
+	encryptedSecretsNew, err := encryptYAMLValues(decryptedSecrets, newIdentity.Recipient())
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "encrypt with new key")
+	}
+
+	encryptedDataNew, err := yaml.Marshal(encryptedSecretsNew)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "marshal new encrypted secrets")
+	}
+
+	return newIdentity, encryptedDataNew, nil
+}
+
+// swapOriginalsAside renames the two originals to `*.rotation-backup`
+// atomically. If the second rename fails, the first is rolled back so
+// the project is untouched. If THAT rollback also fails the caller
+// gets an explicit recovery message — the alternative would be a
+// Phase 0 refusal on retry as the first sign of the partial state.
+func swapOriginalsAside(keyFile, encryptedFile, keyBackup, encryptedBackup string) error {
+	err := os.Rename(keyFile, keyBackup)
+	if err != nil {
+		return errors.Wrap(err, "back up key file before rotation")
+	}
+
+	err = os.Rename(encryptedFile, encryptedBackup)
+	if err == nil {
+		return nil
+	}
+
+	rbErr := os.Rename(keyBackup, keyFile)
+	if rbErr != nil {
+		//nolint:wrapcheck // errors.WithHintf wraps an already-wrapped chain (errors.Wrapf below); cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
+		return errors.WithHintf(
+			errors.Wrapf(errors.WithSecondaryError(err, rbErr),
+				"back up encrypted file before rotation; AND rollback of key-file rename failed"),
+			"manual recovery: rename %q -> %q",
+			keyBackup, keyFile,
+		)
+	}
+
+	return errors.Wrap(err, "back up encrypted file before rotation (key file rename rolled back)")
+}
+
+// restoreFromBackups is the recovery path for Phase 4 failures:
+// remove any half-written new files, rename the backups back into
+// place, and return the original cause wrapped with a recovery note.
+// If the restore itself errors, that is also attached so the operator
+// learns about the partial state explicitly.
+func restoreFromBackups(stage string, cause error, keyFile, encryptedFile, keyBackup, encryptedBackup string) error {
+	_ = os.Remove(keyFile)       // best-effort: remove half-written new key if any
+	_ = os.Remove(encryptedFile) // ditto for encrypted file
+
+	errKey := os.Rename(keyBackup, keyFile)
+	errEnc := os.Rename(encryptedBackup, encryptedFile)
+
+	if errKey == nil && errEnc == nil {
+		return errors.Wrapf(cause, "rotation failed at %s (originals restored)", stage)
+	}
+
+	combined := cause
+	if errKey != nil {
+		combined = errors.WithSecondaryError(combined, errors.Wrap(errKey, "restore key from backup"))
+	}
+
+	if errEnc != nil {
+		combined = errors.WithSecondaryError(combined, errors.Wrap(errEnc, "restore encrypted file from backup"))
+	}
+
+	//nolint:wrapcheck // errors.WithHintf wraps an already-wrapped chain (errors.Wrapf below); cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
+	return errors.WithHintf(
+		errors.Wrapf(combined, "rotation failed at %s; AND restore from backup partially failed", stage),
+		"manual recovery: rename %q -> %q and %q -> %q",
+		keyBackup, keyFile, encryptedBackup, encryptedFile,
+	)
+}
+
+// removeRotationBackups is Phase 5: rotation committed, both new
+// files are correct on disk; the only remaining work is to remove the
+// `*.rotation-backup` files. If the removal fails the function
+// returns a non-nil error so the caller (and a future RotateKeys
+// run) sees an unambiguous "rotation succeeded but backups linger"
+// signal — Phase 0 of the next run would refuse otherwise.
+func removeRotationBackups(keyBackup, encryptedBackup string) error {
 	var cleanupErrs []string
 
-	err = os.Remove(keyBackup)
+	err := os.Remove(keyBackup)
 	if err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", keyBackup, err))
 	}
@@ -638,16 +682,16 @@ func RotateKeys(rootDir string) error {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
 	}
 
-	if len(cleanupErrs) > 0 {
-		//nolint:wrapcheck // errors.WithHint wraps the errors.Newf below; cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
-		return errors.WithHint(
-			errors.Newf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s",
-				strings.Join(cleanupErrs, "; ")),
-			"remove these files manually before the next rotation",
-		)
+	if len(cleanupErrs) == 0 {
+		return nil
 	}
 
-	return nil
+	//nolint:wrapcheck // errors.WithHint wraps the errors.Newf below; cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
+	return errors.WithHint(
+		errors.Newf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s",
+			strings.Join(cleanupErrs, "; ")),
+		"remove these files manually before the next rotation",
+	)
 }
 
 // EncryptYAMLFile encrypts a YAML file's values (keeping keys unencrypted) and saves to encrypted file.
