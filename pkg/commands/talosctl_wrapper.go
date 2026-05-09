@@ -227,15 +227,22 @@ func normalizeEndpoint(endpoint string) string {
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 
-	// Split host and port
+	// Split host and port. net.SplitHostPort strips IPv6 brackets,
+	// so the host returned may be a bare IPv6 literal that needs
+	// re-bracketing for the URL form.
 	host, _, err := net.SplitHostPort(endpoint)
 	if err != nil {
-		// No port in endpoint, use as-is
-		host = endpoint
+		// No port in endpoint. Strip an outer pair of brackets if
+		// present so the JoinHostPort below adds them back exactly
+		// once for IPv6 literals.
+		host = strings.TrimPrefix(strings.TrimSuffix(endpoint, "]"), "[")
 	}
 
-	// Return normalized endpoint with https:// and :6443 port
-	return fmt.Sprintf("https://%s:6443", host)
+	// Use net.JoinHostPort to assemble — it bracketed IPv6 hosts
+	// automatically (per RFC 3986 §3.2.2). Without this an IPv6
+	// endpoint produced an unparseable URL like
+	// "https://2001:db8::1:6443" instead of "https://[2001:db8::1]:6443".
+	return "https://" + net.JoinHostPort(host, "6443")
 }
 
 // updateKubeconfigServer updates the server field in all clusters of the kubeconfig file
