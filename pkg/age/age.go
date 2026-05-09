@@ -189,11 +189,11 @@ func DecryptSecretsFile(rootDir string) error {
 
 // encryptYAMLValues recursively encrypts string values in YAML structure.
 func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
-	switch v := data.(type) {
+	switch typed := data.(type) {
 	case map[string]any:
 		result := make(map[string]any)
 
-		for key, value := range v {
+		for key, value := range typed {
 			encryptedValue, err := encryptYAMLValues(value, recipient)
 			if err != nil {
 				return nil, err
@@ -204,9 +204,9 @@ func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 
 		return result, nil
 	case []any:
-		result := make([]any, len(v))
+		result := make([]any, len(typed))
 
-		for i, item := range v {
+		for i, item := range typed {
 			encryptedItem, err := encryptYAMLValues(item, recipient)
 			if err != nil {
 				return nil, err
@@ -218,24 +218,24 @@ func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 		return result, nil
 	case string:
 		// Encrypt string value
-		encrypted, err := encryptString(v, recipient)
+		encrypted, err := encryptString(typed, recipient)
 		if err != nil {
 			return nil, err
 		}
 
 		return ageEncryptionPrefix + encrypted + ageEncryptionSuffix, nil
 	default:
-		return v, nil
+		return typed, nil
 	}
 }
 
 // decryptYAMLValues recursively decrypts string values in YAML structure.
 func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
-	switch v := data.(type) {
+	switch typed := data.(type) {
 	case map[string]any:
 		result := make(map[string]any)
 
-		for key, value := range v {
+		for key, value := range typed {
 			decryptedValue, err := decryptYAMLValues(value, identity)
 			if err != nil {
 				return nil, err
@@ -246,9 +246,9 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 
 		return result, nil
 	case []any:
-		result := make([]any, len(v))
+		result := make([]any, len(typed))
 
-		for i, item := range v {
+		for i, item := range typed {
 			decryptedItem, err := decryptYAMLValues(item, identity)
 			if err != nil {
 				return nil, err
@@ -260,9 +260,9 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 		return result, nil
 	case string:
 		// Check if it's an encrypted value in SOPS format: ENC[AGE,data:...]
-		if strings.HasPrefix(v, ageEncryptionPrefix) && strings.HasSuffix(v, ageEncryptionSuffix) {
+		if strings.HasPrefix(typed, ageEncryptionPrefix) && strings.HasSuffix(typed, ageEncryptionSuffix) {
 			// Extract the encrypted data between ENC[AGE,data: and ]
-			encrypted := strings.TrimPrefix(v, ageEncryptionPrefix)
+			encrypted := strings.TrimPrefix(typed, ageEncryptionPrefix)
 			encrypted = strings.TrimSuffix(encrypted, ageEncryptionSuffix)
 
 			decrypted, err := decryptString(encrypted, identity)
@@ -273,9 +273,9 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 			return decrypted, nil
 		}
 
-		return v, nil
+		return typed, nil
 	default:
-		return v, nil
+		return typed, nil
 	}
 }
 
