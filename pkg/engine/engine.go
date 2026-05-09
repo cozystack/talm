@@ -241,9 +241,9 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	patchBytes, err := os.ReadFile(patchFile)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrapf(err, "reading patch %q", patchFile),
-			"verify the path is correct and the file is readable by the user running talm",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "verify the path is correct and the file is readable by the user running talm"),
+			"reading patch %q", patchFile,
 		)
 	}
 
@@ -253,36 +253,33 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 
 	cleanedRendered, renderedDirectivePaths, err := stripAllPatchDeleteDirectives(rendered)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrap(err, "stripping $patch:delete directives from rendered"),
-			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		return nil, errors.Wrap(
+			errors.WithHint(err, "the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue"),
+			"stripping $patch:delete directives from rendered",
 		)
 	}
 
 	cleanedPatch, err := stripPatchDeleteDirectivesAtPaths(patchBytes, renderedDirectivePaths)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "stripping redundant $patch:delete directives from %q", patchFile),
-			"the node body did not parse as YAML; verify %q is well-formed",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the node body did not parse as YAML; verify %q is well-formed", patchFile),
+			"stripping redundant $patch:delete directives from %q", patchFile,
 		)
 	}
 
 	cleanedPatch, err = stripPatchDeleteDirectivesAbsentInTarget(cleanedPatch, cleanedRendered)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "stripping no-op $patch:delete directives from %q", patchFile),
-			"the node body did not parse as YAML; verify %q is well-formed",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the node body did not parse as YAML; verify %q is well-formed", patchFile),
+			"stripping no-op $patch:delete directives from %q", patchFile,
 		)
 	}
 
 	prunedBytes, allPruned, err := pruneBodyIdentitiesAgainstRendered(cleanedPatch, cleanedRendered)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "pruning identity overlap in %q", patchFile),
-			"the prune walk failed; the input is likely malformed YAML or has an unexpected document shape; inspect %q",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the prune walk failed; the input is likely malformed YAML or has an unexpected document shape; inspect %q", patchFile),
+			"pruning identity overlap in %q", patchFile,
 		)
 	}
 
@@ -292,26 +289,25 @@ func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 
 	patch, err := configpatcher.LoadPatch(prunedBytes)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrapf(err, "loading patch from %q", patchFile),
-			"the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/"),
+			"loading patch from %q", patchFile,
 		)
 	}
 
 	out, err := configpatcher.Apply(configpatcher.WithBytes(cleanedRendered), []configpatcher.Patch{patch})
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "applying patch from %q", patchFile),
-			"the patch references a path the rendered template does not contain; check the output of: talm template -f %q",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the patch references a path the rendered template does not contain; check the output of: talm template -f %q", patchFile),
+			"applying patch from %q", patchFile,
 		)
 	}
 
 	merged, err := out.Bytes()
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "encoding merged config from %q", patchFile),
-			"configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible"),
+			"encoding merged config from %q", patchFile,
 		)
 	}
 
@@ -624,9 +620,9 @@ func decodeAllYAMLDocuments(data []byte) ([]*yaml.Node, error) {
 				break
 			}
 
-			return nil, errors.WithHint(
-				errors.Wrap(err, "decoding YAML before stripping $patch:delete directives"),
-				"the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body",
+			return nil, errors.Wrap(
+				errors.WithHint(err, "the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body"),
+				"decoding YAML before stripping $patch:delete directives",
 			)
 		}
 
@@ -644,17 +640,17 @@ func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 
 	for _, doc := range docs {
 		if err := enc.Encode(doc); err != nil {
-			return nil, errors.WithHint(
-				errors.Wrap(err, "re-encoding YAML after stripping $patch:delete directives"),
-				"the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it",
+			return nil, errors.Wrap(
+				errors.WithHint(err, "the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it"),
+				"re-encoding YAML after stripping $patch:delete directives",
 			)
 		}
 	}
 
 	if err := enc.Close(); err != nil {
-		return nil, errors.WithHint(
-			errors.Wrap(err, "closing YAML encoder after stripping $patch:delete directives"),
-			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+		return nil, errors.Wrap(
+			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
+			"closing YAML encoder after stripping $patch:delete directives",
 		)
 	}
 
@@ -775,9 +771,9 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, error) {
 	bodyDocs, bodyAllMaps, err := decodeAsMaps(body)
 	if err != nil {
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "parsing body"),
-			"the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation",
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation"),
+			"parsing body",
 		)
 	}
 
@@ -796,9 +792,9 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 		// directly: continuing on to LoadPatch with the original body
 		// would mask the real failure as a downstream configpatcher
 		// error against malformed bytes.
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "parsing rendered template for identity prune"),
-			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue"),
+			"parsing rendered template for identity prune",
 		)
 	}
 
@@ -849,17 +845,17 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 
 	for _, doc := range keptDocs {
 		if err := enc.Encode(doc); err != nil {
-			return nil, false, errors.WithHint(
-				errors.Wrap(err, "re-encoding pruned body"),
-				"the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it",
+			return nil, false, errors.Wrap(
+				errors.WithHint(err, "the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it"),
+				"re-encoding pruned body",
 			)
 		}
 	}
 
 	if err := enc.Close(); err != nil {
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "closing encoder for pruned body"),
-			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
+			"closing encoder for pruned body",
 		)
 	}
 
