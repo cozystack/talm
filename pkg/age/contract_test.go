@@ -40,6 +40,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// goosWindows is runtime.GOOS's value on Windows. Hoisted to a
+// constant because three Mode0600 contract tests skip themselves on
+// the platform (NTFS does not honour Unix permission bits) — and
+// goconst rightly notes the duplication.
+const goosWindows = "windows"
+
 // === GenerateKey + LoadKey ===
 
 // Contract: GenerateKey on an empty directory creates a fresh
@@ -484,7 +490,7 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 // that exercises the equivalent contract via the platform's
 // security descriptor APIs.
 func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
@@ -517,7 +523,7 @@ func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
 // same defense-in-depth permission. Skipped on Windows for the
 // same NTFS reason as BothFilesMode0600.
 func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
@@ -543,7 +549,7 @@ func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
 // EncryptSecretsFile — the function is the generic kubeconfig /
 // arbitrary-YAML variant of the secrets-encrypt path.
 func TestContract_Age_EncryptYAMLFile_Mode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
