@@ -39,6 +39,12 @@ import (
 // a const so the goconst gate sees a single canonical reference.
 const parentDir = ".."
 
+// applyCommandName labels this subcommand inside engine.Options for
+// FailIfMultiNodes error wording. Centralised so the template
+// rendering options block and any test asserting against the field
+// share a single canonical value.
+const applyCommandName = "talm apply"
+
 //nolint:gochecknoglobals // cobra command flag struct, idiomatic for cobra-based CLIs
 var applyCmdFlags struct {
 	helpers.Mode
@@ -369,6 +375,8 @@ type openClientFunc func(node string, action func(ctx context.Context, c *client
 //     across the endpoint list and most nodes never see the config.
 //
 // Both modes share this loop via openClient.
+//
+//nolint:gocritic // opts taken by value to keep the test-injection signature stable; engine.Options is treated as a value type elsewhere
 func applyTemplatesPerNode(
 	opts engine.Options,
 	configFile string,
@@ -449,7 +457,6 @@ func openClientPerNodeMaintenance(fingerprints []string, mkClient maintenanceCli
 		GlobalArgs.Nodes = []string{node}
 		defer func() { GlobalArgs.Nodes = savedNodes }()
 
-		//nolint:wrapcheck // mkClient is the production WithClientMaintenance whose error already carries Talos client framing
 		return mkClient(fingerprints, action)
 	}
 }
@@ -546,6 +553,8 @@ func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
 }
 
 // renderMergeAndApply is the per-node body shared by every apply mode.
+//
+//nolint:gocritic // opts taken by value to mirror applyTemplatesPerNode's test-injection signature
 func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, render renderFunc, apply applyFunc) error {
 	rendered, err := render(ctx, c, opts)
 	if err != nil {
@@ -579,7 +588,7 @@ func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string)
 		Full:              true,
 		Root:              Config.RootDir,
 		TemplateFiles:     resolvedTemplates,
-		CommandName:       "talm apply",
+		CommandName:       applyCommandName,
 	}
 }
 
@@ -603,7 +612,6 @@ func wrapWithNodeContext(action func(ctx context.Context, c *client.Client) erro
 		nodes := append([]string(nil), GlobalArgs.Nodes...)
 		if len(nodes) < 1 {
 			if c == nil {
-				//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 				return errors.WithHint(
 					errors.New("resolving config context: no client available"),
 					"this code path requires a Talos client; if you reached it from a flow that did not open one, check the call site",
@@ -612,7 +620,6 @@ func wrapWithNodeContext(action func(ctx context.Context, c *client.Client) erro
 
 			configContext := c.GetConfigContext()
 			if configContext == nil {
-				//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 				return errors.WithHint(
 					errors.New("resolving config context"),
 					"the talosconfig has no active context; pick one with `talosctl config context <name>` or pass --talosconfig",
