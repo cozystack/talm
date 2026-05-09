@@ -828,8 +828,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 
 	keptDocs := make([]map[string]any, 0, len(bodyDocs))
 	for _, bdoc := range bodyDocs {
-		id := documentIdentity(bdoc)
-		if rdoc, ok := renderedByID[id]; ok {
+		docID := documentIdentity(bdoc)
+		if rdoc, ok := renderedByID[docID]; ok {
 			pruneIdenticalKeys(bdoc, rdoc)
 			// Typed multi-doc bodies use apiVersion/kind/name as the
 			// identity tuple configpatcher.LoadPatch routes on. Those
@@ -843,7 +843,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 			// version field, which is at the same nesting level as the
 			// machine/cluster blocks), so this only fires for the typed
 			// multi-doc shape.
-			if id != legacyRootIdentity && len(bdoc) > 0 {
+			if docID != legacyRootIdentity && len(bdoc) > 0 {
 				reattachIdentityKeys(bdoc, rdoc)
 			}
 		}
@@ -1032,19 +1032,19 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 //
 //nolint:gocognit // dispatch over (missing-key | replace-semantic | object-array | nested-map | primitive-slice) inside one walk; extracting any branch into a helper would need to thread the per-pair (body, rendered, parent, key) state, growing the surface without simplifying.
 func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
-	for k, bodyV := range body {
-		renderedV, exists := rendered[k]
+	for key, bodyV := range body {
+		renderedV, exists := rendered[key]
 		if !exists {
 			continue
 		}
 
 		if reflect.DeepEqual(bodyV, renderedV) {
-			delete(body, k)
+			delete(body, key)
 
 			continue
 		}
 
-		childPath := joinYAMLPath(yamlPath, k)
+		childPath := joinYAMLPath(yamlPath, key)
 		if _, replace := replaceSemanticPaths[childPath]; replace {
 			// Upstream `merge:"replace"` overwrites rendered with body
 			// verbatim. Any prune at this path leaks rendered-side
@@ -1064,7 +1064,7 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 				pruneIdenticalKeysAt(bodySub, renderedSub, childPath)
 
 				if before > 0 && len(bodySub) == 0 {
-					delete(body, k)
+					delete(body, key)
 				}
 
 				continue
@@ -1076,9 +1076,9 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 				if isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
 					diff := primitiveSliceDifference(bodySlice, renderedSlice)
 					if len(diff) == 0 {
-						delete(body, k)
+						delete(body, key)
 					} else {
-						body[k] = diff
+						body[key] = diff
 					}
 
 					continue
@@ -1086,9 +1086,9 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 
 				pruned := pruneObjectArrayItems(bodySlice, renderedSlice, childPath)
 				if len(pruned) == 0 {
-					delete(body, k)
+					delete(body, key)
 				} else {
-					body[k] = pruned
+					body[key] = pruned
 				}
 			}
 		}
@@ -1230,13 +1230,13 @@ func hasIdentityValue(v any) bool {
 		return false
 	}
 
-	switch x := v.(type) {
+	switch typed := v.(type) {
 	case string:
-		return x != ""
+		return typed != ""
 	case map[string]any:
-		return len(x) > 0
+		return len(typed) > 0
 	case []any:
-		return len(x) > 0
+		return len(typed) > 0
 	default:
 		return true
 	}
@@ -1431,20 +1431,20 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 	var apiVersion, kind, name string
 
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		k := root.Content[i]
+		key := root.Content[i]
 
-		v := root.Content[i+1]
-		if k.Kind != yaml.ScalarNode || v.Kind != yaml.ScalarNode {
+		val := root.Content[i+1]
+		if key.Kind != yaml.ScalarNode || val.Kind != yaml.ScalarNode {
 			continue
 		}
 
-		switch k.Value {
+		switch key.Value {
 		case "apiVersion":
-			apiVersion = v.Value
+			apiVersion = val.Value
 		case "kind":
-			kind = v.Value
+			kind = val.Value
 		case "name":
-			name = v.Value
+			name = val.Value
 		}
 	}
 
@@ -1452,12 +1452,12 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 		return legacyRootIdentity
 	}
 
-	id := apiVersion + "/" + kind
+	docID := apiVersion + "/" + kind
 	if name != "" {
-		id += "/" + name
+		docID += "/" + name
 	}
 
-	return id
+	return docID
 }
 
 // reattachIdentityKeys copies apiVersion / kind / name from rendered
@@ -1468,13 +1468,13 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 // operator pinning a different name on a Layer2VIPConfig) keeps its
 // override.
 func reattachIdentityKeys(body, rendered map[string]any) {
-	for _, k := range []string{"apiVersion", "kind", "name"} {
-		if _, has := body[k]; has {
+	for _, key := range []string{"apiVersion", "kind", "name"} {
+		if _, has := body[key]; has {
 			continue
 		}
 
-		if v, ok := rendered[k]; ok {
-			body[k] = v
+		if val, ok := rendered[key]; ok {
+			body[key] = val
 		}
 	}
 }
@@ -1684,18 +1684,18 @@ func mergeMaps(a, b map[string]any) map[string]any {
 	out := make(map[string]any, len(a))
 	maps.Copy(out, a)
 
-	for k, v := range b {
-		if vm, ok := v.(map[string]any); ok {
-			if bv, ok := out[k]; ok {
+	for key, val := range b {
+		if vm, ok := val.(map[string]any); ok {
+			if bv, ok := out[key]; ok {
 				if bvm, ok := bv.(map[string]any); ok {
-					out[k] = mergeMaps(bvm, vm)
+					out[key] = mergeMaps(bvm, vm)
 
 					continue
 				}
 			}
 		}
 
-		out[k] = v
+		out[key] = val
 	}
 
 	return out
@@ -1948,14 +1948,14 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 	res := make(map[string]any)
 
 	// Extract metadata directly from resource methods
-	md := r.Metadata()
+	rmd := r.Metadata()
 	metadata := map[string]any{
-		"namespace": string(md.Namespace()),
-		"type":      string(md.Type()),
-		"id":        string(md.ID()),
-		"version":   md.Version().String(),
-		"phase":     md.Phase().String(),
-		"owner":     string(md.Owner()),
+		"namespace": string(rmd.Namespace()),
+		"type":      string(rmd.Type()),
+		"id":        string(rmd.ID()),
+		"version":   rmd.Version().String(),
+		"phase":     rmd.Phase().String(),
+		"owner":     string(rmd.Owner()),
 	}
 
 	res["metadata"] = metadata
@@ -1995,7 +1995,7 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 //
 //nolint:funlen // 62 lines: closure over ctx/c with a single linear dispatch over resource kinds; extracting helpers would either thread (ctx, c) through every signature or hoist the closure body to package level.
 func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]any, error) {
-	return func(kind string, namespace string, id string) (map[string]any, error) {
+	return func(kind string, namespace string, docID string) (map[string]any, error) {
 		var multiErr *multierror.Error
 
 		var resources []map[string]any
@@ -2031,7 +2031,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 			return nil
 		}
 
-		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
+		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID)
 		if helperErr != nil {
 			return map[string]any{}, errors.Wrap(helperErr, "iterating resources")
 		}
@@ -2044,7 +2044,7 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 			return map[string]any{}, nil
 		}
 
-		if id != "" && len(resources) == 1 {
+		if docID != "" && len(resources) == 1 {
 			return resources[0], nil
 		}
 		// Return items as a slice for proper range iteration in templates
