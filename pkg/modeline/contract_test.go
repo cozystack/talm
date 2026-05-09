@@ -44,10 +44,10 @@ func TestContract_ParseModeline_RejectsWithoutPrefix(t *testing.T) {
 	cases := []string{
 		"",
 		"# nothing",
-		"# vim: set ft=yaml",     // editor modeline (Vim)
-		"# talm noprefix",        // missing colon
-		`#talm: nodes=["x"]`,     // missing space between # and talm
-		`# talm:nodes=["x"]`,     // missing space after colon
+		"# vim: set ft=yaml", // editor modeline (Vim)
+		"# talm noprefix",    // missing colon
+		`#talm: nodes=["x"]`, // missing space between # and talm
+		`# talm:nodes=["x"]`, // missing space after colon
 	}
 	for _, line := range cases {
 		t.Run(line, func(t *testing.T) {
@@ -210,18 +210,21 @@ func TestContract_GenerateModeline_RoundTrip(t *testing.T) {
 		endpoints []string
 		templates []string
 	}{
-		{"all populated",
+		{
+			"all populated",
 			[]string{"1.2.3.4", "5.6.7.8"},
 			[]string{"1.2.3.4"},
 			[]string{"templates/controlplane.yaml"},
 		},
 		{"empty all", nil, nil, nil},
-		{"only nodes",
+		{
+			"only nodes",
 			[]string{"1.2.3.4"},
 			nil,
 			nil,
 		},
-		{"special characters in path",
+		{
+			"special characters in path",
 			[]string{"node.example.com"},
 			[]string{"https://api.example.com:6443"},
 			[]string{"path/with spaces/template.yaml"},

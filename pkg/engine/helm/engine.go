@@ -33,10 +33,12 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 )
 
-var Disks map[string]any = map[string]any{}
-var LookupFunc func(resource string, namespace string, name string) (map[string]any, error) = func(string, string, string) (map[string]any, error) {
-	return map[string]any{}, nil
-}
+var (
+	Disks      map[string]any                                                               = map[string]any{}
+	LookupFunc func(resource string, namespace string, name string) (map[string]any, error) = func(string, string, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+)
 
 // Engine is an implementation of the Helm rendering implementation for templates.
 type Engine struct {
@@ -89,9 +91,11 @@ type renderable struct {
 	basePath string
 }
 
-const warnStartDelim = "HELM_ERR_START"
-const warnEndDelim = "HELM_ERR_END"
-const recursionMaxNums = 1000
+const (
+	warnStartDelim   = "HELM_ERR_START"
+	warnEndDelim     = "HELM_ERR_END"
+	recursionMaxNums = 1000
+)
 
 var warnRegex = regexp.MustCompile(warnStartDelim + `((?s).*)` + warnEndDelim)
 

@@ -586,7 +586,6 @@ var initCmd = &cobra.Command{
 		}
 
 		return nil
-
 	},
 }
 

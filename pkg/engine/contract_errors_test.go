@@ -410,7 +410,7 @@ func vlanMissingVlanIDLookup() func(string, string, string) (map[string]any, err
 			"kind":      "vlan",
 			"index":     20,
 			"linkIndex": 1, // points at parent eth0
-			"vlan": map[string]any{
+			"vlan":      map[string]any{
 				// vlanID intentionally absent
 			},
 		},

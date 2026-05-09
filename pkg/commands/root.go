@@ -96,7 +96,6 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 		},
 		dialOptions...,
 	)
-
 }
 
 // WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).

@@ -214,4 +214,3 @@ func TestMergeComments(t *testing.T) {
 		})
 	}
 }
-

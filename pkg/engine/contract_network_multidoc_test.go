@@ -72,7 +72,7 @@ func TestContract_NetworkMultidoc_HostnameUsesDiscoveredName(t *testing.T) {
 // survives changes to the hashed input.
 func TestContract_NetworkMultidoc_HostnameFallbackToSynthesized(t *testing.T) {
 	cases := []struct {
-		name             string
+		name               string
 		discoveredHostname string
 	}{
 		{"placeholder/talos", "talos"},

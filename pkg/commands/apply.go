@@ -294,8 +294,10 @@ func withApplyClientBare(f func(ctx context.Context, c *client.Client) error) er
 // renderFunc, applyFunc and openClientFunc are injection points for
 // applyTemplatesPerNode so unit tests can drive the loop with fakes instead
 // of a real Talos client.
-type renderFunc func(ctx context.Context, c *client.Client, opts engine.Options) ([]byte, error)
-type applyFunc func(ctx context.Context, c *client.Client, data []byte) error
+type (
+	renderFunc func(ctx context.Context, c *client.Client, opts engine.Options) ([]byte, error)
+	applyFunc  func(ctx context.Context, c *client.Client, data []byte) error
+)
 
 // openClientFunc opens a Talos client suitable for a single node and runs
 // action with it. Authenticated mode reuses one parent client and rotates

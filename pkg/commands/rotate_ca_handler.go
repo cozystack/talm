@@ -22,9 +22,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/secureperm"
-	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/siderolabs/crypto/x509"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -325,7 +325,6 @@ func updateSecretsFromCluster(updateTalos, updateKubernetes bool, targetNode str
 
 	// Use WithClientNoNodes to avoid automatic node setting - COSI doesn't support multi-node proxying
 	err = WithClientNoNodes(func(ctx context.Context, c *client.Client) error {
-
 		// Fetch Talos CA if needed
 		if updateTalos {
 			fmt.Fprintf(os.Stderr, "  Fetching Talos CA from cluster...\n")

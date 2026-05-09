@@ -1342,7 +1342,6 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 
 // Render executes the rendering of templates based on the provided options.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
-
 	// Validate TalosVersion early so malformed values surface a user-friendly
 	// error instead of an opaque "semverCompare: invalid semantic version" from
 	// inside template rendering.
