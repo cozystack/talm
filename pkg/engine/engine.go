@@ -1935,9 +1935,14 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 		if yamlField := val.FieldByName("yaml"); yamlField.IsValid() {
 			yamlValue := readUnexportedField(yamlField)
 
+			yamlString, ok := yamlValue.(string)
+			if !ok {
+				return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
+			}
+
 			var unmarshalledData any
-			if err := yaml.Unmarshal([]byte(yamlValue.(string)), &unmarshalledData); err != nil {
-				return res, fmt.Errorf("error unmarshaling yaml: %w", err)
+			if err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData); err != nil {
+				return res, errors.Wrap(err, "unmarshaling yaml")
 			}
 
 			res["spec"] = unmarshalledData
