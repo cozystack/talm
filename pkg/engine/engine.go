@@ -649,7 +649,8 @@ func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 	enc.SetIndent(2)
 
 	for _, doc := range docs {
-		if err := enc.Encode(doc); err != nil {
+		err := enc.Encode(doc)
+		if err != nil {
 			return nil, errors.Wrap(
 				errors.WithHint(err, "the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it"),
 				"re-encoding YAML after stripping $patch:delete directives",
@@ -657,7 +658,8 @@ func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 		}
 	}
 
-	if err := enc.Close(); err != nil {
+	err := enc.Close()
+	if err != nil {
 		return nil, errors.Wrap(
 			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
 			"closing YAML encoder after stripping $patch:delete directives",
@@ -854,7 +856,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 	enc.SetIndent(2)
 
 	for _, doc := range keptDocs {
-		if err := enc.Encode(doc); err != nil {
+		err := enc.Encode(doc)
+		if err != nil {
 			return nil, false, errors.Wrap(
 				errors.WithHint(err, "the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it"),
 				"re-encoding pruned body",
@@ -862,7 +865,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 		}
 	}
 
-	if err := enc.Close(); err != nil {
+	err = enc.Close()
+	if err != nil {
 		return nil, false, errors.Wrap(
 			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
 			"closing encoder for pruned body",
@@ -1327,7 +1331,9 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 
 	for {
 		var doc any
-		if err := dec.Decode(&doc); err != nil {
+
+		err := dec.Decode(&doc)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -1510,8 +1516,9 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	// error instead of an opaque "semverCompare: invalid semantic version" from
 	// inside template rendering.
 	if opts.TalosVersion != "" {
-		if _, err := config.ParseContractFromVersion(opts.TalosVersion); err != nil {
-			return nil, fmt.Errorf("invalid talos-version: %w", err)
+		_, err := config.ParseContractFromVersion(opts.TalosVersion)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid talos-version")
 		}
 	}
 
@@ -1522,7 +1529,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 			cmdName = "talm"
 		}
 
-		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
+		err := helpers.FailIfMultiNodes(ctx, cmdName)
+		if err != nil {
 			return nil, errors.Wrap(err, "checking node selector")
 		}
 
