@@ -497,31 +497,40 @@ func decryptString(encryptedBase64 string, identity *age.X25519Identity) (string
 // secureperm.WriteFile (which is itself atomic temp+rename). The
 // previous key+encrypted pair is renamed aside into
 // `*.rotation-backup` files BEFORE the new files are committed; if
-// any later step fails the originals are restored. The function
-// only returns nil after the new pair is committed AND the
-// backup files have been removed. Operators who find leftover
-// `*.rotation-backup` files after an interrupted run can safely
-// rename them back into place — the new files will not be in the
-// way (they were never committed).
+// any later step fails the originals are restored.
 //
-// The function uses the secureperm.WriteFile helper for both the
-// new key file and the new encrypted secrets file so both end up
-// at mode 0o600 (defense-in-depth — age encryption is the security
-// layer, but world-readable secrets material on shared workstations
-// invites mistakes).
+// The function returns nil only after the new pair is committed
+// AND both backup files have been removed. If either commit or
+// cleanup fails the function returns a non-nil error, so the only
+// state in which `*.rotation-backup` files outlive the call is
+// when the call ITSELF returned an error. Operators who find
+// leftover `*.rotation-backup` files in that state should:
+//
+//   - inspect both `talm.key` and the backup; if `talm.key` exists
+//     and is newer than the backup, rotation succeeded and only
+//     cleanup failed — remove the `*.rotation-backup` files;
+//   - otherwise rotation was interrupted before commit — rename
+//     the backups back into place to recover the original state.
+//
+// Both new files are written via secureperm.WriteFile so they end
+// up at mode 0o600 (defense-in-depth — age encryption is the
+// security layer, but world-readable secrets material on shared
+// workstations invites mistakes).
 func RotateKeys(rootDir string) error {
 	keyFile := filepath.Join(rootDir, keyFileName)
 	encryptedFile := filepath.Join(rootDir, encryptedSecretsFile)
 	keyBackup := keyFile + ".rotation-backup"
 	encryptedBackup := encryptedFile + ".rotation-backup"
 
-	// Refuse to start if a previous rotation was interrupted: the
-	// operator must inspect the leftover files and decide what to
-	// keep before another rotation runs. Otherwise this run would
-	// silently overwrite the recovery state.
+	// Refuse to start if leftover rotation backups exist — the
+	// operator must inspect them and decide what to keep before
+	// another rotation runs, otherwise this run would silently
+	// overwrite the recovery state. Both interrupted and
+	// successful-with-failed-cleanup states leave these files
+	// behind; the docstring above explains how to distinguish.
 	for _, p := range []string{keyBackup, encryptedBackup} {
 		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("found leftover rotation backup %q from a previous interrupted run; inspect and remove (or restore) before retrying", p)
+			return fmt.Errorf("found leftover rotation backup %q from a previous run (either interrupted, or successful with a failed cleanup step); inspect and remove (or restore) before retrying", p)
 		}
 	}
 
@@ -598,15 +607,22 @@ func RotateKeys(rootDir string) error {
 		return restore("write new encrypted file", err)
 	}
 
-	// Phase 5: rotation succeeded — remove backups. If removal
-	// fails we still return nil (the rotation itself is committed
-	// and verifiable on disk; leftover backups are an annoyance,
-	// not data loss). Log to stderr so the operator can clean up.
+	// Phase 5: rotation committed — remove backups. If removal
+	// fails we return an error so the caller (and a future
+	// RotateKeys run) sees an unambiguous "rotation succeeded but
+	// backups linger" signal. The new pair on disk is correct and
+	// usable; the leftover backups must be removed manually before
+	// the next rotation can run (Phase 0 will refuse otherwise).
+	var cleanupErrs []string
 	if err := os.Remove(keyBackup); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to remove %q after rotation: %v\n", keyBackup, err)
+		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", keyBackup, err))
 	}
 	if err := os.Remove(encryptedBackup); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to remove %q after rotation: %v\n", encryptedBackup, err)
+		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
+	}
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s; remove these files manually before the next rotation",
+			strings.Join(cleanupErrs, "; "))
 	}
 
 	return nil
