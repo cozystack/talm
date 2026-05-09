@@ -483,6 +483,55 @@ func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
 	}
 }
 
+// Contract: EncryptSecretsFile produces secrets.encrypted.yaml at
+// mode 0o600. Pinning so all three code paths that write the same
+// file (this function, RotateKeys, EncryptYAMLFile) agree on the
+// same defense-in-depth permission. Skipped on Windows for the
+// same NTFS reason as BothFilesMode0600.
+func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptSecretsFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "secrets.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("secrets.encrypted.yaml mode = %o, want 0600", got)
+	}
+}
+
+// Contract: EncryptYAMLFile produces its target encrypted file at
+// mode 0o600. Same defense-in-depth contract as
+// EncryptSecretsFile — the function is the generic kubeconfig /
+// arbitrary-YAML variant of the secrets-encrypt path.
+func TestContract_Age_EncryptYAMLFile_Mode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kubeconfig.yaml"), []byte("k: v\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := age.EncryptYAMLFile(dir, "kubeconfig.yaml", "kubeconfig.encrypted.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "kubeconfig.encrypted.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("kubeconfig.encrypted.yaml mode = %o, want 0600", got)
+	}
+}
+
 // Contract: a successful rotation leaves NO `*.rotation-backup`
 // files in the project root. Backups are an in-progress recovery
 // artefact only; their presence after the function returns nil

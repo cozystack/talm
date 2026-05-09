@@ -227,8 +227,13 @@ func EncryptSecretsFile(rootDir string) error {
 		return fmt.Errorf("failed to marshal encrypted secrets: %w", err)
 	}
 
-	// Write encrypted file
-	if err := os.WriteFile(encryptedFile, encryptedData, 0o644); err != nil {
+	// Write encrypted file via secureperm.WriteFile so it lands at
+	// mode 0o600 (defense-in-depth — age encryption is the security
+	// layer, but world-readable secrets material on shared
+	// workstations invites mistakes). RotateKeys uses the same
+	// helper for the same file, keeping the on-disk mode invariant
+	// across every code path that writes secrets.encrypted.yaml.
+	if err := secureperm.WriteFile(encryptedFile, encryptedData); err != nil {
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
@@ -713,8 +718,11 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		return fmt.Errorf("failed to marshal encrypted YAML: %w", err)
 	}
 
-	// Write encrypted file
-	if err := os.WriteFile(encryptedFilePath, encryptedData, 0o644); err != nil {
+	// Write encrypted file via secureperm.WriteFile (mode 0o600).
+	// Same defense-in-depth rationale as EncryptSecretsFile and
+	// RotateKeys — every code path that writes encrypted secrets
+	// material agrees on the same on-disk permission.
+	if err := secureperm.WriteFile(encryptedFilePath, encryptedData); err != nil {
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
