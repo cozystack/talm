@@ -1611,6 +1611,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 // Imported from Helm
 // https://github.com/helm/helm/blob/c6beb169d26751efd8131a5d65abe75c81a334fb/pkg/cli/values/options.go#L44
+//
+//nolint:funlen,gocritic // funlen: linear dispatch over six independent value-source kinds (files, --set-json, --set, --set-string, --set-file, --set-literal); each branch is a 4-line guarded call and extracting any subset would only fragment the logic. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func loadValues(opts Options) (map[string]any, error) {
 	// Base map to hold the merged values
 	base := make(map[string]any)
@@ -1624,7 +1626,8 @@ func loadValues(opts Options) (map[string]any, error) {
 			return nil, fmt.Errorf("failed to read values file %s: %w", filePath, err)
 		}
 
-		if err := yaml.Unmarshal(buf, &currentMap); err != nil {
+		err = yaml.Unmarshal(buf, &currentMap)
+		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal values from file %s: %w", filePath, err)
 		}
 
@@ -1634,7 +1637,9 @@ func loadValues(opts Options) (map[string]any, error) {
 	// Parse and merge values from --set-json
 	for _, value := range opts.JsonValues {
 		currentMap := make(map[string]any)
-		if err := json.Unmarshal([]byte(value), &currentMap); err != nil {
+
+		err := json.Unmarshal([]byte(value), &currentMap)
+		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal JSON value '%s': %w", value, err)
 		}
 
@@ -1643,14 +1648,16 @@ func loadValues(opts Options) (map[string]any, error) {
 
 	// Parse and merge values from --set
 	for _, value := range opts.Values {
-		if err := strvals.ParseInto(value, base); err != nil {
+		err := strvals.ParseInto(value, base)
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse set value '%s': %w", value, err)
 		}
 	}
 
 	// Parse and merge values from --set-string
 	for _, value := range opts.StringValues {
-		if err := strvals.ParseIntoString(value, base); err != nil {
+		err := strvals.ParseIntoString(value, base)
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse set-string value '%s': %w", value, err)
 		}
 	}
@@ -1662,14 +1669,16 @@ func loadValues(opts Options) (map[string]any, error) {
 			return nil, fmt.Errorf("failed to read file for set-file value '%s': %w", value, err)
 		}
 
-		if err := strvals.ParseInto(fmt.Sprintf("%s=%s", value, content), base); err != nil {
+		err = strvals.ParseInto(fmt.Sprintf("%s=%s", value, content), base)
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse set-file value '%s': %w", value, err)
 		}
 	}
 
 	// Parse and merge values from --set-literal
 	for _, value := range opts.LiteralValues {
-		if err := strvals.ParseInto(value, base); err != nil {
+		err := strvals.ParseInto(value, base)
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse set-literal value '%s': %w", value, err)
 		}
 	}
@@ -1704,7 +1713,9 @@ func mergeMaps(a, b map[string]any) map[string]any {
 // Returns (isTalosPatch, parseError) - parseError is non-nil if YAML is invalid.
 func isTalosConfigPatch(doc string) (bool, error) {
 	var parsed map[string]any
-	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
+
+	err := yaml.Unmarshal([]byte(doc), &parsed)
+	if err != nil {
 		return false, errors.Wrap(err, "unmarshaling YAML document")
 	}
 
@@ -1720,7 +1731,9 @@ var yamlDocSeparator = regexp.MustCompile(`(?m)^---[ \t]*$`)
 
 // extractExtraDocuments separates Talos config patches from other YAML documents.
 // Returns the Talos patches to be processed, extra documents to be appended to output, and any error.
-func extractExtraDocuments(patches []string) (talosPatches, extraDocs []string, err error) {
+func extractExtraDocuments(patches []string) ([]string, []string, error) {
+	var talosPatches, extraDocs []string
+
 	for _, patch := range patches {
 		// Normalize CRLF to LF for consistent splitting
 		patch = strings.ReplaceAll(patch, "\r\n", "\n")
@@ -1855,7 +1868,9 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 
 		// Overwrite some fields to preserve them for diff
 		var cfg map[string]any
-		if err := yaml.Unmarshal(configOrigin, &cfg); err != nil {
+
+		err = yaml.Unmarshal(configOrigin, &cfg)
+		if err != nil {
 			return nil, errors.Wrap(err, "unmarshaling original config")
 		}
 
@@ -1902,14 +1917,18 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	var targetNode yaml.Node
-	if err := yaml.Unmarshal(target, &targetNode); err != nil {
+
+	err = yaml.Unmarshal(target, &targetNode)
+	if err != nil {
 		return nil, errors.Wrap(err, "unmarshaling target config")
 	}
 
 	// Copy comments from source configuration to the final output
 	for _, configPatch := range talosPatches {
 		var sourceNode yaml.Node
-		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
+
+		err = yaml.Unmarshal([]byte(configPatch), &sourceNode)
+		if err != nil {
 			return nil, errors.Wrap(err, "unmarshaling source patch for comment propagation")
 		}
 
@@ -1922,7 +1941,8 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	enc := yaml.NewEncoder(buf)
 	enc.SetIndent(2)
 
-	if err := enc.Encode(&targetNode); err != nil {
+	err = enc.Encode(&targetNode)
+	if err != nil {
 		return nil, errors.Wrap(err, "encoding target config")
 	}
 
@@ -1975,7 +1995,9 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 			}
 
 			var unmarshalledData any
-			if err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData); err != nil {
+
+			err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData)
+			if err != nil {
 				return res, errors.Wrap(err, "unmarshaling yaml")
 			}
 
@@ -2035,7 +2057,8 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 			return map[string]any{}, errors.Wrap(helperErr, "iterating resources")
 		}
 
-		if err := multiErr.ErrorOrNil(); err != nil {
+		err := multiErr.ErrorOrNil()
+		if err != nil {
 			return map[string]any{}, errors.Wrap(err, "collecting resource lookup errors")
 		}
 
