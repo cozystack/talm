@@ -521,7 +521,7 @@ func pathExistsInDoc(doc *yaml.Node, path string) bool {
 	if path == "" {
 		return true
 	}
-	for _, escaped := range strings.Split(path, "/") {
+	for escaped := range strings.SplitSeq(path, "/") {
 		seg := jsonPointerUnescape(escaped)
 		if cur.Kind != yaml.MappingNode {
 			return false
@@ -1323,7 +1323,7 @@ func NodeFileHasOverlay(patchFile string) (bool, error) {
 // separator, so the comparison is against the line minus only trailing
 // whitespace rather than against the fully trimmed form.
 func isEffectivelyEmptyYAML(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
 			continue

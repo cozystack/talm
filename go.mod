@@ -1,6 +1,6 @@
 module github.com/cozystack/talm
 
-go 1.26.2
+go 1.26.3
 
 // Kubernetes dependencies sharing the same version.
 require (

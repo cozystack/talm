@@ -48,7 +48,7 @@ func committedTextFiles(root string, exts map[string]bool) ([]string, error) {
 		return nil, errors.Wrapf(err, "git ls-files in %s", root)
 	}
 	var files []string
-	for _, rel := range bytes.Split(out, []byte{0}) {
+	for rel := range bytes.SplitSeq(out, []byte{0}) {
 		if len(rel) == 0 {
 			continue
 		}

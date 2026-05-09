@@ -24,7 +24,7 @@ var Version = "dev"
 // skipConfigCommands lists commands that should not load Chart.yaml config.
 // - init: creates the config, so it doesn't exist yet
 // - completion: generates shell completion scripts
-// - __complete: cobra's internal command for shell autocompletion (Tab key)
+// - __complete: cobra's internal command for shell autocompletion (Tab key).
 var skipConfigCommands = []string{"init", "completion", "__complete"}
 
 // rootCmd represents the base command when called without any subcommands.

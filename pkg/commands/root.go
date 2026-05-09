@@ -34,9 +34,9 @@ import (
 var GlobalArgs global.Args
 
 var Config struct {
-	RootDir       string
+	RootDir         string
 	RootDirExplicit bool // true if --root was explicitly set
-	GlobalOptions struct {
+	GlobalOptions   struct {
 		Talosconfig string `yaml:"talosconfig"`
 		Kubeconfig  string `yaml:"kubeconfig"`
 	} `yaml:"globalOptions"`

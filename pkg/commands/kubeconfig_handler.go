@@ -46,7 +46,7 @@ Otherwise, kubeconfig will be written to PWD.`
 
 		// Check if --login flag is set
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
-		
+
 		var newArgs []string
 		var kubeconfigPath string
 
@@ -171,4 +171,3 @@ Otherwise, kubeconfig will be written to PWD.`
 		return nil
 	}
 }
-
