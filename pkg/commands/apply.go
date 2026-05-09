@@ -34,8 +34,15 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
+// parentDir is the path element that escapes the current directory
+// when it appears at the start of a cleaned relative path. Hoisted to
+// a const so the goconst gate sees a single canonical reference.
+const parentDir = ".."
+
+//nolint:gochecknoglobals // cobra command flag struct, idiomatic for cobra-based CLIs
 var applyCmdFlags struct {
 	helpers.Mode
+
 	certFingerprints  []string
 	insecure          bool
 	configFiles       []string // -f/--files
@@ -52,12 +59,13 @@ var applyCmdFlags struct {
 	endpointsFromArgs bool
 }
 
+//nolint:gochecknoglobals // cobra command, idiomatic for cobra-based CLIs
 var applyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Apply config to a Talos node",
 	Long:  ``,
 	Args:  cobra.NoArgs,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("talos-version") {
 			applyCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
@@ -90,19 +98,17 @@ var applyCmd = &cobra.Command{
 		applyCmdFlags.endpointsFromArgs = len(GlobalArgs.Endpoints) > 0
 		// Set dummy endpoint to avoid errors on building client
 		if len(GlobalArgs.Endpoints) == 0 {
-			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, "127.0.0.1")
+			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, defaultLocalEndpoint)
 		}
 
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return apply(args)
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return apply(cmd.Context())
 	},
 }
 
-func apply(args []string) error {
-	ctx := context.Background()
-
+func apply(ctx context.Context) error {
 	// Expand directories to YAML files
 	expandedFiles, err := ExpandFilePaths(applyCmdFlags.configFiles)
 	if err != nil {
@@ -110,160 +116,15 @@ func apply(args []string) error {
 	}
 
 	// Detect root from files if specified, otherwise fallback to cwd
-	if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
+	err = DetectAndSetRootFromFiles(expandedFiles)
+	if err != nil {
 		return err
 	}
 
 	for _, configFile := range expandedFiles {
-		modelineTemplates, err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true)
+		err = applyOneFile(ctx, configFile)
 		if err != nil {
 			return err
-		}
-		// Resolve secrets.yaml path relative to project root if not absolute
-		withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
-
-		if len(modelineTemplates) > 0 {
-			// Template rendering path: render templates online per node and
-			// apply the rendered config plus the node file overlay. See
-			// applyTemplatesPerNode for why the loop is mandatory.
-			opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
-
-			nodes := append([]string(nil), GlobalArgs.Nodes...)
-			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
-
-			applyClosure := func(ctx context.Context, c *client.Client, data []byte) error {
-				// ctx is shaped for ApplyConfiguration on every apply path:
-				// the auth branch sets `nodes` (plural, one element) via
-				// openClientPerNodeAuth so apid resolves a single backend
-				// and helpers.ForEachResource can read the plural key from
-				// inside template lookups; the insecure branch carries no
-				// node metadata at all and the maintenance client dials a
-				// single endpoint per call.
-				//
-				// The COSI preflight needs a different context shape:
-				// Talos's apid director rejects every COSI method whose
-				// ctx carries the plural "nodes" key, regardless of slice
-				// length (its COSI guard is unconditional). cosiVersionReader
-				// swallows errors and returns ok=false on rejection, so the
-				// preflight would silently no-op on the auth path — defeating
-				// the whole point of the version-mismatch warning that
-				// preflightCheckTalosVersion exists to surface.
-				// cosiPreflightContext rebuilds ctx with the singular "node"
-				// key so the COSI router accepts the call; ApplyConfiguration
-				// keeps the original ctx unchanged.
-				cosiCtx, err := cosiPreflightContext(ctx)
-				if err != nil {
-					return err
-				}
-
-				preflightCheckTalosVersion(cosiCtx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
-
-				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
-					Data:           data,
-					Mode:           applyCmdFlags.Mode.Mode,
-					DryRun:         applyCmdFlags.dryRun,
-					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
-				})
-				if err != nil {
-					return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
-				}
-
-				helpers.PrintApplyResults(resp)
-
-				return nil
-			}
-
-			if applyCmdFlags.insecure {
-				openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints, WithClientMaintenance)
-				if err := applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure); err != nil {
-					return err
-				}
-			} else {
-				if err := withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
-					resolved := resolveAuthTemplateNodes(nodes, c)
-					openClient := openClientPerNodeAuth(parentCtx, c)
-
-					return applyTemplatesPerNode(opts, configFile, resolved, openClient, engine.Render, applyClosure)
-				}); err != nil {
-					return err
-				}
-			}
-		} else {
-			// Direct patch path: apply config file as patch against empty bundle
-			opts := buildApplyPatchOptions(withSecretsPath)
-			patches := []string{"@" + configFile}
-
-			configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
-			if err != nil {
-				return errors.WithHint(
-					errors.Wrap(err, "full config processing"),
-					"the chart did not render or could not be combined with the supplied patches; check that the chart in scope and the patches reference fields that exist",
-				)
-			}
-
-			result, err := engine.SerializeConfiguration(configBundle, machineType)
-			if err != nil {
-				return errors.WithHint(
-					errors.Wrap(err, "serializing configuration"),
-					"the merged config bundle could not be encoded back to YAML; this is internal — file an issue if reproducible",
-				)
-			}
-
-			if err := withApplyClient(func(ctx context.Context, c *client.Client) error {
-				// wrapWithNodeContext fills ctx via client.WithNodes from
-				// talosconfig when --nodes is omitted, but does not mutate
-				// GlobalArgs.Nodes. Mirror its resolution here so the log line
-				// and the per-node preflight loop see the actual targets.
-				targetNodes := append([]string(nil), GlobalArgs.Nodes...)
-				if len(targetNodes) == 0 {
-					if cfg := c.GetConfigContext(); cfg != nil {
-						targetNodes = append(targetNodes, cfg.Nodes...)
-					}
-				}
-
-				fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
-
-				// COSI does not support multi-node proxying — apid's
-				// director rejects every /cosi.* method whose ctx
-				// carries the plural "nodes" key, regardless of slice
-				// length. The rule lives in
-				// internal/app/apid/pkg/director/director.go (search
-				// for the "one-2-many proxying is not supported"
-				// guard). Run preflight per node with a single-target
-				// context.
-				//
-				// client.WithNode (singular) here is intentional and unrelated
-				// to the auth template-rendering apply path's switch from
-				// WithNode to WithNodes (openClientPerNodeAuth) — preflight
-				// performs a direct COSI Get against one resource, not a
-				// helpers.ForEachResource walk that reads the plural "nodes"
-				// metadata key. apid's COSI router accepts the singular
-				// "node" key for single-target addressing (and rejects the
-				// plural "nodes" key for any COSI method, regardless of
-				// slice length — see cosiPreflightContext for the auth
-				// path's workaround that has to scope ctx back to "node"
-				// before calling the same COSI preflight).
-				read := cosiVersionReader(c)
-				for _, node := range targetNodes {
-					preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
-				}
-
-				resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
-					Data:           result,
-					Mode:           applyCmdFlags.Mode.Mode,
-					DryRun:         applyCmdFlags.dryRun,
-					TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
-				})
-				if err != nil {
-					return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
-				}
-
-				helpers.PrintApplyResults(resp)
-
-				return nil
-			}); err != nil {
-				return err
-			}
 		}
 
 		// Reset args
@@ -279,32 +140,201 @@ func apply(args []string) error {
 	return nil
 }
 
+// applyOneFile dispatches a single config file through either the
+// template-rendering path (when its modeline references templates)
+// or the direct-patch path (otherwise). Splitting the per-file work
+// out of the outer apply loop keeps the cognitive complexity of
+// either half within the linter's gate.
+func applyOneFile(ctx context.Context, configFile string) error {
+	modelineTemplates, err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true)
+	if err != nil {
+		return err
+	}
+	// Resolve secrets.yaml path relative to project root if not absolute
+	withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
+
+	if len(modelineTemplates) > 0 {
+		return applyOneFileTemplateMode(configFile, modelineTemplates, withSecretsPath)
+	}
+
+	return applyOneFileDirectPatchMode(ctx, configFile, withSecretsPath)
+}
+
+// applyOneFileTemplateMode runs the template-rendering apply path for
+// a single configFile: renders templates per node, overlays the node
+// file body, and ApplyConfigurations the result. See
+// applyTemplatesPerNode for why the loop is mandatory.
+func applyOneFileTemplateMode(configFile string, modelineTemplates []string, withSecretsPath string) error {
+	opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
+
+	nodes := append([]string(nil), GlobalArgs.Nodes...)
+	//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
+	fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
+
+	applyClosure := buildApplyClosure()
+
+	if applyCmdFlags.insecure {
+		openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints, WithClientMaintenance)
+
+		return applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure)
+	}
+
+	return withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
+		resolved := resolveAuthTemplateNodes(nodes, c)
+		openClient := openClientPerNodeAuth(parentCtx, c)
+
+		return applyTemplatesPerNode(opts, configFile, resolved, openClient, engine.Render, applyClosure)
+	})
+}
+
+// buildApplyClosure builds the per-node apply step used by every
+// template-rendering mode. ctx is shaped for ApplyConfiguration on
+// every apply path: the auth branch sets `nodes` (plural, one
+// element) via openClientPerNodeAuth so apid resolves a single
+// backend and helpers.ForEachResource can read the plural key from
+// inside template lookups; the insecure branch carries no node
+// metadata at all and the maintenance client dials a single endpoint
+// per call.
+//
+// The COSI preflight needs a different context shape: Talos's apid
+// director rejects every COSI method whose ctx carries the plural
+// "nodes" key, regardless of slice length (its COSI guard is
+// unconditional). cosiVersionReader swallows errors and returns
+// ok=false on rejection, so the preflight would silently no-op on
+// the auth path — defeating the whole point of the version-mismatch
+// warning that preflightCheckTalosVersion exists to surface.
+// cosiPreflightContext rebuilds ctx with the singular "node" key so
+// the COSI router accepts the call; ApplyConfiguration keeps the
+// original ctx unchanged.
+func buildApplyClosure() applyFunc {
+	return func(ctx context.Context, c *client.Client, data []byte) error {
+		cosiCtx, err := cosiPreflightContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		preflightCheckTalosVersion(cosiCtx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
+
+		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+			Data:           data,
+			Mode:           applyCmdFlags.Mode.Mode,
+			DryRun:         applyCmdFlags.dryRun,
+			TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+		})
+		if err != nil {
+			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
+		}
+
+		helpers.PrintApplyResults(resp)
+
+		return nil
+	}
+}
+
+// applyOneFileDirectPatchMode runs the direct-patch apply path for a
+// single configFile: renders the chart against an empty bundle with
+// the file as a patch, then ApplyConfigurations the merged result.
+// COSI does not support multi-node proxying — apid's director
+// rejects every /cosi.* method whose ctx carries the plural "nodes"
+// key, regardless of slice length. The rule lives in
+// internal/app/apid/pkg/director/director.go (search for the
+// "one-2-many proxying is not supported" guard). Run preflight per
+// node with a single-target context.
+//
+// client.WithNode (singular) here is intentional and unrelated to
+// the auth template-rendering apply path's switch from WithNode to
+// WithNodes (openClientPerNodeAuth) — preflight performs a direct
+// COSI Get against one resource, not a helpers.ForEachResource walk
+// that reads the plural "nodes" metadata key. apid's COSI router
+// accepts the singular "node" key for single-target addressing (and
+// rejects the plural "nodes" key for any COSI method, regardless of
+// slice length — see cosiPreflightContext for the auth path's
+// workaround that has to scope ctx back to "node" before calling the
+// same COSI preflight).
+func applyOneFileDirectPatchMode(ctx context.Context, configFile, withSecretsPath string) error {
+	opts := buildApplyPatchOptions(withSecretsPath)
+	patches := []string{"@" + configFile}
+
+	configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
+	if err != nil {
+		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
+		return errors.WithHint(
+			errors.Wrap(err, "full config processing"),
+			"the chart did not render or could not be combined with the supplied patches; check that the chart in scope and the patches reference fields that exist",
+		)
+	}
+
+	result, err := engine.SerializeConfiguration(configBundle, machineType)
+	if err != nil {
+		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
+		return errors.WithHint(
+			errors.Wrap(err, "serializing configuration"),
+			"the merged config bundle could not be encoded back to YAML; this is internal — file an issue if reproducible",
+		)
+	}
+
+	return withApplyClient(func(ctx context.Context, c *client.Client) error {
+		// wrapWithNodeContext fills ctx via client.WithNodes from
+		// talosconfig when --nodes is omitted, but does not mutate
+		// GlobalArgs.Nodes. Mirror its resolution here so the log line
+		// and the per-node preflight loop see the actual targets.
+		targetNodes := append([]string(nil), GlobalArgs.Nodes...)
+		if len(targetNodes) == 0 {
+			if cfg := c.GetConfigContext(); cfg != nil {
+				targetNodes = append(targetNodes, cfg.Nodes...)
+			}
+		}
+
+		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
+		fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
+
+		read := cosiVersionReader(c)
+		for _, node := range targetNodes {
+			preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
+		}
+
+		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+			Data:           result,
+			Mode:           applyCmdFlags.Mode.Mode,
+			DryRun:         applyCmdFlags.dryRun,
+			TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
+		})
+		if err != nil {
+			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
+		}
+
+		helpers.PrintApplyResults(resp)
+
+		return nil
+	})
+}
+
 // withApplyClient creates a Talos client appropriate for the current apply
 // mode and invokes the given action with it. The action receives a context
 // in which gRPC node metadata is set to the resolved node list — either
 // GlobalArgs.Nodes (when set) or the talosconfig context's Nodes (when not).
 // Used by the direct-patch branch where multi-node fan-out happens at the
 // gRPC layer inside ApplyConfiguration.
-func withApplyClient(f func(ctx context.Context, c *client.Client) error) error {
-	return withApplyClientBare(wrapWithNodeContext(f))
+func withApplyClient(action func(ctx context.Context, c *client.Client) error) error {
+	return withApplyClientBare(wrapWithNodeContext(action))
 }
 
 // withApplyClientBare connects to Talos for the current apply mode but does
 // NOT inject node metadata into the context — leaving that decision to the
 // caller. Used by the template-rendering path (see applyTemplatesPerNode for
 // the rationale).
-func withApplyClientBare(f func(ctx context.Context, c *client.Client) error) error {
+func withApplyClientBare(action func(ctx context.Context, c *client.Client) error) error {
 	if applyCmdFlags.insecure {
 		// Maintenance mode reads its endpoints directly from
 		// GlobalArgs.Nodes — gRPC node metadata is not consulted.
-		return WithClientMaintenance(applyCmdFlags.certFingerprints, f)
+		return WithClientMaintenance(applyCmdFlags.certFingerprints, action)
 	}
 
 	if GlobalArgs.SkipVerify {
-		return WithClientSkipVerify(f)
+		return WithClientSkipVerify(action)
 	}
 
-	return WithClientNoNodes(f)
+	return WithClientNoNodes(action)
 }
 
 // renderFunc, applyFunc and openClientFunc are injection points for
@@ -348,6 +378,7 @@ func applyTemplatesPerNode(
 	apply applyFunc,
 ) error {
 	if len(nodes) == 0 {
+		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 		return errors.WithHint(
 			errors.New("nodes are not set for the command"),
 			"set the targets via --nodes, a `# talm: nodes=[...]` modeline at the top of the node file, or the talosconfig context",
@@ -361,10 +392,11 @@ func applyTemplatesPerNode(
 	if len(nodes) > 1 {
 		hasOverlay, err := engine.NodeFileHasOverlay(configFile)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "checking %q for per-node body overlay", configFile)
 		}
 
 		if hasOverlay {
+			//nolint:wrapcheck // sentinel constructed in-place; WithHintf attaches operator guidance
 			return errors.WithHintf(
 				errors.Newf("node file %q targets %d nodes (%v) but carries a non-empty per-node body", configFile, len(nodes), nodes),
 				"split %q into one file per node, or remove the per-node fields if you want the rendered template alone applied to each",
@@ -374,9 +406,10 @@ func applyTemplatesPerNode(
 	}
 
 	for _, node := range nodes {
-		if err := openClient(node, func(ctx context.Context, c *client.Client) error {
+		err := openClient(node, func(ctx context.Context, c *client.Client) error {
 			return renderMergeAndApply(ctx, c, opts, configFile, render, apply)
-		}); err != nil {
+		})
+		if err != nil {
 			return errors.Wrapf(err, "node %s", node)
 		}
 	}
@@ -416,6 +449,7 @@ func openClientPerNodeMaintenance(fingerprints []string, mkClient maintenanceCli
 		GlobalArgs.Nodes = []string{node}
 		defer func() { GlobalArgs.Nodes = savedNodes }()
 
+		//nolint:wrapcheck // mkClient is the production WithClientMaintenance whose error already carries Talos client framing
 		return mkClient(fingerprints, action)
 	}
 }
@@ -478,6 +512,7 @@ func cosiPreflightContext(ctx context.Context) (context.Context, error) {
 	case 1:
 		return client.WithNode(ctx, nodes[0]), nil
 	default:
+		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 		return nil, errors.WithHint(
 			errors.Newf("cosiPreflightContext: refusing to scope ctx with %d nodes; expected exactly one", len(nodes)),
 			"applyTemplatesPerNode iterates one node at a time, so a multi-element plural slice at this point indicates a broken caller",
@@ -514,6 +549,7 @@ func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
 func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, render renderFunc, apply applyFunc) error {
 	rendered, err := render(ctx, c, opts)
 	if err != nil {
+		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
 		return errors.WithHint(
 			errors.Wrap(err, "template rendering"),
 			"the chart did not render against the current node's discovery state; verify the templates referenced in the modeline exist and the node is reachable",
@@ -562,11 +598,12 @@ func buildApplyPatchOptions(withSecretsPath string) engine.Options {
 // attempts to resolve nodes from the client's config context.
 // This function does not mutate GlobalArgs. It reads GlobalArgs.Nodes at
 // invocation time (not at wrapper creation time) and makes a defensive copy.
-func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) func(ctx context.Context, c *client.Client) error {
+func wrapWithNodeContext(action func(ctx context.Context, c *client.Client) error) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
 		nodes := append([]string(nil), GlobalArgs.Nodes...)
 		if len(nodes) < 1 {
 			if c == nil {
+				//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 				return errors.WithHint(
 					errors.New("resolving config context: no client available"),
 					"this code path requires a Talos client; if you reached it from a flow that did not open one, check the call site",
@@ -575,6 +612,7 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 
 			configContext := c.GetConfigContext()
 			if configContext == nil {
+				//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
 				return errors.WithHint(
 					errors.New("resolving config context"),
 					"the talosconfig has no active context; pick one with `talosctl config context <name>` or pass --talosconfig",
@@ -586,17 +624,17 @@ func wrapWithNodeContext(f func(ctx context.Context, c *client.Client) error) fu
 
 		ctx = client.WithNodes(ctx, nodes...)
 
-		return f(ctx, c)
+		return action(ctx, c)
 	}
 }
 
 // isOutsideRoot reports whether a cleaned relative path escapes the
-// project root. A HasPrefix(".." ) test would misclassify sibling
+// project root. A HasPrefix(parentDir) test would misclassify sibling
 // directories whose first path element merely starts with "..", such
 // as "..templates/controlplane.yaml"; we match a full path element
 // instead.
 func isOutsideRoot(relPath string) bool {
-	return relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator))
+	return relPath == parentDir || strings.HasPrefix(relPath, parentDir+string(filepath.Separator))
 }
 
 // resolveTemplatePaths resolves template file paths relative to the project root,
