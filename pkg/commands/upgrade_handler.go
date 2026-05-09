@@ -103,12 +103,12 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 
 			configBundle, machineType, err := engine.FullConfigProcess(ctx, eopts, patches)
 			if err != nil {
-				return fmt.Errorf("full config processing error: %s", err)
+				return errors.Wrap(err, "full config processing error")
 			}
 
 			result, err := engine.SerializeConfiguration(configBundle, machineType)
 			if err != nil {
-				return fmt.Errorf("error serializing configuration: %s", err)
+				return errors.Wrap(err, "error serializing configuration")
 			}
 
 			config, err := configloader.NewFromBytes(result)
