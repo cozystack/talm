@@ -51,6 +51,8 @@ cd newcluster
 talm init -p cozystack -N myawesomecluster
 ```
 
+`talm init` refuses to run when the current directory is inside an existing talm project (it would otherwise walk up and partially overwrite the parent). To create a project under the current directory anyway — e.g. a sub-project nested inside another talm project — pass `--root .` explicitly. To re-initialise the parent itself, run `talm init` from the parent directory.
+
 To pin a specific Talos installer image at init time (e.g. a [Talos Factory](https://factory.talos.dev/) image with extensions), pass `--image`:
 
 ```bash
