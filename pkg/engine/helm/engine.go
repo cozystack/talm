@@ -196,29 +196,27 @@ func (e Engine) initFunMap(tmpl *template.Template) {
 
 	// Add the `required` function here so we can use lintMode
 	funcMap["required"] = func(warn string, val any) (any, error) {
-		if val == nil {
-			if e.LintMode {
-				// Don't fail on missing required values when linting
-				log.Printf("[INFO] Missing required value: %s", warn)
-
-				return "", nil
-			}
-
-			return val, errors.New(warnWrap(warn))
-		} else if _, ok := val.(string); ok {
-			if val == "" {
-				if e.LintMode {
-					// Don't fail on missing required values when linting
-					log.Printf("[INFO] Missing required value: %s", warn)
-
-					return "", nil
-				}
-
-				return val, errors.New(warnWrap(warn))
+		// A required value is considered missing when it is nil, or
+		// when it is the empty string. Anything else passes through.
+		missing := val == nil
+		if !missing {
+			if str, ok := val.(string); ok && str == "" {
+				missing = true
 			}
 		}
 
-		return val, nil
+		if !missing {
+			return val, nil
+		}
+
+		if e.LintMode {
+			// Don't fail on missing required values when linting
+			log.Printf("[INFO] Missing required value: %s", warn)
+
+			return "", nil
+		}
+
+		return val, errors.New(warnWrap(warn))
 	}
 
 	// Override sprig fail function for linting and wrapping message
@@ -264,8 +262,9 @@ func (e Engine) initFunMap(tmpl *template.Template) {
 	tmpl.Funcs(funcMap)
 }
 
-// render takes a map of templates/values and renders them.
-func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, err error) {
+// render takes a map of templates/values and renders them. The err return is
+// named on purpose: the deferred recover below assigns to it.
+func (e Engine) render(tpls map[string]renderable) (_ map[string]string, err error) {
 	// Basically, what we do here is start with an empty parent template and then
 	// build up a list of templates -- one for each file. Once all of the templates
 	// have been parsed, we loop through again and execute every template.
@@ -303,7 +302,7 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 		}
 	}
 
-	rendered = make(map[string]string, len(keys))
+	rendered := make(map[string]string, len(keys))
 	for _, filename := range keys {
 		// Don't render partials. We don't care out the direct output of partials.
 		// They are only included from other templates.
