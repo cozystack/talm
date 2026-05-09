@@ -653,7 +653,7 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 
-// readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
+// readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies.
 func readChartYamlPreset() (string, error) {
 	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
 
