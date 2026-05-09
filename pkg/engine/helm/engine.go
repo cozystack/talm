@@ -147,6 +147,7 @@ func tplFun(parent *template.Template, includedNames map[string]int, strict bool
 
 		// Re-inject the missingkey option, see text/template issue https://github.com/golang/go/issues/43022
 		// We have to go by strict from our engine configuration, as the option fields are private in Template.
+		//nolint:godox // upstream Helm tracks a Go stdlib workaround; comment is intentional.
 		// TODO: Remove workaround (and the strict parameter) once we build only with golang versions with a fix.
 		if strict {
 			t.Option("missingkey=error")
