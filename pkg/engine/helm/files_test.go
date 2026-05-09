@@ -21,26 +21,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var cases = []struct {
+type filesTestCase struct {
 	path, data string
-}{
-	{"ship/captain.txt", "The Captain"},
-	{"ship/stowaway.txt", "Legatt"},
-	{"story/name.txt", "The Secret Sharer"},
-	{"story/author.txt", "Joseph Conrad"},
-	{"multiline/test.txt", "bar\nfoo\n"},
-	{"multiline/test_with_blank_lines.txt", "bar\nfoo\n\n\n"},
+}
+
+func filesTestCases() []filesTestCase {
+	return []filesTestCase{
+		{"ship/captain.txt", "The Captain"},
+		{"ship/stowaway.txt", "Legatt"},
+		{"story/name.txt", "The Secret Sharer"},
+		{"story/author.txt", "Joseph Conrad"},
+		{"multiline/test.txt", "bar\nfoo\n"},
+		{"multiline/test_with_blank_lines.txt", "bar\nfoo\n\n\n"},
+	}
 }
 
 func getTestFiles() files {
-	a := make(files, len(cases))
+	cases := filesTestCases()
+	out := make(files, len(cases))
 	for _, c := range cases {
-		a[c.path] = []byte(c.data)
+		out[c.path] = []byte(c.data)
 	}
-	return a
+	return out
 }
 
 func TestNewFiles(t *testing.T) {
+	cases := filesTestCases()
 	files := getTestFiles()
 	if len(files) != len(cases) {
 		t.Errorf("Expected len() = %d, got %d", len(cases), len(files))
