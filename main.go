@@ -19,17 +19,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// completionInternal is cobra's reserved internal subcommand name
+// driving Tab-key autocompletion. Constant because it appears both
+// in skipConfigCommands and in cobra's exported API.
+const completionInternal = "__complete"
+
+// cmdNameTalm is the binary name used both as the cobra root
+// command's Use field and via -X main.cmdNameTalm in build tooling.
+const cmdNameTalm = "talm"
+
+// Version is the talm release tag baked at build time via ldflags
+// (`-X main.Version=v0.27.0`); the literal value here is the local
+// development fallback.
+//
+//nolint:gochecknoglobals // ldflags-injected build version, idiomatic for go release tooling.
 var Version = "dev"
 
 // skipConfigCommands lists commands that should not load Chart.yaml config.
 // - init: creates the config, so it doesn't exist yet
 // - completion: generates shell completion scripts
 // - __complete: cobra's internal command for shell autocompletion (Tab key).
-var skipConfigCommands = []string{"init", "completion", "__complete"}
+//
+//nolint:gochecknoglobals // immutable lookup table consulted by isCommandOrParent during PersistentPreRunE; init-time literal.
+var skipConfigCommands = []string{"init", "completion", completionInternal}
 
 // rootCmd represents the base command when called without any subcommands.
+//
+//nolint:gochecknoglobals // cobra root command; cobra's library design requires a stable package-level *Command.
 var rootCmd = &cobra.Command{
-	Use:               "talm",
+	Use:               cmdNameTalm,
 	Short:             "Manage Talos the GitOps Way!",
 	Long:              ``,
 	Version:           Version,
@@ -63,6 +81,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
 	rootCmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
 
+	//nolint:wrapcheck // cobra returns its own error chain; wrapping would change user-facing rendering and lose hints attached via cockroachdb/errors.WithHint inside command bodies.
 	cmd, err := rootCmd.ExecuteContextC(context.Background())
 	if err != nil && !common.SuppressErrors {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -72,8 +91,12 @@ func Execute() error {
 		}
 
 		errorString := err.Error()
-		// TODO: this is a nightmare, but arg-flag related validation returns simple `fmt.Errorf`, no way to distinguish
-		//       these errors
+		// FIXME(#153-followup): cobra arg/flag validation returns plain
+		// fmt.Errorf without a typed error; substring-matching the
+		// rendered message is the only way to distinguish those from
+		// our own errors today. Track a refactor to wrap cobra
+		// validation errors in a sentinel so this can become an
+		// errors.Is check.
 		if strings.Contains(errorString, "arg(s)") || strings.Contains(errorString, "flag") || strings.Contains(errorString, "command") {
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, cmd.UsageString())
@@ -93,7 +116,9 @@ func init() {
 	// Add PersistentPreRunE to handle root detection and config loading
 	originalPersistentPreRunE := rootCmd.PersistentPreRunE
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		// Detect and set project root using fallback strategy
+		// Detect and set project root using fallback strategy.
+		//
+		//nolint:wrapcheck // DetectAndSetRoot already wraps with cockroachdb/errors.WithHint internally; re-wrapping would either double-wrap or strip the hint.
 		if err := commands.DetectAndSetRoot(cmd, args); err != nil {
 			return err
 		}
@@ -108,6 +133,8 @@ func init() {
 
 		// Ensure talosconfig path is set to project root if not explicitly set via flag
 		// This is needed for all commands that use talosctl client (template, apply, etc.)
+		//
+		//nolint:nestif // resolution-order dispatch (--talosconfig set ? bypass : { GlobalArgs.Talosconfig set ? use it : Chart.yaml fallback ? "talosconfig" } -> abs/rel resolution); flattening would scatter the documented order across helpers.
 		if !cmd.PersistentFlags().Changed("talosconfig") {
 			var talosconfigPath string
 			if commands.GlobalArgs.Talosconfig != "" {
@@ -178,6 +205,7 @@ func loadConfig(filename string) error {
 		return fmt.Errorf("error reading configuration file: %w", err)
 	}
 
+	//nolint:musttag // commands.Config relies on default field-name matching for Chart.yaml; adding yaml tags everywhere would be a cross-package rename and an API change for chart authors.
 	if err := yaml.Unmarshal(data, &commands.Config); err != nil {
 		return fmt.Errorf("error unmarshalling configuration: %w", err)
 	}
