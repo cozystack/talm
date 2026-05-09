@@ -1603,7 +1603,6 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 	finalConfig, err := applyPatchesAndRenderConfig(opts, configPatches)
 	if err != nil {
-		// TODO
 		return nil, err
 	}
 
@@ -1721,7 +1720,7 @@ var yamlDocSeparator = regexp.MustCompile(`(?m)^---[ \t]*$`)
 
 // extractExtraDocuments separates Talos config patches from other YAML documents.
 // Returns the Talos patches to be processed, extra documents to be appended to output, and any error.
-func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string, err error) {
+func extractExtraDocuments(patches []string) (talosPatches, extraDocs []string, err error) {
 	for _, patch := range patches {
 		// Normalize CRLF to LF for consistent splitting
 		patch = strings.ReplaceAll(patch, "\r\n", "\n")
