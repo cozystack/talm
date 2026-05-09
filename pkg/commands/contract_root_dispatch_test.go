@@ -59,11 +59,13 @@ func withConfigSnapshot(t *testing.T) {
 	rootDirExplicit := Config.RootDirExplicit
 	talosconfig := GlobalArgs.Talosconfig
 	talosconfigCfg := Config.GlobalOptions.Talosconfig
+	initOptions := Config.InitOptions
 	t.Cleanup(func() {
 		Config.RootDir = rootDir
 		Config.RootDirExplicit = rootDirExplicit
 		GlobalArgs.Talosconfig = talosconfig
 		Config.GlobalOptions.Talosconfig = talosconfigCfg
+		Config.InitOptions = initOptions
 	})
 }
 
@@ -277,6 +279,53 @@ func TestContract_CheckRootConflict_ExplicitConflict(t *testing.T) {
 }
 
 // === DetectAndSetRoot ===
+
+// Contract: when --root is declared as a PERSISTENT flag on a
+// parent command (rootCmd), DetectAndSetRoot must observe its
+// "Changed" state through cmd.Flags() (which includes inherited
+// persistent flags), not cmd.PersistentFlags() (which lists ONLY
+// flags declared persistent on cmd itself). The bug version did
+// the latter — Changed("root") was always false on subcommands,
+// so RootDirExplicit stayed false and the CWD walk-up always
+// fired, defeating the operator's --root opt-in. Pin the
+// inherited-persistent-flag observation behaviour.
+func TestContract_DetectAndSetRoot_RootInheritedPersistentFlag(t *testing.T) {
+	withConfigSnapshot(t)
+
+	root := t.TempDir()
+	makeProjectRoot(t, root)
+	subdir := filepath.Join(root, "deep")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(subdir)
+
+	// Mirror main.go's flag layout: --root declared as persistent on
+	// the parent command via StringVar(&Config.RootDir, ...), the
+	// subcommand inherits it through cmd.Flags() but NOT
+	// cmd.PersistentFlags().
+	parent := &cobra.Command{Use: "talm"}
+	parent.PersistentFlags().StringVar(&Config.RootDir, "root", ".", "")
+	child := &cobra.Command{Use: "init"}
+	parent.AddCommand(child)
+
+	if err := parent.PersistentFlags().Set("root", subdir); err != nil {
+		t.Fatal(err)
+	}
+	withOSArgs(t, []string{"talm", "init"})
+
+	if err := DetectAndSetRoot(child, nil); err != nil {
+		t.Fatalf("DetectAndSetRoot: %v", err)
+	}
+	if !Config.RootDirExplicit {
+		t.Error("RootDirExplicit must be true when --root was set on the inherited persistent flag")
+	}
+	// Strategy 3 (CWD walk-up) is gated by !Explicit and must NOT
+	// have fired — Config.RootDir stays at whatever --root pointed at.
+	if Config.RootDir != subdir {
+		t.Errorf("RootDir = %q; expected %q (the --root value, not the walk-up result)", Config.RootDir, subdir)
+	}
+}
 
 // Contract: DetectAndSetRoot with a -f flag pointing at a file under
 // a project root sets Config.RootDir to that root. The flag wins

@@ -111,6 +111,30 @@ var initCmd = &cobra.Command{
 		if errs := validation.IsDNS1123Subdomain(initCmdFlags.name); len(errs) > 0 {
 			return fmt.Errorf("--name %q is not a valid DNS-1123 subdomain: %s", initCmdFlags.name, strings.Join(errs, "; "))
 		}
+
+		// Refuse to init when CWD is inside an existing talm project but
+		// the operator did not pass --root explicitly. DetectAndSetRoot
+		// (run earlier on this command) walks up from CWD to find a
+		// project root, which is right for `apply` / `template` /
+		// `talosconfig` but wrong for `init` — without this guard, init
+		// silently writes new files into the ancestor project and
+		// partially overwrites it. The operator is almost certainly
+		// trying to create a NEW project under CWD; tell them how.
+		//
+		// Bail out if os.Getwd() fails: this is the only point where
+		// the guard can compare CWD against the detected ancestor;
+		// silently skipping it on a getwd error would fail-open and
+		// reintroduce the partial-overlay risk this guard exists to
+		// prevent.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to determine current working directory: %w", err)
+		}
+		absCwd, _ := filepath.Abs(cwd)
+		absRootDir, _ := filepath.Abs(Config.RootDir)
+		if !Config.RootDirExplicit && absRootDir != absCwd {
+			return fmt.Errorf("refusing to init: %q is inside an existing talm project at %q. To create a new project under the current directory, pass --root . explicitly. To re-initialise the parent, run from the parent directory", absCwd, absRootDir)
+		}
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -158,6 +182,60 @@ var initCmd = &cobra.Command{
 			genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 		}
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
+
+		// Pre-check every preset-loop destination so a fresh init is
+		// all-or-nothing for the chart artefacts. Without this, the
+		// previous behaviour failed at the first conflict (typically
+		// Chart.yaml) AFTER talosconfig / talm.key /
+		// secrets.encrypted.yaml were already on disk — leaving the
+		// project in a partially-initialised state scripted callers
+		// could not recover from. Files written outside the preset
+		// loop (talosconfig, talm.key, secrets.*, kubeconfig.*,
+		// .gitignore, nodes/) are not pre-checked here; each has its
+		// own per-file existence handling downstream and the dominant
+		// failure mode (Chart.yaml conflict) is what this pre-check
+		// addresses.
+		//
+		// Skipped under --encrypt / --decrypt: those flags operate on
+		// an already-initialised project where every preset file is
+		// expected to exist. Running the pre-check there would refuse
+		// the very flows the flags are designed for. Load presetFiles
+		// up-front in either case so the later write loop can reuse
+		// the same map.
+		presetFiles, err := generated.PresetFiles()
+		if err != nil {
+			return fmt.Errorf("failed to get preset files: %w", err)
+		}
+		if !initCmdFlags.force && !initCmdFlags.encrypt && !initCmdFlags.decrypt {
+			var conflicts []string
+			for path := range presetFiles {
+				parts := strings.SplitN(path, "/", 2)
+				chartName := parts[0]
+				var dest string
+				// Library chart files always land under charts/talm/.
+				// Checked first so a hypothetical preset literally
+				// named "talm" cannot collide with the library
+				// chart's destination (AvailablePresets excludes
+				// "talm" today, but the dispatch should not depend
+				// on that invariant).
+				switch chartName {
+				case "talm":
+					dest = filepath.Join(Config.RootDir, "charts", path)
+				case initCmdFlags.preset:
+					dest = filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
+				default:
+					continue
+				}
+				if _, statErr := os.Stat(dest); statErr == nil {
+					conflicts = append(conflicts, dest)
+				}
+			}
+			if len(conflicts) > 0 {
+				slices.Sort(conflicts)
+				return fmt.Errorf("refusing to init: %d file(s) already exist in target directory; pass --force to overwrite, or --update to refresh only the talm library chart:\n  - %s",
+					len(conflicts), strings.Join(conflicts, "\n  - "))
+			}
+		}
 
 		// Handle age encryption logic
 		secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
@@ -425,10 +503,8 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("failed to create nodes directory: %w", err)
 		}
 
-		presetFiles, err := generated.PresetFiles()
-		if err != nil {
-			return fmt.Errorf("failed to get preset files: %w", err)
-		}
+		// presetFiles was loaded up-front for the pre-check above and
+		// is reused here for the write loop.
 
 		// Validate --image up-front so a flag/preset mismatch fails
 		// the command before any file is written.

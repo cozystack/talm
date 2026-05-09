@@ -129,8 +129,21 @@ func checkRootConflict(detectedRoot string, rootDirExplicit bool) error {
 // 2. From -t/--template flag (if templates specified)
 // 3. From current working directory
 func DetectAndSetRoot(cmd *cobra.Command, args []string) error {
-	// Check if --root was explicitly set
-	Config.RootDirExplicit = cmd.PersistentFlags().Changed("root")
+	// Check if --root was explicitly set. Use cmd.Flag(name).Changed
+	// rather than cmd.PersistentFlags().Changed("root"):
+	// PersistentFlags lists ONLY flags declared persistent on cmd
+	// itself, but --root is declared on rootCmd as a persistent
+	// flag, so for any subcommand other than rootCmd itself,
+	// cmd.PersistentFlags().Changed("root") returned false even
+	// when the operator passed --root explicitly — the entire
+	// "operator opted in to a specific root" escape hatch was
+	// effectively dead. cmd.Flag(name) walks the inheritance chain
+	// (local -> persistent -> parent persistent) and returns the
+	// merged flag definition with its real Changed state.
+	Config.RootDirExplicit = false
+	if flag := cmd.Flag("root"); flag != nil {
+		Config.RootDirExplicit = flag.Changed
+	}
 
 	// Get file paths from -f/--file flag
 	configFiles := getFlagValues(cmd, "file")
