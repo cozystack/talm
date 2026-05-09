@@ -31,6 +31,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// File-local fixtures for the dispatch contract tests. The literals
+// these constants stand in for show up across many table-driven and
+// scenario tests; centralising them lets goconst stop firing without
+// turning the tests into a tangle of inline string concatenation.
+const (
+	fixtureBinaryName      = "talm"
+	fixtureFileAYaml       = "a.yaml"
+	fixtureFileBYaml       = "b.yaml"
+	fixtureSomeAbsPath     = "/some/path"
+	fixtureExplicitAbsPath = "/explicit/path"
+	// fixtureTestCmdUse is the "Use:" name baked into every cobra
+	// command spun up by the dispatch tests. The same literal pops up
+	// across many scenario tests; centralising it satisfies goconst.
+	fixtureTestCmdUse = "test"
+)
+
 // crossPlatformAbs builds an absolute path that satisfies
 // filepath.IsAbs on both POSIX and Windows. On POSIX the joined
 // path is already absolute (leading `/`). On Windows the drive
@@ -82,7 +98,7 @@ func withOSArgs(t *testing.T, args []string) {
 // makeCmdWithStringSliceFlag creates a cobra.Command with a
 // `StringSliceP` flag named `flagName`. Used to exercise getFlagValues.
 func makeCmdWithStringSliceFlag(flagName, shortFlag string, defaults []string, persistent bool) *cobra.Command {
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	if persistent {
 		cmd.PersistentFlags().StringSliceP(flagName, shortFlag, defaults, "")
 	} else {
@@ -98,11 +114,11 @@ func makeCmdWithStringSliceFlag(flagName, shortFlag string, defaults []string, p
 // returns those values.
 func TestContract_GetFlagValues_NonPersistent(t *testing.T) {
 	cmd := makeCmdWithStringSliceFlag("file", "f", nil, false)
-	if err := cmd.Flags().Set("file", "a.yaml,b.yaml"); err != nil {
+	if err := cmd.Flags().Set("file", fixtureFileAYaml+","+fixtureFileBYaml); err != nil {
 		t.Fatal(err)
 	}
 	got := getFlagValues(cmd, "file")
-	if len(got) != 2 || got[0] != "a.yaml" || got[1] != "b.yaml" {
+	if len(got) != 2 || got[0] != fixtureFileAYaml || got[1] != fixtureFileBYaml {
 		t.Errorf("expected [a.yaml b.yaml], got %v", got)
 	}
 }
@@ -124,7 +140,7 @@ func TestContract_GetFlagValues_Persistent(t *testing.T) {
 // returns an empty (non-nil) slice — never nil — so callers can
 // `range` it without a guard. Pin the non-nil property explicitly.
 func TestContract_GetFlagValues_AbsentFlagReturnsEmpty(t *testing.T) {
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	got := getFlagValues(cmd, "nope")
 	if got == nil {
 		t.Error("expected non-nil empty slice")
@@ -240,7 +256,7 @@ func TestContract_DetectRootFromCWD_WalksUp(t *testing.T) {
 // errors on mismatch surfaces here.
 func TestContract_CheckRootConflict_NotExplicit(t *testing.T) {
 	withConfigSnapshot(t)
-	Config.RootDir = "/some/path"
+	Config.RootDir = fixtureSomeAbsPath
 	if err := checkRootConflict("/different/path", false); err != nil {
 		t.Errorf("expected nil error when --root not explicit, got %v", err)
 	}
@@ -250,8 +266,8 @@ func TestContract_CheckRootConflict_NotExplicit(t *testing.T) {
 // no error.
 func TestContract_CheckRootConflict_ExplicitMatching(t *testing.T) {
 	withConfigSnapshot(t)
-	Config.RootDir = "/some/path"
-	if err := checkRootConflict("/some/path", true); err != nil {
+	Config.RootDir = fixtureSomeAbsPath
+	if err := checkRootConflict(fixtureSomeAbsPath, true); err != nil {
 		t.Errorf("matching paths should not error, got %v", err)
 	}
 }
@@ -304,15 +320,15 @@ func TestContract_DetectAndSetRoot_RootInheritedPersistentFlag(t *testing.T) {
 	// the parent command via StringVar(&Config.RootDir, ...), the
 	// subcommand inherits it through cmd.Flags() but NOT
 	// cmd.PersistentFlags().
-	parent := &cobra.Command{Use: "talm"}
+	parent := &cobra.Command{Use: fixtureBinaryName}
 	parent.PersistentFlags().StringVar(&Config.RootDir, "root", ".", "")
-	child := &cobra.Command{Use: "init"}
+	child := &cobra.Command{Use: initSubcommand}
 	parent.AddCommand(child)
 
 	if err := parent.PersistentFlags().Set("root", subdir); err != nil {
 		t.Fatal(err)
 	}
-	withOSArgs(t, []string{"talm", "init"})
+	withOSArgs(t, []string{fixtureBinaryName, initSubcommand})
 
 	if err := DetectAndSetRoot(child, nil); err != nil {
 		t.Fatalf("DetectAndSetRoot: %v", err)
@@ -340,14 +356,14 @@ func TestContract_DetectAndSetRoot_FromFileFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("root", "", "")
 	cmd.Flags().StringSliceP("file", "f", nil, "")
 	cmd.Flags().StringSliceP("template", "t", nil, "")
 	if err := cmd.Flags().Set("file", nodeFile); err != nil {
 		t.Fatal(err)
 	}
-	withOSArgs(t, []string{"talm"})
+	withOSArgs(t, []string{fixtureBinaryName})
 
 	if err := DetectAndSetRoot(cmd, nil); err != nil {
 		t.Fatalf("DetectAndSetRoot: %v", err)
@@ -367,15 +383,15 @@ func TestContract_DetectAndSetRoot_FilesInDifferentRootsError(t *testing.T) {
 	rootB := t.TempDir()
 	makeProjectRoot(t, rootA)
 	makeProjectRoot(t, rootB)
-	fileA := filepath.Join(rootA, "a.yaml")
-	fileB := filepath.Join(rootB, "b.yaml")
+	fileA := filepath.Join(rootA, fixtureFileAYaml)
+	fileB := filepath.Join(rootB, fixtureFileBYaml)
 	for _, f := range []string{fileA, fileB} {
 		if err := os.WriteFile(f, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("root", "", "")
 	cmd.Flags().StringSliceP("file", "f", nil, "")
 	cmd.Flags().StringSliceP("template", "t", nil, "")
@@ -385,7 +401,7 @@ func TestContract_DetectAndSetRoot_FilesInDifferentRootsError(t *testing.T) {
 	if err := cmd.Flags().Set("file", fileB); err != nil {
 		t.Fatal(err)
 	}
-	withOSArgs(t, []string{"talm"})
+	withOSArgs(t, []string{fixtureBinaryName})
 
 	err := DetectAndSetRoot(cmd, nil)
 	if err == nil {
@@ -403,11 +419,11 @@ func TestContract_DetectAndSetRoot_NoFlagsNoMarkersIsTolerated(t *testing.T) {
 	emptyDir := t.TempDir()
 	t.Chdir(emptyDir)
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("root", "", "")
 	cmd.Flags().StringSliceP("file", "f", nil, "")
 	cmd.Flags().StringSliceP("template", "t", nil, "")
-	withOSArgs(t, []string{"talm"})
+	withOSArgs(t, []string{fixtureBinaryName})
 
 	if err := DetectAndSetRoot(cmd, nil); err != nil {
 		t.Errorf("expected nil error, got %v", err)
@@ -494,15 +510,15 @@ func TestContract_DetectAndSetRootFromFiles_ExplicitConflict(t *testing.T) {
 func TestContract_EnsureTalosconfigPath_NoOpWhenChanged(t *testing.T) {
 	withConfigSnapshot(t)
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("talosconfig", "", "")
-	if err := cmd.PersistentFlags().Set("talosconfig", "/explicit/path"); err != nil {
+	if err := cmd.PersistentFlags().Set("talosconfig", fixtureExplicitAbsPath); err != nil {
 		t.Fatal(err)
 	}
-	GlobalArgs.Talosconfig = "/explicit/path"
+	GlobalArgs.Talosconfig = fixtureExplicitAbsPath
 
 	EnsureTalosconfigPath(cmd)
-	if GlobalArgs.Talosconfig != "/explicit/path" {
+	if GlobalArgs.Talosconfig != fixtureExplicitAbsPath {
 		t.Errorf("expected unchanged, got %q", GlobalArgs.Talosconfig)
 	}
 }
@@ -514,7 +530,7 @@ func TestContract_EnsureTalosconfigPath_NoOpWhenChanged(t *testing.T) {
 func TestContract_EnsureTalosconfigPath_DefaultsToRoot(t *testing.T) {
 	withConfigSnapshot(t)
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("talosconfig", "", "")
 	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
@@ -535,7 +551,7 @@ func TestContract_EnsureTalosconfigPath_DefaultsToRoot(t *testing.T) {
 func TestContract_EnsureTalosconfigPath_RelativeAnchoredToRoot(t *testing.T) {
 	withConfigSnapshot(t)
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("talosconfig", "", "")
 	root := crossPlatformAbs("some", "project")
 	Config.RootDir = root
@@ -553,7 +569,7 @@ func TestContract_EnsureTalosconfigPath_RelativeAnchoredToRoot(t *testing.T) {
 func TestContract_EnsureTalosconfigPath_AbsolutePathPreserved(t *testing.T) {
 	withConfigSnapshot(t)
 
-	cmd := &cobra.Command{Use: "test"}
+	cmd := &cobra.Command{Use: fixtureTestCmdUse}
 	cmd.PersistentFlags().String("talosconfig", "", "")
 	Config.RootDir = filepath.Join(string(filepath.Separator), "some", "project")
 	abs := crossPlatformAbs("etc", "talos", "config")
