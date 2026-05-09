@@ -85,7 +85,7 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 		phase = 1
 	}
 
-	fmt.Printf(
+	fmt.Fprintf(os.Stdout,
 		"# DEBUG(phase %d): talosctl gen config %s %s -t %s --with-secrets=%s --talos-version=%s --kubernetes-version=%s -o -",
 		phase, clusterName, clusterEndpoint, mType,
 		opts.WithSecrets, opts.TalosVersion, opts.KubernetesVersion,
@@ -107,10 +107,9 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 
 		if patch[0] == '@' {
 			// Apply patch is always one
-			fmt.Printf(" %s=%s\n", patchOption, patch)
+			fmt.Fprintf(os.Stdout, " %s=%s\n", patchOption, patch)
 		} else {
-			fmt.Printf("\n---")
-			fmt.Printf("\n# DEBUG(phase %d): %s=\n%s", phase, patchOption, patch)
+			fmt.Fprintf(os.Stdout, "\n---\n# DEBUG(phase %d): %s=\n%s", phase, patchOption, patch)
 		}
 	}
 
@@ -248,6 +247,8 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 // ApplyConfiguration) but unsuitable for human-facing output such as
 // `talm template` — which is why the template subcommand does not call
 // this helper.
+//
+//nolint:funlen // 73 lines: each step (read, hint, strip three classes of patch directives, prune identities, apply, decode, encode) is a single linear pipeline; extracting helpers would scatter the contextual error wrapping across files without simplifying the algorithm.
 func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	patchBytes, err := os.ReadFile(patchFile)
 	if err != nil {
@@ -780,6 +781,8 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 // modeline) — configpatcher.LoadPatch reads structure, not comments, so
 // this is fine for the apply path; do not feed the output back into a
 // human-facing rendering surface.
+//
+//nolint:funlen // 72 lines: per-doc identity match + recursive prune + emit-only-non-empty pipeline; the steps share the same identity bookkeeping (renderedByIdentity, renderedConsumed, allPruned) so extracting helpers would either pass that state through every signature or hoist it to package level.
 func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, error) {
 	bodyDocs, bodyAllMaps, err := decodeAsMaps(body)
 	if err != nil {
@@ -913,6 +916,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // the body key reduces body to the zero value at that path, and the
 // upstream replace then leaves rendered untouched. Skipping kicks in
 // only on the partial-edit branches below the deep-equal check.
+//
+//nolint:gochecknoglobals // immutable lookup table consulted by pruneIdenticalKeysAt; init-time literal, never mutated, no per-process state.
 var replaceSemanticPaths = map[string]struct{}{
 	"cluster/network/podSubnets":     {},
 	"cluster/network/serviceSubnets": {},
@@ -974,6 +979,8 @@ var replaceSemanticPaths = map[string]struct{}{
 // Routes (machine.network.interfaces[].routes) sit in this same fallback
 // bucket: the schema declares no single primary key for a route, so the
 // only "same item" semantic available is byte-equality across all fields.
+//
+//nolint:gochecknoglobals // immutable lookup table consulted by matchObjectArrayItem; init-time literal mirroring Talos's strategic-merge keys, never mutated, no per-process state.
 var objectArrayMergeKeys = map[string][]string{
 	"machine/network/interfaces":         {"interface", "deviceSelector"},
 	"machine/network/interfaces/vlans":   {"vlanId"},
@@ -1018,6 +1025,8 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 //
 // The parameter is named yamlPath rather than path to avoid shadowing
 // the stdlib path package imported elsewhere in this file.
+//
+//nolint:gocognit // dispatch over (missing-key | replace-semantic | object-array | nested-map | primitive-slice) inside one walk; extracting any branch into a helper would need to thread the per-pair (body, rendered, parent, key) state, growing the surface without simplifying.
 func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 	for k, bodyV := range body {
 		renderedV, exists := rendered[k]
@@ -1511,6 +1520,8 @@ func isEffectivelyEmptyYAML(data []byte) bool {
 }
 
 // Render executes the rendering of templates based on the provided options.
+//
+//nolint:funlen // 75 lines: dispatch over (Full ? FullConfigProcess : ApplyPatches) with per-branch cluster-meta hydration and per-mode serialisation; splitting either branch would scatter the shared FailIfMultiNodes/loadValues/SerializeConfiguration steps across helpers without simplifying control flow.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
 	// Validate TalosVersion early so malformed values surface a user-friendly
 	// error instead of an opaque "semverCompare: invalid semantic version" from
@@ -1734,6 +1745,12 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 	return talosPatches, extraDocs, nil
 }
 
+// applyPatchesAndRenderConfig assembles the final Talos config bytes
+// for the non-Full template path: split out extra documents, run two
+// bundle-rebuild passes (TypeUnknown then resolved machine type),
+// apply patches in dependency order, serialise.
+//
+//nolint:gocognit // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context, splitting them would scatter the wrap calls without reducing the count.
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
@@ -1968,6 +1985,11 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 	return res, nil
 }
 
+// newLookupFunction returns the implementation of the chart `lookup`
+// template function, dispatching across COSI resource kinds and emitting
+// a deterministic error envelope on miss.
+//
+//nolint:funlen // 62 lines: closure over ctx/c with a single linear dispatch over resource kinds; extracting helpers would either thread (ctx, c) through every signature or hoist the closure body to package level.
 func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]any, error) {
 	return func(kind string, namespace string, id string) (map[string]any, error) {
 		var multiErr *multierror.Error
