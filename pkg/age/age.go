@@ -25,10 +25,17 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/cozystack/talm/pkg/secureperm"
 )
+
+// ErrLeftoverRotationBackup is returned by RotateKeys when it detects
+// `*.rotation-backup` files from a previous run still on disk. Callers
+// can use errors.Is to recognise the unsafe-to-rotate state and offer
+// targeted recovery guidance instead of a generic failure message.
+var ErrLeftoverRotationBackup = errors.New("leftover rotation backup from a previous run (either interrupted, or successful with a failed cleanup step); inspect and remove (or restore) before retrying")
 
 const (
 	keyFileName          = "talm.key"
@@ -48,7 +55,7 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 		// Key exists, load it
 		identity, err := LoadKey(rootDir)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to load existing key: %w", err)
+			return nil, false, errors.Wrap(err, "load existing key")
 		}
 		return identity, false, nil
 	}
@@ -56,11 +63,11 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 	// Generate new key
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to generate age identity: %w", err)
+		return nil, false, errors.Wrap(err, "generate age identity")
 	}
 
 	if err := secureperm.WriteFile(keyFile, []byte(formatKeyFile(identity, time.Now()))); err != nil {
-		return nil, false, fmt.Errorf("failed to write key file: %w", err)
+		return nil, false, errors.Wrap(err, "write key file")
 	}
 
 	return identity, true, nil
@@ -86,7 +93,7 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read key file: %w", err)
+		return nil, errors.Wrap(err, "read key file")
 	}
 
 	// Find the secret key line (starts with AGE-SECRET-KEY)
@@ -107,13 +114,16 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 		if strings.HasPrefix(trimmed, "AGE-SECRET-KEY-") {
 			secretKeyLine = trimmed
 		} else {
-			return nil, fmt.Errorf("no AGE-SECRET-KEY found in key file")
+			return nil, errors.WithHint(
+				errors.New("no AGE-SECRET-KEY found in key file"),
+				"the key file must contain an AGE-SECRET-KEY-1... line, either alone (legacy plain format) or alongside age keygen comments",
+			)
 		}
 	}
 
 	identity, err := age.ParseX25519Identity(secretKeyLine)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse age identity: %w", err)
+		return nil, errors.Wrap(err, "parse age identity")
 	}
 
 	return identity, nil
@@ -129,7 +139,7 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
-		return "", fmt.Errorf("failed to read key file: %w", err)
+		return "", errors.Wrap(err, "read key file")
 	}
 
 	// Find the public key line (starts with # public key:)
@@ -144,7 +154,7 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 	// Fallback: load identity and get public key
 	identity, err := LoadKey(rootDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to load key: %w", err)
+		return "", errors.Wrap(err, "load key")
 	}
 	return identity.Recipient().String(), nil
 }
@@ -158,7 +168,7 @@ func EncryptSecretsFile(rootDir string) error {
 	// Load plain secrets
 	secretsData, err := os.ReadFile(secretsFile)
 	if err != nil {
-		return fmt.Errorf("failed to read secrets file: %w", err)
+		return errors.Wrap(err, "read secrets file")
 	}
 
 	// Load or generate key
@@ -168,20 +178,20 @@ func EncryptSecretsFile(rootDir string) error {
 		var keyCreated bool
 		identity, keyCreated, err = GenerateKey(rootDir)
 		if err != nil {
-			return fmt.Errorf("failed to generate key: %w", err)
+			return errors.Wrap(err, "generate key")
 		}
 		_ = keyCreated // Not used in this context
 	} else {
 		identity, err = LoadKey(rootDir)
 		if err != nil {
-			return fmt.Errorf("failed to load key: %w", err)
+			return errors.Wrap(err, "load key")
 		}
 	}
 
 	// Parse YAML
 	var secrets map[string]any
 	if err := yaml.Unmarshal(secretsData, &secrets); err != nil {
-		return fmt.Errorf("failed to parse secrets YAML: %w", err)
+		return errors.Wrap(err, "parse secrets YAML")
 	}
 
 	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
@@ -193,14 +203,14 @@ func EncryptSecretsFile(rootDir string) error {
 				// Merge: encrypt only changed values, preserve unchanged encrypted values
 				merged, err := mergeAndEncryptYAMLValues(secrets, encryptedSecrets, identity)
 				if err != nil {
-					return fmt.Errorf("failed to merge and encrypt: %w", err)
+					return errors.Wrap(err, "merge and encrypt")
 				}
 				encryptedSecrets = merged.(map[string]any)
 			} else {
 				// If parsing fails, encrypt everything
 				encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
 				if err != nil {
-					return fmt.Errorf("failed to encrypt secrets: %w", err)
+					return errors.Wrap(err, "encrypt secrets")
 				}
 				encryptedSecrets = encrypted.(map[string]any)
 			}
@@ -208,7 +218,7 @@ func EncryptSecretsFile(rootDir string) error {
 			// If reading fails, encrypt everything
 			encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
 			if err != nil {
-				return fmt.Errorf("failed to encrypt secrets: %w", err)
+				return errors.Wrap(err, "encrypt secrets")
 			}
 			encryptedSecrets = encrypted.(map[string]any)
 		}
@@ -216,7 +226,7 @@ func EncryptSecretsFile(rootDir string) error {
 		// No encrypted file exists, encrypt everything
 		encrypted, err := encryptYAMLValues(secrets, identity.Recipient())
 		if err != nil {
-			return fmt.Errorf("failed to encrypt secrets: %w", err)
+			return errors.Wrap(err, "encrypt secrets")
 		}
 		encryptedSecrets = encrypted.(map[string]any)
 	}
@@ -224,7 +234,7 @@ func EncryptSecretsFile(rootDir string) error {
 	// Marshal encrypted YAML
 	encryptedData, err := yaml.Marshal(encryptedSecrets)
 	if err != nil {
-		return fmt.Errorf("failed to marshal encrypted secrets: %w", err)
+		return errors.Wrap(err, "marshal encrypted secrets")
 	}
 
 	// Write encrypted file via secureperm.WriteFile so it lands at
@@ -234,7 +244,7 @@ func EncryptSecretsFile(rootDir string) error {
 	// helper for the same file, keeping the on-disk mode invariant
 	// across every code path that writes secrets.encrypted.yaml.
 	if err := secureperm.WriteFile(encryptedFile, encryptedData); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
+		return errors.Wrap(err, "write encrypted file")
 	}
 
 	return nil
@@ -248,36 +258,36 @@ func DecryptSecretsFile(rootDir string) error {
 	// Load encrypted secrets
 	encryptedData, err := os.ReadFile(encryptedFile)
 	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
+		return errors.Wrap(err, "read encrypted file")
 	}
 
 	// Load key
 	identity, err := LoadKey(rootDir)
 	if err != nil {
-		return fmt.Errorf("failed to load key: %w", err)
+		return errors.Wrap(err, "load key")
 	}
 
 	// Parse YAML
 	var encryptedSecrets map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
-		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
+		return errors.Wrap(err, "parse encrypted YAML")
 	}
 
 	// Decrypt values
 	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, identity)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt secrets: %w", err)
+		return errors.Wrap(err, "decrypt secrets")
 	}
 
 	// Marshal decrypted YAML
 	decryptedData, err := yaml.Marshal(decryptedSecrets)
 	if err != nil {
-		return fmt.Errorf("failed to marshal decrypted secrets: %w", err)
+		return errors.Wrap(err, "marshal decrypted secrets")
 	}
 
 	// Write decrypted file with secure permissions
 	if err := secureperm.WriteFile(secretsFile, decryptedData); err != nil {
-		return fmt.Errorf("failed to write decrypted file: %w", err)
+		return errors.Wrap(err, "write decrypted file")
 	}
 
 	return nil
@@ -457,15 +467,15 @@ func encryptString(plaintext string, recipient *age.X25519Recipient) (string, er
 	var buf bytes.Buffer
 	writer, err := age.Encrypt(&buf, recipient)
 	if err != nil {
-		return "", fmt.Errorf("failed to create encrypt writer: %w", err)
+		return "", errors.Wrap(err, "create encrypt writer")
 	}
 
 	if _, err := writer.Write([]byte(plaintext)); err != nil {
-		return "", fmt.Errorf("failed to write plaintext: %w", err)
+		return "", errors.Wrap(err, "write plaintext")
 	}
 
 	if err := writer.Close(); err != nil {
-		return "", fmt.Errorf("failed to close encrypt writer: %w", err)
+		return "", errors.Wrap(err, "close encrypt writer")
 	}
 
 	// Encode to base64 for safe YAML storage
@@ -476,17 +486,17 @@ func encryptString(plaintext string, recipient *age.X25519Recipient) (string, er
 func decryptString(encryptedBase64 string, identity *age.X25519Identity) (string, error) {
 	encrypted, err := base64.StdEncoding.DecodeString(encryptedBase64)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode base64: %w", err)
+		return "", errors.Wrap(err, "decode base64")
 	}
 
 	reader, err := age.Decrypt(bytes.NewReader(encrypted), identity)
 	if err != nil {
-		return "", fmt.Errorf("failed to create decrypt reader: %w", err)
+		return "", errors.Wrap(err, "create decrypt reader")
 	}
 
 	decrypted, err := io.ReadAll(reader)
 	if err != nil {
-		return "", fmt.Errorf("failed to read decrypted data: %w", err)
+		return "", errors.Wrap(err, "read decrypted data")
 	}
 
 	return string(decrypted), nil
@@ -535,41 +545,41 @@ func RotateKeys(rootDir string) error {
 	// behind; the docstring above explains how to distinguish.
 	for _, p := range []string{keyBackup, encryptedBackup} {
 		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("found leftover rotation backup %q from a previous run (either interrupted, or successful with a failed cleanup step); inspect and remove (or restore) before retrying", p)
+			return errors.Wrapf(ErrLeftoverRotationBackup, "leftover rotation-backup at %q", p)
 		}
 	}
 
 	// Phase 1: read and decrypt with old key, all in memory.
 	oldIdentity, err := LoadKey(rootDir)
 	if err != nil {
-		return fmt.Errorf("failed to load old key: %w", err)
+		return errors.Wrap(err, "load old key")
 	}
 	encryptedData, err := os.ReadFile(encryptedFile)
 	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
+		return errors.Wrap(err, "read encrypted file")
 	}
 	var encryptedSecrets map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedSecrets); err != nil {
-		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
+		return errors.Wrap(err, "parse encrypted YAML")
 	}
 	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt with old key: %w", err)
+		return errors.Wrap(err, "decrypt with old key")
 	}
 
 	// Phase 2: generate new identity and encrypt new ciphertext —
 	// still all in memory. No disk mutation yet.
 	newIdentity, err := age.GenerateX25519Identity()
 	if err != nil {
-		return fmt.Errorf("failed to generate new identity: %w", err)
+		return errors.Wrap(err, "generate new identity")
 	}
 	encryptedSecretsNew, err := encryptYAMLValues(decryptedSecrets, newIdentity.Recipient())
 	if err != nil {
-		return fmt.Errorf("failed to encrypt with new key: %w", err)
+		return errors.Wrap(err, "encrypt with new key")
 	}
 	encryptedDataNew, err := yaml.Marshal(encryptedSecretsNew)
 	if err != nil {
-		return fmt.Errorf("failed to marshal new encrypted secrets: %w", err)
+		return errors.Wrap(err, "marshal new encrypted secrets")
 	}
 
 	// Phase 3: move originals aside as backups. Atomic rename, so
@@ -577,7 +587,7 @@ func RotateKeys(rootDir string) error {
 	// block or neither move took effect (for the second rename: we
 	// undo the first if it errors).
 	if err := os.Rename(keyFile, keyBackup); err != nil {
-		return fmt.Errorf("failed to back up key file before rotation: %w", err)
+		return errors.Wrap(err, "back up key file before rotation")
 	}
 	if err := os.Rename(encryptedFile, encryptedBackup); err != nil {
 		// Roll back the key rename so the project is untouched.
@@ -587,9 +597,14 @@ func RotateKeys(rootDir string) error {
 		// a Phase 0 refusal on retry would be the first sign of
 		// the partial state).
 		if rbErr := os.Rename(keyBackup, keyFile); rbErr != nil {
-			return fmt.Errorf("failed to back up encrypted file before rotation: %w; AND rollback of key-file rename failed: %v — manual recovery: rename %q -> %q", err, rbErr, keyBackup, keyFile)
+			return errors.WithHintf(
+				errors.Wrapf(errors.WithSecondaryError(err, rbErr),
+					"back up encrypted file before rotation; AND rollback of key-file rename failed"),
+				"manual recovery: rename %q -> %q",
+				keyBackup, keyFile,
+			)
 		}
-		return fmt.Errorf("failed to back up encrypted file before rotation: %w (key file rename rolled back)", err)
+		return errors.Wrap(err, "back up encrypted file before rotation (key file rename rolled back)")
 	}
 
 	// restore is a recovery helper used when any later step fails:
@@ -603,10 +618,20 @@ func RotateKeys(rootDir string) error {
 		errKey := os.Rename(keyBackup, keyFile)
 		errEnc := os.Rename(encryptedBackup, encryptedFile)
 		if errKey != nil || errEnc != nil {
-			return fmt.Errorf("rotation failed at %s: %w; AND restore from backup partially failed (key: %v, encrypted: %v) — manual recovery: rename %q -> %q and %q -> %q",
-				stage, cause, errKey, errEnc, keyBackup, keyFile, encryptedBackup, encryptedFile)
+			combined := cause
+			if errKey != nil {
+				combined = errors.WithSecondaryError(combined, errors.Wrap(errKey, "restore key from backup"))
+			}
+			if errEnc != nil {
+				combined = errors.WithSecondaryError(combined, errors.Wrap(errEnc, "restore encrypted file from backup"))
+			}
+			return errors.WithHintf(
+				errors.Wrapf(combined, "rotation failed at %s; AND restore from backup partially failed", stage),
+				"manual recovery: rename %q -> %q and %q -> %q",
+				keyBackup, keyFile, encryptedBackup, encryptedFile,
+			)
 		}
-		return fmt.Errorf("rotation failed at %s: %w (originals restored)", stage, cause)
+		return errors.Wrapf(cause, "rotation failed at %s (originals restored)", stage)
 	}
 
 	// Phase 4: write new key, then new encrypted file. Both via
@@ -633,8 +658,11 @@ func RotateKeys(rootDir string) error {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
 	}
 	if len(cleanupErrs) > 0 {
-		return fmt.Errorf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s; remove these files manually before the next rotation",
-			strings.Join(cleanupErrs, "; "))
+		return errors.WithHint(
+			errors.Newf("rotation committed (new key and encrypted file are on disk) but cleanup of backup files failed: %s",
+				strings.Join(cleanupErrs, "; ")),
+			"remove these files manually before the next rotation",
+		)
 	}
 
 	return nil
@@ -649,7 +677,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	// Load plain file
 	plainData, err := os.ReadFile(plainFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read plain file: %w", err)
+		return errors.Wrap(err, "read plain file")
 	}
 
 	// Load or generate key
@@ -659,20 +687,20 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		var keyCreated bool
 		identity, keyCreated, err = GenerateKey(rootDir)
 		if err != nil {
-			return fmt.Errorf("failed to generate key: %w", err)
+			return errors.Wrap(err, "generate key")
 		}
 		_ = keyCreated // Not used in this context
 	} else {
 		identity, err = LoadKey(rootDir)
 		if err != nil {
-			return fmt.Errorf("failed to load key: %w", err)
+			return errors.Wrap(err, "load key")
 		}
 	}
 
 	// Parse YAML
 	var yamlData map[string]any
 	if err := yaml.Unmarshal(plainData, &yamlData); err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
+		return errors.Wrap(err, "parse YAML")
 	}
 
 	// If encrypted file exists, load it and merge (preserve unchanged encrypted values)
@@ -684,14 +712,14 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 				// Merge: encrypt only changed values, preserve unchanged encrypted values
 				merged, err := mergeAndEncryptYAMLValues(yamlData, encryptedYAML, identity)
 				if err != nil {
-					return fmt.Errorf("failed to merge and encrypt: %w", err)
+					return errors.Wrap(err, "merge and encrypt")
 				}
 				encryptedYAML = merged.(map[string]any)
 			} else {
 				// If parsing fails, encrypt everything
 				encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
 				if err != nil {
-					return fmt.Errorf("failed to encrypt YAML values: %w", err)
+					return errors.Wrap(err, "encrypt YAML values")
 				}
 				encryptedYAML = encrypted.(map[string]any)
 			}
@@ -699,7 +727,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 			// If reading fails, encrypt everything
 			encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
 			if err != nil {
-				return fmt.Errorf("failed to encrypt YAML values: %w", err)
+				return errors.Wrap(err, "encrypt YAML values")
 			}
 			encryptedYAML = encrypted.(map[string]any)
 		}
@@ -707,7 +735,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 		// No encrypted file exists, encrypt everything
 		encrypted, err := encryptYAMLValues(yamlData, identity.Recipient())
 		if err != nil {
-			return fmt.Errorf("failed to encrypt YAML values: %w", err)
+			return errors.Wrap(err, "encrypt YAML values")
 		}
 		encryptedYAML = encrypted.(map[string]any)
 	}
@@ -715,7 +743,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	// Marshal encrypted YAML
 	encryptedData, err := yaml.Marshal(encryptedYAML)
 	if err != nil {
-		return fmt.Errorf("failed to marshal encrypted YAML: %w", err)
+		return errors.Wrap(err, "marshal encrypted YAML")
 	}
 
 	// Write encrypted file via secureperm.WriteFile (mode 0o600).
@@ -723,7 +751,7 @@ func EncryptYAMLFile(rootDir, plainFile, encryptedFile string) error {
 	// RotateKeys — every code path that writes encrypted secrets
 	// material agrees on the same on-disk permission.
 	if err := secureperm.WriteFile(encryptedFilePath, encryptedData); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
+		return errors.Wrap(err, "write encrypted file")
 	}
 
 	return nil
@@ -737,36 +765,36 @@ func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 	// Load encrypted file
 	encryptedData, err := os.ReadFile(encryptedFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
+		return errors.Wrap(err, "read encrypted file")
 	}
 
 	// Load key
 	identity, err := LoadKey(rootDir)
 	if err != nil {
-		return fmt.Errorf("failed to load key: %w", err)
+		return errors.Wrap(err, "load key")
 	}
 
 	// Parse YAML
 	var encryptedYAML map[string]any
 	if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err != nil {
-		return fmt.Errorf("failed to parse encrypted YAML: %w", err)
+		return errors.Wrap(err, "parse encrypted YAML")
 	}
 
 	// Decrypt values
 	decryptedYAML, err := decryptYAMLValues(encryptedYAML, identity)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt YAML values: %w", err)
+		return errors.Wrap(err, "decrypt YAML values")
 	}
 
 	// Marshal decrypted YAML
 	decryptedData, err := yaml.Marshal(decryptedYAML)
 	if err != nil {
-		return fmt.Errorf("failed to marshal decrypted YAML: %w", err)
+		return errors.Wrap(err, "marshal decrypted YAML")
 	}
 
 	// Write decrypted file with secure permissions
 	if err := secureperm.WriteFile(plainFilePath, decryptedData); err != nil {
-		return fmt.Errorf("failed to write decrypted file: %w", err)
+		return errors.Wrap(err, "write decrypted file")
 	}
 
 	return nil
