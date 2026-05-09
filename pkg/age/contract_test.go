@@ -32,6 +32,7 @@ package age_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -450,7 +451,17 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 // secrets material on shared workstations invites mistakes. Pin so
 // a regression that reverts the secureperm.WriteFile call to a raw
 // os.WriteFile with 0o644 surfaces here.
+//
+// Skipped on Windows: NTFS does not honour Unix permission bits,
+// so os.FileInfo.Mode().Perm() always returns 0o666 regardless of
+// the actual DACL. The secureperm package has its own Windows-side
+// owner-only DACL test (pkg/secureperm/secureperm_windows_test.go)
+// that exercises the equivalent contract via the platform's
+// security descriptor APIs.
 func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
 		t.Fatal(err)
