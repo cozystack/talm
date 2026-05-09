@@ -133,7 +133,11 @@ var initCmd = &cobra.Command{
 		absCwd, _ := filepath.Abs(cwd)
 		absRootDir, _ := filepath.Abs(Config.RootDir)
 		if !Config.RootDirExplicit && absRootDir != absCwd {
-			return fmt.Errorf("refusing to init: %q is inside an existing talm project at %q. To create a new project under the current directory, pass --root . explicitly. To re-initialise the parent, run from the parent directory", absCwd, absRootDir)
+			// %s, not %q: %q calls strconv.Quote which escapes
+			// backslashes in Windows paths (C:\Users\... renders as
+			// "C:\\Users\\..."), making the message harder to read
+			// for the operator and breaking substring tests.
+			return fmt.Errorf("refusing to init: %s is inside an existing talm project at %s. To create a new project under the current directory, pass --root . explicitly. To re-initialise the parent, run from the parent directory", absCwd, absRootDir)
 		}
 		return nil
 	},
