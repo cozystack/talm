@@ -97,7 +97,8 @@ func toYAML(v any) string {
 func fromYAML(str string) map[string]any {
 	m := map[string]any{}
 
-	if err := yaml.Unmarshal([]byte(str), &m); err != nil {
+	err := yaml.Unmarshal([]byte(str), &m)
+	if err != nil {
 		m["Error"] = err.Error()
 	}
 
@@ -113,7 +114,8 @@ func fromYAML(str string) map[string]any {
 func fromYAMLArray(str string) []any {
 	a := []any{}
 
-	if err := yaml.Unmarshal([]byte(str), &a); err != nil {
+	err := yaml.Unmarshal([]byte(str), &a)
+	if err != nil {
 		a = []any{err.Error()}
 	}
 
@@ -159,7 +161,8 @@ func toJSON(v any) string {
 func fromJSON(str string) map[string]any {
 	m := make(map[string]any)
 
-	if err := json.Unmarshal([]byte(str), &m); err != nil {
+	err := json.Unmarshal([]byte(str), &m)
+	if err != nil {
 		m["Error"] = err.Error()
 	}
 
@@ -175,7 +178,8 @@ func fromJSON(str string) map[string]any {
 func fromJSONArray(str string) []any {
 	a := []any{}
 
-	if err := json.Unmarshal([]byte(str), &a); err != nil {
+	err := json.Unmarshal([]byte(str), &a)
+	if err != nil {
 		a = []any{err.Error()}
 	}
 

@@ -33,12 +33,21 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 )
 
-var (
-	Disks      map[string]any                                                               = map[string]any{}
-	LookupFunc func(resource string, namespace string, name string) (map[string]any, error) = func(string, string, string) (map[string]any, error) {
-		return map[string]any{}, nil
-	}
-)
+// Disks is a package-level lookup table consulted by chart templates that
+// reference {{ .Disks }}. It is populated by callers that drive the engine
+// (e.g. talm's apply path) before Render is invoked.
+//
+//nolint:gochecknoglobals // mutable hook into rendering shared across callers; matches upstream lookup wiring.
+var Disks = map[string]any{}
+
+// LookupFunc is the package-level implementation of the `lookup` template
+// function used when the engine is not in lint mode. It is overridden by
+// callers that have a live Kubernetes connection.
+//
+//nolint:gochecknoglobals // mutable hook into rendering shared across callers; matches upstream lookup wiring.
+var LookupFunc = func(string, string, string) (map[string]any, error) {
+	return map[string]any{}, nil
+}
 
 // Engine is an implementation of the Helm rendering implementation for templates.
 type Engine struct {
@@ -164,7 +173,9 @@ func tplFun(parent *template.Template, includedNames map[string]int, strict bool
 		}
 
 		var buf strings.Builder
-		if err := t.Execute(&buf, vals); err != nil {
+
+		err = t.Execute(&buf, vals)
+		if err != nil {
 			return "", errors.Wrapf(err, "error during tpl function execution for %q", tpl)
 		}
 
@@ -230,7 +241,7 @@ func (e Engine) initFunMap(t *template.Template) {
 	// When DNS lookups are not enabled override the sprig function and return
 	// an empty string.
 	if !e.EnableDNS {
-		funcMap["getHostByName"] = func(name string) string {
+		funcMap["getHostByName"] = func(_ string) string {
 			return ""
 		}
 	}
@@ -284,7 +295,9 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 
 	for _, filename := range keys {
 		r := tpls[filename]
-		if _, err := t.New(filename).Parse(r.tpl); err != nil {
+
+		_, err := t.New(filename).Parse(r.tpl)
+		if err != nil {
 			return map[string]string{}, cleanupParseError(filename, err)
 		}
 	}
@@ -301,7 +314,9 @@ func (e Engine) render(tpls map[string]renderable) (rendered map[string]string, 
 		vals["Template"] = chartutil.Values{"Name": filename, "BasePath": tpls[filename].basePath}
 
 		var buf strings.Builder
-		if err := t.ExecuteTemplate(&buf, filename, vals); err != nil {
+
+		err := t.ExecuteTemplate(&buf, filename, vals)
+		if err != nil {
 			return map[string]string{}, cleanupExecError(filename, err)
 		}
 
@@ -326,7 +341,7 @@ func cleanupParseError(filename string, err error) error {
 	// The remaining tokens make up a stacktrace-like chain, ending with the relevant error
 	errMsg := tokens[len(tokens)-1]
 
-	return fmt.Errorf("parse error at (%s): %s", string(location), errMsg)
+	return fmt.Errorf("parse error at (%s): %s", location, errMsg)
 }
 
 func cleanupExecError(filename string, err error) error {
@@ -346,7 +361,7 @@ func cleanupExecError(filename string, err error) error {
 
 	parts := warnRegex.FindStringSubmatch(tokens[2])
 	if len(parts) >= 2 {
-		return fmt.Errorf("execution error at (%s): %s", string(location), parts[1])
+		return fmt.Errorf("execution error at (%s): %s", location, parts[1])
 	}
 
 	return err
@@ -415,10 +430,14 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 
 	// If there is a {{.Values.ThisChart}} in the parent metadata,
 	// copy that into the {{.Values}} for this template.
-	if c.IsRoot() {
+	switch {
+	case c.IsRoot():
 		next["Values"] = vals["Values"]
-	} else if vs, err := vals.Table("Values." + c.Name()); err == nil {
-		next["Values"] = vs
+	default:
+		vs, err := vals.Table("Values." + c.Name())
+		if err == nil {
+			next["Values"] = vs
+		}
 	}
 
 	for _, child := range c.Dependencies() {
@@ -445,7 +464,7 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 	return next
 }
 
-// isTemplateValid returns true if the template is valid for the chart type
+// isTemplateValid returns true if the template is valid for the chart type.
 func isTemplateValid(ch *chart.Chart, templateName string) bool {
 	if isLibraryChart(ch) {
 		return strings.HasPrefix(filepath.Base(templateName), "_")
@@ -454,7 +473,7 @@ func isTemplateValid(ch *chart.Chart, templateName string) bool {
 	return true
 }
 
-// isLibraryChart returns true if the chart is a library chart
+// isLibraryChart returns true if the chart is a library chart.
 func isLibraryChart(c *chart.Chart) bool {
 	return strings.EqualFold(c.Metadata.Type, "library")
 }

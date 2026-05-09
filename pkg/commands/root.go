@@ -138,7 +138,7 @@ func DetectProjectRoot(startDir string) (string, error) {
 
 	currentDir := absStartDir
 	for {
-		chartYaml := filepath.Join(currentDir, "Chart.yaml")
+		chartYaml := filepath.Join(currentDir, chartYamlName)
 		secretsYaml := filepath.Join(currentDir, "secrets.yaml")
 		secretsEncryptedYaml := filepath.Join(currentDir, "secrets.encrypted.yaml")
 

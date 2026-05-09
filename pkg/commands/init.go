@@ -52,7 +52,7 @@ var initCmdFlags struct {
 
 // initCmd represents the `init` command.
 var initCmd = &cobra.Command{
-	Use:   "init",
+	Use:   initSubcommand,
 	Short: "Initialize a new project and generate default values",
 	Long:  ``,
 	Args:  cobra.NoArgs,
@@ -327,7 +327,7 @@ var initCmd = &cobra.Command{
 
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
 			if kubeconfigPath == "" {
-				kubeconfigPath = "kubeconfig"
+				kubeconfigPath = defaultKubeconfigName
 			}
 
 			kubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath)
@@ -393,7 +393,7 @@ var initCmd = &cobra.Command{
 
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
 			if kubeconfigPath == "" {
-				kubeconfigPath = "kubeconfig"
+				kubeconfigPath = defaultKubeconfigName
 			}
 
 			encryptedKubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath+".encrypted")
@@ -512,7 +512,7 @@ var initCmd = &cobra.Command{
 				return err
 			}
 
-			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
+			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
 
 			data, err := yaml.Marshal(configBundle.TalosConfig())
 			if err != nil {
@@ -537,7 +537,7 @@ var initCmd = &cobra.Command{
 		// Handle kubeconfig encryption logic (check if kubeconfig exists from Chart.yaml)
 		kubeconfigPath := Config.GlobalOptions.Kubeconfig
 		if kubeconfigPath == "" {
-			kubeconfigPath = "kubeconfig"
+			kubeconfigPath = defaultKubeconfigName
 		}
 
 		kubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath)
@@ -598,7 +598,7 @@ var initCmd = &cobra.Command{
 			if chartName == initCmdFlags.preset {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
 				switch parts[len(parts)-1] {
-				case "Chart.yaml":
+				case chartYamlName:
 					err = writeToDestination(fmt.Appendf(nil, content, clusterName, Config.InitOptions.Version), file, 0o644)
 				case "values.yaml":
 					var rendered []byte
@@ -620,7 +620,7 @@ var initCmd = &cobra.Command{
 			// Write library chart
 			if chartName == "talm" {
 				file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
-				if parts[len(parts)-1] == "Chart.yaml" {
+				if parts[len(parts)-1] == chartYamlName {
 					err = writeToDestination(fmt.Appendf(nil, content, "talm", Config.InitOptions.Version), file, 0o644)
 				} else {
 					err = writeToDestination([]byte(content), file, 0o644)
@@ -655,7 +655,7 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies.
 func readChartYamlPreset() (string, error) {
-	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
 
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
@@ -919,7 +919,7 @@ func updateTalmLibraryChart() error {
 			file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
 
 			var fileContent []byte
-			if parts[len(parts)-1] == "Chart.yaml" {
+			if parts[len(parts)-1] == chartYamlName {
 				fileContent = fmt.Appendf(nil, content, "talm", Config.InitOptions.Version)
 			} else {
 				fileContent = []byte(content)
@@ -952,9 +952,9 @@ func updateTalmLibraryChart() error {
 
 				var fileContent []byte
 
-				if parts[len(parts)-1] == "Chart.yaml" {
+				if parts[len(parts)-1] == chartYamlName {
 					// Read cluster name from existing Chart.yaml
-					existingChartPath := filepath.Join(Config.RootDir, "Chart.yaml")
+					existingChartPath := filepath.Join(Config.RootDir, chartYamlName)
 
 					existingData, err := os.ReadFile(existingChartPath)
 					if err != nil {
@@ -1020,7 +1020,7 @@ func writeGitignoreFile() error {
 	// Add kubeconfig to required entries (use path from config or default)
 	kubeconfigPath := Config.GlobalOptions.Kubeconfig
 	if kubeconfigPath == "" {
-		kubeconfigPath = "kubeconfig"
+		kubeconfigPath = defaultKubeconfigName
 	}
 	// Only add base name (not full path) to gitignore
 	kubeconfigBase := filepath.Base(kubeconfigPath)

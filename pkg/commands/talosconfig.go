@@ -181,7 +181,7 @@ func regenerateTalosconfig() error {
 		fmt.Fprintf(os.Stderr, "Preserved endpoints and nodes from existing config\n")
 	} else {
 		// No old config, set default endpoint
-		newConfig.Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
+		newConfig.Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
 	}
 
 	// Marshal and write the new talosconfig
@@ -210,7 +210,7 @@ func getClusterNameFromChart() string {
 		}
 	}
 
-	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
 
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
