@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -98,19 +99,23 @@ func TestContract_DecryptYAMLValuesString_CorruptedEnvelope(t *testing.T) {
 // ciphertext.
 func TestContract_IncrementalEncrypt_NewKeyEncryptedOldKeyStable(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeYAML(dir, "secrets.yaml", "a: alpha\n"); err != nil {
+	err := writeYAML(dir, "secrets.yaml", "a: alpha\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first := readYAML(t, dir, "secrets.encrypted.yaml")
 
 	// Add a new key b.
-	if err := writeYAML(dir, "secrets.yaml", "a: alpha\nb: beta\n"); err != nil {
+	err = writeYAML(dir, "secrets.yaml", "a: alpha\nb: beta\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second := readYAML(t, dir, "secrets.encrypted.yaml")
@@ -139,10 +144,12 @@ func TestContract_IncrementalEncrypt_NestedChangeLocalised(t *testing.T) {
     inner1: original
     inner2: keep-me-too
 `
-	if err := writeYAML(dir, "secrets.yaml", initial); err != nil {
+	err := writeYAML(dir, "secrets.yaml", initial)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first := readYAML(t, dir, "secrets.encrypted.yaml")
@@ -154,10 +161,12 @@ func TestContract_IncrementalEncrypt_NestedChangeLocalised(t *testing.T) {
     inner1: NEW
     inner2: keep-me-too
 `
-	if err := writeYAML(dir, "secrets.yaml", changed); err != nil {
+	err = writeYAML(dir, "secrets.yaml", changed)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second := readYAML(t, dir, "secrets.encrypted.yaml")
@@ -185,18 +194,22 @@ func TestContract_IncrementalEncrypt_NestedChangeLocalised(t *testing.T) {
 func TestContract_IncrementalEncrypt_TypeChangeFallsBackToFullEncrypt(t *testing.T) {
 	dir := t.TempDir()
 	// Encrypted file holds scalar at k.
-	if err := writeYAML(dir, "secrets.yaml", "k: scalar-value\n"); err != nil {
+	err := writeYAML(dir, "secrets.yaml", "k: scalar-value\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Plaintext now has k as a map.
-	if err := writeYAML(dir, "secrets.yaml", "k:\n  nested: value\n"); err != nil {
+	err = writeYAML(dir, "secrets.yaml", "k:\n  nested: value\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatalf("re-encrypt with type change: %v", err)
 	}
 
@@ -216,18 +229,22 @@ func TestContract_IncrementalEncrypt_TypeChangeFallsBackToFullEncrypt(t *testing
 // which a length change invalidates.
 func TestContract_IncrementalEncrypt_ListLengthChangeFullReencrypt(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeYAML(dir, "secrets.yaml", "items:\n  - one\n  - two\n"); err != nil {
+	err := writeYAML(dir, "secrets.yaml", "items:\n  - one\n  - two\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first := readYAML(t, dir, "secrets.encrypted.yaml")
 
-	if err := writeYAML(dir, "secrets.yaml", "items:\n  - one\n  - two\n  - three\n"); err != nil {
+	err = writeYAML(dir, "secrets.yaml", "items:\n  - one\n  - two\n  - three\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second := readYAML(t, dir, "secrets.encrypted.yaml")
@@ -255,18 +272,22 @@ func TestContract_IncrementalEncrypt_ListLengthChangeFullReencrypt(t *testing.T)
 // stay byte-stable.
 func TestContract_IncrementalEncrypt_ListSameLengthLocalised(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeYAML(dir, "secrets.yaml", "items:\n  - alpha\n  - bravo\n  - charlie\n"); err != nil {
+	err := writeYAML(dir, "secrets.yaml", "items:\n  - alpha\n  - bravo\n  - charlie\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first := readYAML(t, dir, "secrets.encrypted.yaml")
 
-	if err := writeYAML(dir, "secrets.yaml", "items:\n  - alpha\n  - DELTA\n  - charlie\n"); err != nil {
+	err = writeYAML(dir, "secrets.yaml", "items:\n  - alpha\n  - DELTA\n  - charlie\n")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EncryptSecretsFile(dir); err != nil {
+	err = EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second := readYAML(t, dir, "secrets.encrypted.yaml")
@@ -287,7 +308,11 @@ func TestContract_IncrementalEncrypt_ListSameLengthLocalised(t *testing.T) {
 // === helpers ===
 
 func writeYAML(dir, name, body string) error {
-	return os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600)
+	err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600)
+	if err != nil {
+		return errors.Wrap(err, "write YAML test fixture")
+	}
+	return nil
 }
 
 func readYAML(t *testing.T, dir, name string) map[string]any {
@@ -297,7 +322,8 @@ func readYAML(t *testing.T, dir, name string) map[string]any {
 		t.Fatalf("read %s: %v", name, err)
 	}
 	var out map[string]any
-	if err := yaml.Unmarshal(data, &out); err != nil {
+	err = yaml.Unmarshal(data, &out)
+	if err != nil {
 		t.Fatalf("unmarshal %s: %v", name, err)
 	}
 	return out
