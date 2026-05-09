@@ -65,6 +65,7 @@ func GenerateKey(rootDir string) (*age.X25519Identity, bool, error) {
 		if err != nil {
 			return nil, false, errors.Wrap(err, "load existing key")
 		}
+
 		return identity, false, nil
 	}
 
@@ -100,6 +101,7 @@ func formatKeyFile(identity *age.X25519Identity, now time.Time) string {
 // Supports both age keygen format (with comments) and plain format.
 func LoadKey(rootDir string) (*age.X25519Identity, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
+
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, errors.Wrap(err, "read key file")
@@ -107,11 +109,14 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 
 	// Find the secret key line (starts with AGE-SECRET-KEY)
 	lines := strings.Split(string(keyData), "\n")
+
 	var secretKeyLine string
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "AGE-SECRET-KEY-") {
 			secretKeyLine = line
+
 			break
 		}
 	}
@@ -147,6 +152,7 @@ func GetPublicKey(identity *age.X25519Identity) string {
 // GetPublicKeyFromFile extracts the public key from talm.key file.
 func GetPublicKeyFromFile(rootDir string) (string, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
+
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
 		return "", errors.Wrap(err, "read key file")
@@ -166,6 +172,7 @@ func GetPublicKeyFromFile(rootDir string) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "load key")
 	}
+
 	return identity.Recipient().String(), nil
 }
 
@@ -185,23 +192,29 @@ func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 	switch v := data.(type) {
 	case map[string]any:
 		result := make(map[string]any)
+
 		for key, value := range v {
 			encryptedValue, err := encryptYAMLValues(value, recipient)
 			if err != nil {
 				return nil, err
 			}
+
 			result[key] = encryptedValue
 		}
+
 		return result, nil
 	case []any:
 		result := make([]any, len(v))
+
 		for i, item := range v {
 			encryptedItem, err := encryptYAMLValues(item, recipient)
 			if err != nil {
 				return nil, err
 			}
+
 			result[i] = encryptedItem
 		}
+
 		return result, nil
 	case string:
 		// Encrypt string value
@@ -209,6 +222,7 @@ func encryptYAMLValues(data any, recipient *age.X25519Recipient) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		return ageEncryptionPrefix + encrypted + ageEncryptionSuffix, nil
 	default:
 		return v, nil
@@ -220,23 +234,29 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 	switch v := data.(type) {
 	case map[string]any:
 		result := make(map[string]any)
+
 		for key, value := range v {
 			decryptedValue, err := decryptYAMLValues(value, identity)
 			if err != nil {
 				return nil, err
 			}
+
 			result[key] = decryptedValue
 		}
+
 		return result, nil
 	case []any:
 		result := make([]any, len(v))
+
 		for i, item := range v {
 			decryptedItem, err := decryptYAMLValues(item, identity)
 			if err != nil {
 				return nil, err
 			}
+
 			result[i] = decryptedItem
 		}
+
 		return result, nil
 	case string:
 		// Check if it's an encrypted value in SOPS format: ENC[AGE,data:...]
@@ -244,12 +264,15 @@ func decryptYAMLValues(data any, identity *age.X25519Identity) (any, error) {
 			// Extract the encrypted data between ENC[AGE,data: and ]
 			encrypted := strings.TrimPrefix(v, ageEncryptionPrefix)
 			encrypted = strings.TrimSuffix(encrypted, ageEncryptionSuffix)
+
 			decrypted, err := decryptString(encrypted, identity)
 			if err != nil {
 				return nil, err
 			}
+
 			return decrypted, nil
 		}
+
 		return v, nil
 	default:
 		return v, nil
@@ -261,8 +284,10 @@ func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (st
 	if strings.HasPrefix(encrypted, ageEncryptionPrefix) && strings.HasSuffix(encrypted, ageEncryptionSuffix) {
 		encryptedData := strings.TrimPrefix(encrypted, ageEncryptionPrefix)
 		encryptedData = strings.TrimSuffix(encryptedData, ageEncryptionSuffix)
+
 		return decryptString(encryptedData, identity)
 	}
+
 	return encrypted, nil
 }
 
@@ -286,6 +311,7 @@ func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identit
 				if err != nil {
 					return nil, err
 				}
+
 				result[key] = merged
 			} else {
 				// New key, encrypt it
@@ -293,9 +319,11 @@ func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identit
 				if err != nil {
 					return nil, err
 				}
+
 				result[key] = encryptedValue
 			}
 		}
+
 		return result, nil
 
 	case []any:
@@ -311,8 +339,10 @@ func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identit
 			if err != nil {
 				return nil, err
 			}
+
 			result[i] = merged
 		}
+
 		return result, nil
 
 	case string:
@@ -352,6 +382,7 @@ func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identit
 // encryptString encrypts a string using age.
 func encryptString(plaintext string, recipient *age.X25519Recipient) (string, error) {
 	var buf bytes.Buffer
+
 	writer, err := age.Encrypt(&buf, recipient)
 	if err != nil {
 		return "", errors.Wrap(err, "create encrypt writer")
@@ -444,15 +475,19 @@ func RotateKeys(rootDir string) error {
 	if err != nil {
 		return errors.Wrap(err, "load old key")
 	}
+
 	encryptedData, err := os.ReadFile(encryptedFile)
 	if err != nil {
 		return errors.Wrap(err, "read encrypted file")
 	}
+
 	var encryptedSecrets map[string]any
+
 	err = yaml.Unmarshal(encryptedData, &encryptedSecrets)
 	if err != nil {
 		return errors.Wrap(err, "parse encrypted YAML")
 	}
+
 	decryptedSecrets, err := decryptYAMLValues(encryptedSecrets, oldIdentity)
 	if err != nil {
 		return errors.Wrap(err, "decrypt with old key")
@@ -464,10 +499,12 @@ func RotateKeys(rootDir string) error {
 	if err != nil {
 		return errors.Wrap(err, "generate new identity")
 	}
+
 	encryptedSecretsNew, err := encryptYAMLValues(decryptedSecrets, newIdentity.Recipient())
 	if err != nil {
 		return errors.Wrap(err, "encrypt with new key")
 	}
+
 	encryptedDataNew, err := yaml.Marshal(encryptedSecretsNew)
 	if err != nil {
 		return errors.Wrap(err, "marshal new encrypted secrets")
@@ -481,6 +518,7 @@ func RotateKeys(rootDir string) error {
 	if err != nil {
 		return errors.Wrap(err, "back up key file before rotation")
 	}
+
 	err = os.Rename(encryptedFile, encryptedBackup)
 	if err != nil {
 		// Roll back the key rename so the project is untouched.
@@ -499,6 +537,7 @@ func RotateKeys(rootDir string) error {
 				keyBackup, keyFile,
 			)
 		}
+
 		return errors.Wrap(err, "back up encrypted file before rotation (key file rename rolled back)")
 	}
 
@@ -510,22 +549,27 @@ func RotateKeys(rootDir string) error {
 	restore := func(stage string, cause error) error {
 		_ = os.Remove(keyFile)       // best-effort: remove half-written new key if any
 		_ = os.Remove(encryptedFile) // ditto for encrypted file
+
 		errKey := os.Rename(keyBackup, keyFile)
 		errEnc := os.Rename(encryptedBackup, encryptedFile)
+
 		if errKey != nil || errEnc != nil {
 			combined := cause
 			if errKey != nil {
 				combined = errors.WithSecondaryError(combined, errors.Wrap(errKey, "restore key from backup"))
 			}
+
 			if errEnc != nil {
 				combined = errors.WithSecondaryError(combined, errors.Wrap(errEnc, "restore encrypted file from backup"))
 			}
+
 			return errors.WithHintf(
 				errors.Wrapf(combined, "rotation failed at %s; AND restore from backup partially failed", stage),
 				"manual recovery: rename %q -> %q and %q -> %q",
 				keyBackup, keyFile, encryptedBackup, encryptedFile,
 			)
 		}
+
 		return errors.Wrapf(cause, "rotation failed at %s (originals restored)", stage)
 	}
 
@@ -536,6 +580,7 @@ func RotateKeys(rootDir string) error {
 	if err != nil {
 		return restore("write new key", err)
 	}
+
 	err = secureperm.WriteFile(encryptedFile, encryptedDataNew)
 	if err != nil {
 		return restore("write new encrypted file", err)
@@ -548,14 +593,17 @@ func RotateKeys(rootDir string) error {
 	// usable; the leftover backups must be removed manually before
 	// the next rotation can run (Phase 0 will refuse otherwise).
 	var cleanupErrs []string
+
 	err = os.Remove(keyBackup)
 	if err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", keyBackup, err))
 	}
+
 	err = os.Remove(encryptedBackup)
 	if err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Sprintf("%q: %v", encryptedBackup, err))
 	}
+
 	if len(cleanupErrs) > 0 {
 		//nolint:wrapcheck // errors.WithHint wraps the errors.Newf below; cockroachdb hint helpers are the project standard for operator-facing recovery instructions.
 		return errors.WithHint(
@@ -600,6 +648,7 @@ func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 	}
 
 	var plain map[string]any
+
 	err = yaml.Unmarshal(plainData, &plain)
 	if err != nil {
 		return errors.Wrap(err, "parse plain YAML")
@@ -629,18 +678,22 @@ func encryptYAMLPair(rootDir, plainFile, encryptedFile string) error {
 // helpers rely on across init/apply/talosconfig flows.
 func loadOrGenerateIdentity(rootDir string) (*age.X25519Identity, error) {
 	keyFile := filepath.Join(rootDir, keyFileName)
+
 	_, statErr := os.Stat(keyFile)
 	if os.IsNotExist(statErr) {
 		identity, _, err := GenerateKey(rootDir)
 		if err != nil {
 			return nil, errors.Wrap(err, "generate key")
 		}
+
 		return identity, nil
 	}
+
 	identity, err := LoadKey(rootDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "load key")
 	}
+
 	return identity, nil
 }
 
@@ -656,15 +709,19 @@ func incrementalEncryptMap(plain map[string]any, encryptedFilePath string, ident
 	if statErr != nil {
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
+
 	encryptedData, err := os.ReadFile(encryptedFilePath)
 	if err != nil {
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
+
 	var existing map[string]any
+
 	err = yaml.Unmarshal(encryptedData, &existing)
 	if err != nil {
 		return encryptYAMLMap(plain, identity.Recipient())
 	}
+
 	return mergeAndEncryptYAMLMap(plain, existing, identity)
 }
 
@@ -679,10 +736,12 @@ func encryptYAMLMap(plain map[string]any, recipient *age.X25519Recipient) (map[s
 	if err != nil {
 		return nil, errors.Wrap(err, "encrypt YAML values")
 	}
+
 	out, ok := encrypted.(map[string]any)
 	if !ok {
 		return nil, errors.Wrapf(errInternalInvariant, "encryptYAMLValues returned %T", encrypted)
 	}
+
 	return out, nil
 }
 
@@ -696,10 +755,12 @@ func mergeAndEncryptYAMLMap(plain, encrypted map[string]any, identity *age.X2551
 	if err != nil {
 		return nil, errors.Wrap(err, "merge and encrypt")
 	}
+
 	out, ok := merged.(map[string]any)
 	if !ok {
 		return nil, errors.Wrapf(errInternalInvariant, "mergeAndEncryptYAMLValues returned %T", merged)
 	}
+
 	return out, nil
 }
 
@@ -727,6 +788,7 @@ func decryptYAMLPair(rootDir, encryptedFile, plainFile string) error {
 	}
 
 	var encryptedYAML map[string]any
+
 	err = yaml.Unmarshal(encryptedData, &encryptedYAML)
 	if err != nil {
 		return errors.Wrap(err, "parse encrypted YAML")
