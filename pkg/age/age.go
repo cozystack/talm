@@ -296,87 +296,121 @@ func decryptYAMLValuesString(encrypted string, identity *age.X25519Identity) (st
 func mergeAndEncryptYAMLValues(plain, encrypted any, identity *age.X25519Identity) (any, error) {
 	switch plainVal := plain.(type) {
 	case map[string]any:
-		encryptedMap, ok := encrypted.(map[string]any)
-		if !ok {
-			// Type mismatch, encrypt everything
-			return encryptYAMLValues(plain, identity.Recipient())
-		}
-
-		result := make(map[string]any)
-		// Copy all keys from plain (to handle new keys)
-		for key, plainValue := range plainVal {
-			if encryptedValue, exists := encryptedMap[key]; exists {
-				// Key exists in both, recursively merge
-				merged, err := mergeAndEncryptYAMLValues(plainValue, encryptedValue, identity)
-				if err != nil {
-					return nil, err
-				}
-
-				result[key] = merged
-			} else {
-				// New key, encrypt it
-				encryptedValue, err := encryptYAMLValues(plainValue, identity.Recipient())
-				if err != nil {
-					return nil, err
-				}
-
-				result[key] = encryptedValue
-			}
-		}
-
-		return result, nil
-
+		return mergeAndEncryptMap(plainVal, encrypted, identity)
 	case []any:
-		encryptedSlice, ok := encrypted.([]any)
-		if !ok || len(plainVal) != len(encryptedSlice) {
-			// Type or length mismatch, encrypt everything
-			return encryptYAMLValues(plain, identity.Recipient())
-		}
-
-		result := make([]any, len(plainVal))
-		for i, plainItem := range plainVal {
-			merged, err := mergeAndEncryptYAMLValues(plainItem, encryptedSlice[i], identity)
-			if err != nil {
-				return nil, err
-			}
-
-			result[i] = merged
-		}
-
-		return result, nil
-
+		return mergeAndEncryptSlice(plainVal, encrypted, identity)
 	case string:
-		encryptedStr, ok := encrypted.(string)
-		if !ok {
-			// Type mismatch, encrypt
-			return encryptYAMLValues(plain, identity.Recipient())
-		}
-
-		// Check if encrypted value is already encrypted
-		if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
-			// Decrypt existing value to compare
-			decrypted, err := decryptYAMLValuesString(encryptedStr, identity)
-			if err == nil && decrypted == plainVal {
-				// Values are the same, keep existing encrypted value (idempotent)
-				return encryptedStr, nil
-			}
-		}
-		// Encrypt the new value (if decryption fails, values differ, or both are plain)
-		return encryptYAMLValues(plain, identity.Recipient())
-
+		return mergeAndEncryptString(plainVal, encrypted, identity)
 	default:
-		// For other types, compare directly
-		if plain == encrypted {
-			// Values are the same, if encrypted is already encrypted, keep it
-			if encryptedStr, ok := encrypted.(string); ok {
-				if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
-					return encrypted, nil
-				}
-			}
-		}
-		// Encrypt the value
+		return mergeAndEncryptScalar(plain, encrypted, identity)
+	}
+}
+
+// mergeAndEncryptMap walks the plain map keyed against the encrypted
+// map (when types align) and recurses for shared keys, full-encrypts
+// for new keys. Type mismatch falls through to a full encrypt.
+func mergeAndEncryptMap(plain map[string]any, encrypted any, identity *age.X25519Identity) (any, error) {
+	encryptedMap, ok := encrypted.(map[string]any)
+	if !ok {
 		return encryptYAMLValues(plain, identity.Recipient())
 	}
+
+	result := make(map[string]any)
+
+	for key, plainValue := range plain {
+		merged, err := mergeAndEncryptMapEntry(plainValue, encryptedMap, key, identity)
+		if err != nil {
+			return nil, err
+		}
+
+		result[key] = merged
+	}
+
+	return result, nil
+}
+
+// mergeAndEncryptMapEntry encrypts a single map value: recurse when
+// the key already exists on the encrypted side, full-encrypt when it
+// is new.
+func mergeAndEncryptMapEntry(plainValue any, encryptedMap map[string]any, key string, identity *age.X25519Identity) (any, error) {
+	if encryptedValue, exists := encryptedMap[key]; exists {
+		return mergeAndEncryptYAMLValues(plainValue, encryptedValue, identity)
+	}
+
+	return encryptYAMLValues(plainValue, identity.Recipient())
+}
+
+// mergeAndEncryptSlice merges per-element when slice lengths match;
+// otherwise full-encrypts (per-index merge requires a stable mapping
+// that a length change invalidates).
+func mergeAndEncryptSlice(plain []any, encrypted any, identity *age.X25519Identity) (any, error) {
+	encryptedSlice, ok := encrypted.([]any)
+	if !ok || len(plain) != len(encryptedSlice) {
+		return encryptYAMLValues(plain, identity.Recipient())
+	}
+
+	result := make([]any, len(plain))
+
+	for i, plainItem := range plain {
+		merged, err := mergeAndEncryptYAMLValues(plainItem, encryptedSlice[i], identity)
+		if err != nil {
+			return nil, err
+		}
+
+		result[i] = merged
+	}
+
+	return result, nil
+}
+
+// mergeAndEncryptString implements the per-string idempotent rule:
+// when the prior ciphertext decrypts to the SAME plaintext, keep the
+// existing ciphertext byte-for-byte; otherwise re-encrypt.
+func mergeAndEncryptString(plain string, encrypted any, identity *age.X25519Identity) (any, error) {
+	encryptedStr, ok := encrypted.(string)
+	if !ok {
+		return encryptYAMLValues(plain, identity.Recipient())
+	}
+
+	if cipher, kept := tryReuseCiphertext(plain, encryptedStr, identity); kept {
+		return cipher, nil
+	}
+
+	return encryptYAMLValues(plain, identity.Recipient())
+}
+
+// tryReuseCiphertext returns (encryptedStr, true) when encryptedStr is
+// an envelope-wrapped ciphertext that decrypts to plain — the
+// idempotency guard. Any decryption error or plaintext mismatch
+// returns ("", false), telling the caller to fall through to a fresh
+// encrypt.
+func tryReuseCiphertext(plain, encryptedStr string, identity *age.X25519Identity) (string, bool) {
+	if !strings.HasPrefix(encryptedStr, ageEncryptionPrefix) || !strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
+		return "", false
+	}
+
+	decrypted, err := decryptYAMLValuesString(encryptedStr, identity)
+	if err != nil || decrypted != plain {
+		return "", false
+	}
+
+	return encryptedStr, true
+}
+
+// mergeAndEncryptScalar handles non-map / non-slice / non-string YAML
+// scalars (numbers, booleans, nil): keep the existing ciphertext when
+// equality holds AND the encrypted side is an envelope; otherwise
+// full-encrypt the plain value.
+func mergeAndEncryptScalar(plain, encrypted any, identity *age.X25519Identity) (any, error) {
+	if plain == encrypted {
+		if encryptedStr, ok := encrypted.(string); ok {
+			if strings.HasPrefix(encryptedStr, ageEncryptionPrefix) && strings.HasSuffix(encryptedStr, ageEncryptionSuffix) {
+				return encrypted, nil
+			}
+		}
+	}
+
+	return encryptYAMLValues(plain, identity.Recipient())
 }
 
 // encryptString encrypts a string using age.
