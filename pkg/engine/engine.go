@@ -1560,7 +1560,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
-			return nil, fmt.Errorf("template %s not found", templateFile)
+			return nil, errors.Newf("template %s not found", templateFile)
 		}
 
 		configPatches = append(configPatches, configPatch)
