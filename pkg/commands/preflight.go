@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/safe"
-
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
@@ -142,20 +141,20 @@ func evaluateVersionMismatch(configuredVersion, runningVersion string) error {
 
 		configuredContract, err = machineryconfig.ParseContractFromVersion(configuredVersion)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // best-effort: never block apply on parse failure
 		}
 	}
 
 	runningContract, err := machineryconfig.ParseContractFromVersion(runningVersion)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // best-effort: never block apply on parse failure
 	}
 
 	if !configuredContract.Greater(runningContract) {
 		return nil
 	}
 
-	warning := fmt.Errorf(
+	warning := errors.Newf(
 		"pre-flight: configured talosVersion=%s is newer than the node's running Talos %s",
 		configuredContract,
 		runningVersion,

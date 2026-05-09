@@ -97,11 +97,17 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 		// Validate that only one endpoint/node is provided
 		if len(GlobalArgs.Endpoints) > 1 {
-			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d endpoints were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one endpoint using -e flag or a single config file", len(GlobalArgs.Endpoints))
+			return errors.WithHint(
+				errors.Newf("rotate-ca requires exactly one control-plane node, but %d endpoints were provided", len(GlobalArgs.Endpoints)),
+				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one endpoint via --endpoints or a single config file",
+			)
 		}
 
 		if len(GlobalArgs.Nodes) > 1 {
-			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d nodes were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one node using -n flag or a single config file", len(GlobalArgs.Nodes))
+			return errors.WithHint(
+				errors.Newf("rotate-ca requires exactly one control-plane node, but %d nodes were provided", len(GlobalArgs.Nodes)),
+				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one node via --nodes or a single config file",
+			)
 		}
 
 		return nil

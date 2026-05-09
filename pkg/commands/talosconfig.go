@@ -19,8 +19,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/secureperm"
-
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/mgmt/gen"
 	"github.com/siderolabs/talos/pkg/machinery/client/config"
 	machineconfig "github.com/siderolabs/talos/pkg/machinery/config"
@@ -111,7 +111,10 @@ func regenerateTalosconfig() error {
 	// Resolve secrets path
 	secretsPath := ResolveSecretsPath(Config.TemplateOptions.WithSecrets)
 	if !fileExists(secretsPath) {
-		return fmt.Errorf("secrets.yaml not found at %s. Run 'talm init' or restore secrets.yaml", secretsPath)
+		return errors.WithHint(
+			errors.Newf("secrets.yaml not found at %s", secretsPath),
+			"run 'talm init' or restore secrets.yaml",
+		)
 	}
 
 	// Load secrets bundle
