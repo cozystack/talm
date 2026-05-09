@@ -475,3 +475,51 @@ vlans:
 busPath: {{ $link.spec.busPath }}
 {{- end -}}
 {{- end -}}
+
+{{- /* Validate that a value is a well-formed DNS-1123 subdomain
+       (RFC 1035 syntax + RFC 1123 leading-digit relaxation). On
+       success returns the value verbatim so callers can pipe it
+       into `quote` or use it inline. On any violation fails the
+       render with a precise message naming the field and the
+       offending value.
+
+       Mirrors what k8s.io/apimachinery/pkg/util/validation
+       .IsDNS1123Subdomain enforces in Go-side flag validation
+       (talm init --name) so chart-rendered values agree with
+       values an operator passes through the CLI:
+
+         1. non-empty
+         2. total length <= 253 chars
+         3. matches RFC 1123 subdomain regex (lowercase, only
+            [a-z0-9-.], each label starts/ends with [a-z0-9],
+            no double dots)
+
+       Per-label length (63 chars) is NOT enforced — upstream
+       IsDNS1123Subdomain does not enforce it either, and there
+       is no Talos-side cluster-name length cap that aligns with
+       a 63-char floor. Stay symmetric with Go-side validation.
+
+       Coercion: .value is rendered through `printf "%v"` before
+       length / regex checks so an unquoted numeric YAML scalar
+       (e.g. `clusterName: 123`) becomes the string "123" instead
+       of crashing the template at `len of type int`. The eq-""
+       emptiness check also avoids treating numeric 0 as falsy.
+
+       Usage:
+           {{ include "talm.validate.dns1123subdomain"
+              (dict "value" .Values.clusterName "field" "clusterName") }}
+       */ -}}
+{{- define "talm.validate.dns1123subdomain" -}}
+{{- $field := .field -}}
+{{- $value := printf "%v" .value -}}
+{{- if eq $value "" -}}
+{{- fail (printf "values.yaml: %s must be a non-empty DNS-1123 subdomain (must be lowercase, only [a-z0-9-.], start and end with [a-z0-9], max 253 chars)" $field) -}}
+{{- end -}}
+{{- if gt (len $value) 253 -}}
+{{- fail (printf "values.yaml: %s=%q exceeds 253 characters (DNS-1123 subdomain length limit)" $field $value) -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $value) -}}
+{{- fail (printf "values.yaml: %s=%q is not a valid DNS-1123 subdomain (must be lowercase, only [a-z0-9-.], start and end with [a-z0-9])" $field $value) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}
