@@ -119,6 +119,8 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 }
 
 // FullConfigProcess handles the full process of creating and updating the Bundle.
+//
+//nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
 func FullConfigProcess(_ context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
 	configBundle, err := InitializeConfigBundle(opts)
 	if err != nil {
@@ -1030,7 +1032,7 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 // The parameter is named yamlPath rather than path to avoid shadowing
 // the stdlib path package imported elsewhere in this file.
 //
-//nolint:gocognit // dispatch over (missing-key | replace-semantic | object-array | nested-map | primitive-slice) inside one walk; extracting any branch into a helper would need to thread the per-pair (body, rendered, parent, key) state, growing the surface without simplifying.
+//nolint:gocognit,nestif // dispatch over (missing-key | replace-semantic | object-array | nested-map | primitive-slice) inside one walk; extracting any branch into a helper would need to thread the per-pair (body, rendered, parent, key) state, growing the surface without simplifying.
 func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 	for key, bodyV := range body {
 		renderedV, exists := rendered[key]
@@ -1767,7 +1769,7 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 // bundle-rebuild passes (TypeUnknown then resolved machine type),
 // apply patches in dependency order, serialise.
 //
-//nolint:gocognit,gocyclo,gocritic // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
+//nolint:funlen,gocognit,gocyclo,cyclop,nestif,gocritic // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
@@ -1986,28 +1988,31 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 		val = val.Elem()
 	}
 
-	if val.Kind() == reflect.Struct {
-		if yamlField := val.FieldByName("yaml"); yamlField.IsValid() {
-			yamlValue := readUnexportedField(yamlField)
-
-			yamlString, ok := yamlValue.(string)
-			if !ok {
-				//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
-				return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
-			}
-
-			var unmarshalledData any
-
-			err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData)
-			if err != nil {
-				return res, errors.Wrap(err, "unmarshaling yaml")
-			}
-
-			res["spec"] = unmarshalledData
-		} else {
-			return res, errors.New("field 'yaml' not found")
-		}
+	if val.Kind() != reflect.Struct {
+		return res, nil
 	}
+
+	yamlField := val.FieldByName("yaml")
+	if !yamlField.IsValid() {
+		return res, errors.New("field 'yaml' not found")
+	}
+
+	yamlValue := readUnexportedField(yamlField)
+
+	yamlString, ok := yamlValue.(string)
+	if !ok {
+		//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
+		return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
+	}
+
+	var unmarshalledData any
+
+	err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData)
+	if err != nil {
+		return res, errors.Wrap(err, "unmarshaling yaml")
+	}
+
+	res["spec"] = unmarshalledData
 
 	return res, nil
 }
