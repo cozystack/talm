@@ -48,6 +48,19 @@ const (
 	// chartYamlName is the standard Helm chart manifest filename;
 	// the talm init flow both writes and parses it.
 	chartYamlName = "Chart.yaml"
+	// secretsYamlName is the unencrypted secrets manifest written
+	// during init and consumed by chart rendering.
+	secretsYamlName = "secrets.yaml"
+	// secretsEncryptedYamlName is the age-encrypted secrets manifest
+	// committed to git in encrypted form.
+	secretsEncryptedYamlName = "secrets.encrypted.yaml"
+	// talmKeyName is the age private-key file the init flow generates
+	// alongside the encrypted bundle; it is what `.gitignore` excludes
+	// and what tests pin as a sensitive artefact name.
+	talmKeyName = "talm.key"
+	// talosconfigName is the talosctl client-config filename written
+	// during init and rotated by --encrypt/--decrypt.
+	talosconfigName = "talosconfig"
 	// defaultKubeconfigName is the kubeconfig filename used when
 	// Config.GlobalOptions.Kubeconfig is empty.
 	defaultKubeconfigName = "kubeconfig"
@@ -340,9 +353,9 @@ var initCmd = &cobra.Command{
 		}
 
 		// Handle age encryption logic
-		secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
-		encryptedSecretsFile := filepath.Join(Config.RootDir, "secrets.encrypted.yaml")
-		keyFile := filepath.Join(Config.RootDir, "talm.key")
+		secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
+		encryptedSecretsFile := filepath.Join(Config.RootDir, secretsEncryptedYamlName)
+		keyFile := filepath.Join(Config.RootDir, talmKeyName)
 
 		secretsFileExists := fileExists(secretsFile)
 		encryptedSecretsFileExists := fileExists(encryptedSecretsFile)
@@ -360,7 +373,7 @@ var initCmd = &cobra.Command{
 		// Handle --encrypt flag (early return, doesn't need preset)
 		if initCmdFlags.encrypt {
 			// Ensure key exists before encryption
-			keyFile := filepath.Join(Config.RootDir, "talm.key")
+			keyFile := filepath.Join(Config.RootDir, talmKeyName)
 			keyFileExists := fileExists(keyFile)
 
 			if !keyFileExists {
@@ -375,7 +388,7 @@ var initCmd = &cobra.Command{
 			}
 
 			// Encrypt all sensitive files
-			secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
+			secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
 			talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
 
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
@@ -440,7 +453,7 @@ var initCmd = &cobra.Command{
 		// Handle --decrypt flag (early return, doesn't need preset)
 		if initCmdFlags.decrypt {
 			// Decrypt all encrypted files
-			encryptedSecretsFile := filepath.Join(Config.RootDir, "secrets.encrypted.yaml")
+			encryptedSecretsFile := filepath.Join(Config.RootDir, secretsEncryptedYamlName)
 			encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
 
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
@@ -687,7 +700,7 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 		return errors.Wrap(err, "marshalling secrets bundle")
 	}
 
-	secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
+	secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
 	// validateFileExists is invoked inside writeSecureToDestination;
 	// no need to duplicate the --force / existing-file gate here.
 	return writeSecureToDestination(bundleBytes, secretsFile)
@@ -921,7 +934,7 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 // per-file dispatch across helpers without making any single branch
 // easier to follow.
 //
-//nolint:gocognit,gocyclo,cyclop,nestif // see doc above
+//nolint:gocognit,gocyclo,cyclop,nestif,funlen // see doc above
 func updateTalmLibraryChart() error {
 	// --image is only honored on initial init (it customizes the
 	// preset's values.yaml at write time). Refusing it on --update
@@ -1078,8 +1091,20 @@ func validateFileExists(file string) error {
 	return nil
 }
 
+// gitignoreEntryCount is the size of the requiredEntries slice in
+// writeGitignoreFile: three secret-bearing artefacts plus the
+// kubeconfig base name. Hoisting it into a const sidesteps mnd's
+// magic-number lint without inlining the comment at every call site.
+const gitignoreEntryCount = 4
+
+//nolint:funlen // wrapping the secrets-list assembly in helpers buys nothing in clarity
 func writeGitignoreFile() error {
-	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key"}
+	// Capacity gitignoreEntryCount: three secret-bearing artefacts
+	// (secrets.yaml, talosconfig, talm.key) plus the kubeconfig base
+	// name appended just below. Preallocating avoids the slice growth
+	// prealloc flags.
+	requiredEntries := make([]string, 0, gitignoreEntryCount)
+	requiredEntries = append(requiredEntries, secretsYamlName, talosconfigName, talmKeyName)
 
 	// Add kubeconfig to required entries (use path from config or default)
 	kubeconfigPath := Config.GlobalOptions.Kubeconfig
@@ -1157,7 +1182,7 @@ func fileExists(file string) bool {
 }
 
 func printSecretsWarning() {
-	keyFile := filepath.Join(Config.RootDir, "talm.key")
+	keyFile := filepath.Join(Config.RootDir, talmKeyName)
 	keyFileExists := fileExists(keyFile)
 
 	if !keyFileExists {
@@ -1204,7 +1229,7 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
 	talosconfigFileExists := fileExists(talosconfigFile)
 	encryptedTalosconfigFileExists := fileExists(encryptedTalosconfigFile)
-	keyFile := filepath.Join(Config.RootDir, "talm.key")
+	keyFile := filepath.Join(Config.RootDir, talmKeyName)
 	keyFileExists := fileExists(keyFile)
 	keyWasCreated := false
 

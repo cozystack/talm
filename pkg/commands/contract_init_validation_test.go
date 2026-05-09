@@ -44,10 +44,10 @@ func TestContract_InitPreRun_AcceptsValidDNS1123Subdomain(t *testing.T) {
 	withInitFlagsSnapshot(t)
 
 	cases := []string{
-		"cozystack",
-		"generic",
-		"talm",
-		"my-cluster",
+		testPresetCozystack,
+		testPresetGeneric,
+		presetTalmLibrary,
+		testClusterName,
 		"my.cluster.example",
 		"1leading-digit",
 		"a",      // single character
@@ -55,7 +55,7 @@ func TestContract_InitPreRun_AcceptsValidDNS1123Subdomain(t *testing.T) {
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			initCmdFlags.preset = "cozystack"
+			initCmdFlags.preset = testPresetCozystack
 			initCmdFlags.name = name
 			initCmdFlags.encrypt = false
 			initCmdFlags.decrypt = false
@@ -83,16 +83,16 @@ func TestContract_InitPreRun_RejectsInvalidDNS1123Subdomain(t *testing.T) {
 		expectInMsg string // substring of the k8s validator message
 	}{
 		{"uppercase", "MyCluster", "lower case"},
-		{"underscore", "my_cluster", "alphanumeric"},
-		{"leading dash", "-bad", "alphanumeric"},
-		{"trailing dash", "bad-", "alphanumeric"},
-		{"space", "my cluster", "alphanumeric"},
-		{"empty label between dots", "foo..bar", "alphanumeric"},
+		{"underscore", "my_cluster", testValidatorAlphanumeric},
+		{"leading dash", "-bad", testValidatorAlphanumeric},
+		{"trailing dash", "bad-", testValidatorAlphanumeric},
+		{"space", "my cluster", testValidatorAlphanumeric},
+		{"empty label between dots", "foo..bar", testValidatorAlphanumeric},
 		{"subdomain too long", strings.Repeat("a", 254), "253"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			initCmdFlags.preset = "cozystack"
+			initCmdFlags.preset = testPresetCozystack
 			initCmdFlags.name = tc.clusterName
 			initCmdFlags.encrypt = false
 			initCmdFlags.decrypt = false
@@ -134,8 +134,8 @@ func TestContract_InitPreRun_SkipsValidationOnExclusiveModes(t *testing.T) {
 		name string
 		set  func()
 	}{
-		{"encrypt", func() { initCmdFlags.encrypt = true }},
-		{"decrypt", func() { initCmdFlags.decrypt = true }},
+		{testEncryptFlag, func() { initCmdFlags.encrypt = true }},
+		{testDecryptFlag, func() { initCmdFlags.decrypt = true }},
 		{"update", func() { initCmdFlags.update = true }},
 	}
 	for _, tc := range cases {

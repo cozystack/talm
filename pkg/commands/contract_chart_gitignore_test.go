@@ -64,8 +64,8 @@ dependencies:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "cozystack" {
-		t.Errorf("expected preset 'cozystack', got %q", got)
+	if got != testPresetCozystack {
+		t.Errorf("expected preset %q, got %q", testPresetCozystack, got)
 	}
 }
 
@@ -93,8 +93,8 @@ dependencies:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "generic" {
-		t.Errorf("expected first non-talm dep 'generic', got %q", got)
+	if got != testPresetGeneric {
+		t.Errorf("expected first non-talm dep %q, got %q", testPresetGeneric, got)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestContract_WriteGitignoreFile_CreatesWithRequiredEntries(t *testing.T) {
 		t.Fatalf("read .gitignore: %v", err)
 	}
 	content := string(data)
-	for _, want := range []string{"secrets.yaml", "talosconfig", "talm.key", "kubeconfig"} {
+	for _, want := range []string{secretsYamlName, talosconfigName, talmKeyName, defaultKubeconfigName} {
 		if !strings.Contains(content, want) {
 			t.Errorf(".gitignore missing %q in:\n%s", want, content)
 		}
@@ -228,7 +228,7 @@ func TestContract_WriteGitignoreFile_PreservesExistingEntries(t *testing.T) {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	content := string(data)
-	for _, want := range []string{"notes/", "*.log", "secrets.yaml", "talosconfig", "talm.key", "kubeconfig"} {
+	for _, want := range []string{"notes/", "*.log", secretsYamlName, talosconfigName, talmKeyName, defaultKubeconfigName} {
 		if !strings.Contains(content, want) {
 			t.Errorf(".gitignore missing %q after append:\n%s", want, content)
 		}
@@ -299,10 +299,10 @@ kubeconfig
 	}
 	data, _ := os.ReadFile(gitignore)
 	// The annotated entries must NOT have been duplicated.
-	if strings.Count(string(data), "secrets.yaml") != 1 {
+	if strings.Count(string(data), secretsYamlName) != 1 {
 		t.Errorf("annotated 'secrets.yaml' duplicated:\n%s", data)
 	}
-	if strings.Count(string(data), "talosconfig") != 1 {
+	if strings.Count(string(data), talosconfigName) != 1 {
 		t.Errorf("annotated 'talosconfig' duplicated:\n%s", data)
 	}
 }

@@ -58,7 +58,7 @@ func TestContract_InitPreRun_RefusesWhenInsideAncestorProject(t *testing.T) {
 	Config.RootDir = rootAbs
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -106,7 +106,7 @@ func TestContract_InitPreRun_RootExplicitSkipsAncestorCheck(t *testing.T) {
 	Config.RootDir = subdir
 	Config.RootDirExplicit = true
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -132,7 +132,7 @@ func TestContract_InitPreRun_AcceptsWhenCWDIsRoot(t *testing.T) {
 	Config.RootDir = dirAbs
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false
@@ -169,11 +169,11 @@ func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 	Config.InitOptions.Version = "v0.0.0-test"
 
 	// Stage one conflict.
-	if err := os.WriteFile(filepath.Join(dirAbs, "Chart.yaml"), []byte("name: pre-existing\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dirAbs, chartYamlName), []byte("name: pre-existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = false
 	initCmdFlags.encrypt = false
@@ -188,7 +188,7 @@ func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 	if !strings.Contains(err.Error(), "refusing to init") {
 		t.Errorf("error must mention 'refusing to init', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Chart.yaml") {
+	if !strings.Contains(err.Error(), chartYamlName) {
 		t.Errorf("error must name the conflicting Chart.yaml, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "--force") {
@@ -196,7 +196,7 @@ func TestContract_InitRun_PreCheckRejectsBeforeAnyWrite(t *testing.T) {
 	}
 
 	// None of the otherwise-created files must exist on disk.
-	for _, name := range []string{"talosconfig", "talm.key", "secrets.encrypted.yaml", "secrets.yaml", "values.yaml"} {
+	for _, name := range []string{talosconfigName, talmKeyName, secretsEncryptedYamlName, secretsYamlName, "values.yaml"} {
 		if _, statErr := os.Stat(filepath.Join(dirAbs, name)); statErr == nil {
 			t.Errorf("partial-write detected: %q exists after pre-check rejection", name)
 		}
@@ -225,9 +225,9 @@ func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
 	// the library-chart dispatch arm; Chart.yaml and values.yaml exercise
 	// the preset arm.
 	stagedFiles := []string{
-		filepath.Join(dirAbs, "Chart.yaml"),
+		filepath.Join(dirAbs, chartYamlName),
 		filepath.Join(dirAbs, "values.yaml"),
-		filepath.Join(dirAbs, "charts", "talm", "Chart.yaml"),
+		filepath.Join(dirAbs, "charts", "talm", chartYamlName),
 	}
 	for _, p := range stagedFiles {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -238,7 +238,7 @@ func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
 		}
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = false
 	initCmdFlags.encrypt = false
@@ -303,7 +303,7 @@ func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
 //     here on the platform CI runs (ubuntu-latest), which is the
 //     authoritative gate.
 func TestContract_InitPreRun_FailsClosedOnGetwd(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != goosLinux {
 		t.Skipf("Getwd-on-removed-dir reproducer is Linux-only (windows: cannot remove CWD; darwin: getcwd survives rmdir); GOOS=%s", runtime.GOOS)
 	}
 	withInitFlagsSnapshot(t)
@@ -319,7 +319,7 @@ func TestContract_InitPreRun_FailsClosedOnGetwd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 
 	err := initCmd.PreRunE(initCmd, nil)
@@ -348,7 +348,7 @@ func TestContract_InitPreRun_FailsClosedOnGetwd(t *testing.T) {
 // cannot remove the CWD; darwin getcwd survives rmdir. Linux CI is
 // the authoritative gate.
 func TestContract_InitPreRun_FailsClosedOnAbsRootDir(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != goosLinux {
 		t.Skipf("Abs-on-relative-path-with-removed-CWD reproducer is Linux-only; GOOS=%s", runtime.GOOS)
 	}
 	withInitFlagsSnapshot(t)
@@ -369,7 +369,7 @@ func TestContract_InitPreRun_FailsClosedOnAbsRootDir(t *testing.T) {
 	Config.RootDir = "."
 	Config.RootDirExplicit = false
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 
 	err := initCmd.PreRunE(initCmd, nil)
@@ -410,7 +410,7 @@ func TestContract_InitRun_EncryptBypassesPreCheck(t *testing.T) {
 
 	// Stage looks-initialised state so the pre-check would fire if
 	// it were not gated.
-	for _, name := range []string{"Chart.yaml", "values.yaml", "secrets.yaml"} {
+	for _, name := range []string{chartYamlName, "values.yaml", secretsYamlName} {
 		if err := os.WriteFile(filepath.Join(dirAbs, name), []byte("seed\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +418,7 @@ func TestContract_InitRun_EncryptBypassesPreCheck(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dirAbs, "charts", "talm"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dirAbs, "charts", "talm", "Chart.yaml"), []byte("name: talm\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirAbs, "charts", "talm", chartYamlName), []byte("name: talm\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -449,7 +449,7 @@ func TestContract_InitRun_DecryptBypassesPreCheck(t *testing.T) {
 	Config.RootDir = dirAbs
 	Config.RootDirExplicit = true
 
-	for _, name := range []string{"Chart.yaml", "values.yaml", "secrets.encrypted.yaml"} {
+	for _, name := range []string{chartYamlName, "values.yaml", secretsEncryptedYamlName} {
 		if err := os.WriteFile(filepath.Join(dirAbs, name), []byte("seed\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -457,7 +457,7 @@ func TestContract_InitRun_DecryptBypassesPreCheck(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dirAbs, "charts", "talm"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dirAbs, "charts", "talm", "Chart.yaml"), []byte("name: talm\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirAbs, "charts", "talm", chartYamlName), []byte("name: talm\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -494,11 +494,11 @@ func TestContract_InitRun_ForceBypassesPreCheck(t *testing.T) {
 	Config.InitOptions.Version = "v0.0.0-test"
 
 	// Stage one conflict — Chart.yaml.
-	if err := os.WriteFile(filepath.Join(dirAbs, "Chart.yaml"), []byte("name: pre-existing\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dirAbs, chartYamlName), []byte("name: pre-existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	initCmdFlags.preset = "cozystack"
+	initCmdFlags.preset = testPresetCozystack
 	initCmdFlags.name = "test-cluster"
 	initCmdFlags.force = true // <- bypass
 	initCmdFlags.encrypt = false

@@ -140,11 +140,11 @@ podSubnets:
 	})
 
 	t.Run("non-empty override replaces the image line", func(t *testing.T) {
-		got, err := applyImageOverride(original, "factory.talos.dev/installer/abc:v1.13.0")
+		got, err := applyImageOverride(original, testInstallerImage)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		want := `image: "factory.talos.dev/installer/abc:v1.13.0"`
+		want := `image: "` + testInstallerImage + `"`
 		if !bytes.Contains(got, []byte(want)) {
 			t.Errorf("expected %q in output, got:\n%s", want, got)
 		}
@@ -166,7 +166,7 @@ podSubnets:
 
 	t.Run("values without image field returns an error", func(t *testing.T) {
 		noImage := []byte("endpoint: \"https://10.0.0.1:6443\"\nfloatingIP: \"\"\n")
-		_, err := applyImageOverride(noImage, "factory.talos.dev/installer/abc:v1.13.0")
+		_, err := applyImageOverride(noImage, testInstallerImage)
 		if err == nil {
 			t.Fatal("expected an error when --image is set but values.yaml has no image: field; silent no-op would lose the user's flag")
 		}
@@ -187,14 +187,14 @@ podSubnets:
 		}
 		for _, s := range styles {
 			t.Run(s.name, func(t *testing.T) {
-				got, err := applyImageOverride([]byte(s.in), "factory.talos.dev/installer/abc:v1.13.0")
+				got, err := applyImageOverride([]byte(s.in), testInstallerImage)
 				if err != nil {
 					t.Fatalf("unexpected error on %s style: %v", s.name, err)
 				}
 				if bytes.Contains(got, []byte("ghcr.io/foo:v1")) {
 					t.Errorf("original image survived on %s style:\n%s", s.name, got)
 				}
-				if !bytes.Contains(got, []byte(`image: "factory.talos.dev/installer/abc:v1.13.0"`)) {
+				if !bytes.Contains(got, []byte(`image: "`+testInstallerImage+`"`)) {
 					t.Errorf("override missing on %s style:\n%s", s.name, got)
 				}
 			})
@@ -239,7 +239,7 @@ podSubnets:
 		// Pin that the override produces a YAML string the parser
 		// reads back as the original input — no escape-sequence
 		// surprises from %q quoting.
-		got, err := applyImageOverride(original, "factory.talos.dev/installer/abc:v1.13.0")
+		got, err := applyImageOverride(original, testInstallerImage)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -249,8 +249,8 @@ podSubnets:
 		if err := yaml.Unmarshal(got, &parsed); err != nil {
 			t.Fatalf("yaml.Unmarshal failed on helper output: %v\n%s", err, got)
 		}
-		if parsed.Image != "factory.talos.dev/installer/abc:v1.13.0" {
-			t.Errorf("round-trip mismatch: got image=%q, want %q", parsed.Image, "factory.talos.dev/installer/abc:v1.13.0")
+		if parsed.Image != testInstallerImage {
+			t.Errorf("round-trip mismatch: got image=%q, want %q", parsed.Image, testInstallerImage)
 		}
 	})
 }
@@ -276,13 +276,13 @@ func TestInitPreRunRejectsImageWithExclusiveModes(t *testing.T) {
 		name string
 		set  func()
 	}{
-		{"encrypt", func() { initCmdFlags.encrypt = true }},
-		{"decrypt", func() { initCmdFlags.decrypt = true }},
+		{testEncryptFlag, func() { initCmdFlags.encrypt = true }},
+		{testDecryptFlag, func() { initCmdFlags.decrypt = true }},
 		{"update", func() { initCmdFlags.update = true }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			initCmdFlags.image = "factory.talos.dev/installer/abc:v1.13.0"
+			initCmdFlags.image = testInstallerImage
 			initCmdFlags.encrypt = false
 			initCmdFlags.decrypt = false
 			initCmdFlags.update = false
@@ -308,7 +308,7 @@ func TestUpdateTalmLibraryChartRejectsImageFlag(t *testing.T) {
 	imageOrig := initCmdFlags.image
 	t.Cleanup(func() { initCmdFlags.image = imageOrig })
 
-	initCmdFlags.image = "factory.talos.dev/installer/abc:v1.13.0"
+	initCmdFlags.image = testInstallerImage
 	err := updateTalmLibraryChart()
 	if err == nil {
 		t.Fatal("expected --update to reject --image; got nil error")
