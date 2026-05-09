@@ -576,8 +576,15 @@ func RotateKeys(rootDir string) error {
 	}
 	if err := os.Rename(encryptedFile, encryptedBackup); err != nil {
 		// Roll back the key rename so the project is untouched.
-		_ = os.Rename(keyBackup, keyFile)
-		return fmt.Errorf("failed to back up encrypted file before rotation: %w", err)
+		// Capture the rollback error too — if it fails the
+		// operator is left with keyBackup but no keyFile, and the
+		// caller-facing error must say so explicitly (otherwise
+		// a Phase 0 refusal on retry would be the first sign of
+		// the partial state).
+		if rbErr := os.Rename(keyBackup, keyFile); rbErr != nil {
+			return fmt.Errorf("failed to back up encrypted file before rotation: %w; AND rollback of key-file rename failed: %v — manual recovery: rename %q -> %q", err, rbErr, keyBackup, keyFile)
+		}
+		return fmt.Errorf("failed to back up encrypted file before rotation: %w (key file rename rolled back)", err)
 	}
 
 	// restore is a recovery helper used when any later step fails:

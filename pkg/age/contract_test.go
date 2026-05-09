@@ -494,25 +494,26 @@ func TestContract_Age_RotateKeys_NoLeftoverBackups(t *testing.T) {
 	}
 }
 
-// Contract: when the post-commit cleanup of `*.rotation-backup`
-// files fails (e.g. a permissions flip on the parent dir between
-// the commit and the os.Remove), RotateKeys returns a non-nil
-// error explaining "rotation committed but cleanup failed" and
-// instructing the operator to remove the leftovers manually
-// before the next rotation. The new key + encrypted file on disk
-// are still the rotated pair — only the backups linger.
+// Contract: when something already occupies a path the rotation
+// will need to use (here we stage a directory at the backup
+// destination), RotateKeys refuses immediately and leaves the
+// originals untouched on disk. The directory case is interesting
+// because os.Stat returns nil error for directories just as for
+// regular files, so the Phase 0 leftover-backup check fires and
+// rejects the run before any rename happens. Pinning that the
+// originals survive any such early refusal.
 //
-// Failure injection: chmod the project dir to 0o500 right before
-// the cleanup step would run. We approximate this by triggering
-// the cleanup-failed code path indirectly: stage a directory at
-// the backup path so os.Remove (which expects a regular file)
-// fails. This is brittle but the only injection point reachable
-// without modifying the function signature.
+// The genuine Phase 5 cleanup-failure path (where rotation
+// commits but os.Remove of a backup file errors) is not
+// reachable through public-API fault injection — it requires
+// either a chmod between Phase 4 and Phase 5 or a swap of the
+// backup file for a directory in the same window, neither of
+// which is exposed. The Phase 5 error wording is exercised by
+// inspection only (see the docstring of RotateKeys).
 //
-// Skipped under root because chmod-on-directory-content does not
-// constrain euid 0; the test would always succeed in unhelpful
-// ways.
-func TestContract_Age_RotateKeys_CleanupFailureSurfacesError(t *testing.T) {
+// Skipped under root because directory permissions used in
+// adjacent injection paths are ignored by the kernel for euid 0.
+func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root — directory permissions and os.Remove behaviour differ")
 	}
@@ -524,20 +525,10 @@ func TestContract_Age_RotateKeys_CleanupFailureSurfacesError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Render the parent directory read-only AFTER first rotation
-	// is fully done to make a SECOND rotation fail in cleanup.
-	// A read-only dir prevents new files / renames in either
-	// direction, which is too aggressive — the second rotation
-	// cannot even Phase 3-rename. So instead we exercise the
-	// path differently: place a directory exactly where one of
-	// the backups will land so os.Rename fails at Phase 3, and
-	// confirm Phase 0 / Phase 3 produce a clean error (no
-	// half-committed state). The cleanup-failure path itself is
-	// straightforward (two os.Remove calls + error wrap), and
-	// the integration test covered by NoLeftoverBackups proves
-	// the happy path. This test pins the contract that ANY
-	// rename-aside failure during Phase 3 returns an error and
-	// leaves the originals on disk untouched.
+	// Stage a directory at the destination of one of the backup
+	// renames. Phase 0 sees something at the path (os.Stat returns
+	// nil error for directories) and refuses with the leftover
+	// message. The originals are not touched.
 	dirAtBackupPath := filepath.Join(dir, "talm.key.rotation-backup")
 	if err := os.MkdirAll(dirAtBackupPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -556,8 +547,6 @@ func TestContract_Age_RotateKeys_CleanupFailureSurfacesError(t *testing.T) {
 	if err := age.RotateKeys(dir); err == nil {
 		t.Fatal("expected RotateKeys to fail when a directory blocks the backup path")
 	}
-	// Originals must still be on disk untouched (Phase 0 refusal
-	// or Phase 3 rollback preserved them).
 	gotKey, err := os.ReadFile(filepath.Join(dir, "talm.key"))
 	if err != nil {
 		t.Fatalf("talm.key missing after failed rotation: %v", err)
