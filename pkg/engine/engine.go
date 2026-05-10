@@ -120,8 +120,14 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 
 // FullConfigProcess handles the full process of creating and updating the Bundle.
 //
+// The function performs no I/O that would respect a context; the
+// ctx parameter that callers used to pass in was always discarded
+// inside. Dropping the parameter makes the contract honest. If a
+// future caller needs cancellation (e.g. a future remote
+// configpatcher), reintroduce it as a typed first argument.
+//
 //nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
-func FullConfigProcess(_ context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
+func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
 	configBundle, err := InitializeConfigBundle(opts)
 	if err != nil {
 		return nil, machine.TypeUnknown, errors.Wrap(err, "initial config bundle error")

@@ -15,7 +15,6 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -94,7 +93,6 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 
 			// Process config to extract image
-			ctx := context.Background()
 			eopts := engine.Options{
 				TalosVersion:      talosVersion,
 				WithSecrets:       withSecrets,
@@ -103,7 +101,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 
 			patches := []string{"@" + configFile}
 
-			configBundle, machineType, err := engine.FullConfigProcess(ctx, eopts, patches)
+			configBundle, machineType, err := engine.FullConfigProcess(eopts, patches)
 			if err != nil {
 				return errors.Wrap(err, "full config processing error")
 			}
