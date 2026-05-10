@@ -346,3 +346,76 @@ func TestContract_NetworkMultidoc_FloatingIPStrippedFromLinkAddresses(t *testing
 	// LinkConfig.addresses must NOT contain the VIP CIDR.
 	assertNotContains(t, out, "- address: 192.168.201.10/24")
 }
+
+// === Hetzner-style topology: public NIC + private VLAN child ===
+
+// Contract: a controlplane floatingIP that lives in a private subnet
+// hosted on a VLAN sub-interface — while the IPv4 default route goes
+// out the parent (public) NIC — must be pinned to the VLAN child in
+// Layer2VIPConfig, NOT to the default-route link. This is the
+// Hetzner topology Ivan reported on 10 May 2026: a single physical
+// NIC with the public-internet default gateway, and a VLAN child
+// carrying the private cluster network where the VIP belongs.
+//
+// The pre-fix renderer hardcodes Layer2VIPConfig.link to the IPv4-
+// default-route link (charts/cozystack/templates/_helpers.tpl:363,
+// charts/generic/templates/_helpers.tpl mirror site), so the VIP
+// lands on the public NIC. Talos installs the VIP there and the
+// cluster never sees the leader on the private subnet.
+//
+// Three independent assertions, each pinning a distinct contract:
+//
+//  1. VLANConfig for the private VLAN child is emitted with the
+//     correct parent, vlanID, and addresses. If discovery state has
+//     classified the link correctly and configurable_link_names
+//     enumerates it, the existing VLAN branch in the multi-doc
+//     template should fire. Surfacing this assertion as part of the
+//     same test means a regression in either the iteration filter
+//     or the kind classification surfaces immediately, not via a
+//     separate downstream symptom.
+//
+//  2. Layer2VIPConfig is emitted with link=enp0s31f6.4000 — the
+//     fix. Helper talm.discovered.link_name_for_address picks the
+//     link whose CIDR encompasses the floatingIP.
+//
+//  3. There is no Layer2VIPConfig with link=enp0s31f6 — guards
+//     against a fix that emits both documents, leaving the
+//     operator's apply with a duplicate VIP target.
+//
+// The test will fail on main today: the renderer either omits
+// VLANConfig entirely or pins the VIP onto enp0s31f6 (per Ivan's
+// report, both symptoms appear together). The diagnostic output the
+// test prints on failure tells us which sub-cause to drill into.
+func TestContract_NetworkMultidoc_HetznerTopology_VIPOnPrivateVLAN(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	// Assertion 1: VLANConfig for the private VLAN child is emitted.
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: enp0s31f6.4000")
+	assertContains(t, out, "vlanID: 4000")
+	assertContains(t, out, "parent: enp0s31f6")
+	assertContains(t, out, "- address: 192.168.100.4/24")
+
+	// Assertion 2: Layer2VIPConfig pins the VIP to the VLAN child.
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+
+	// Assertion 3: no Layer2VIPConfig with the wrong link, and exactly one document total.
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig points at the public default-route NIC; should be the VLAN child:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
+
+	// Assertion 4: the public NIC retains its address and default
+	// route — the fix must not collaterally drop public uplink config
+	// while moving the VIP.
+	assertContains(t, out, "name: enp0s31f6\n")
+	assertContains(t, out, "- address: 88.99.210.37/26")
+	assertContains(t, out, "gateway: 88.99.210.1")
+}
