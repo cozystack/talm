@@ -2022,7 +2022,7 @@ func readUnexportedField(field reflect.Value) any {
 	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
 }
 
-// extractResourceData builds resource with metadata, spec and stringSpec fields.
+// extractResourceData builds a resource map with metadata and spec fields.
 func extractResourceData(r resource.Resource) (map[string]any, error) {
 	res := make(map[string]any)
 
