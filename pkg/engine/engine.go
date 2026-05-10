@@ -1992,7 +1992,9 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, errors.Wrap(err, "encoding target config")
 	}
 
-	_ = enc.Close()
+	if err := enc.Close(); err != nil {
+		return nil, errors.Wrap(err, "closing target config encoder")
+	}
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
 	for _, extraDoc := range extraDocs {

@@ -325,13 +325,24 @@ func TestContract_WriteGitignoreFile_CreatedVsUpdatedReporting(t *testing.T) {
 
 	captureStderr := func(t *testing.T, fn func()) string {
 		t.Helper()
+		// Restore os.Stderr at the END of THIS call, not at the end
+		// of the surrounding test. The helper is invoked twice
+		// sequentially below; using t.Cleanup would defer restore
+		// past the second call, leaving the second invocation's
+		// origStderr pointing at the first call's already-closed
+		// writer.
 		origStderr := os.Stderr
 		r, w, err := os.Pipe()
 		if err != nil {
 			t.Fatalf("pipe: %v", err)
 		}
 		os.Stderr = w
-		t.Cleanup(func() { os.Stderr = origStderr })
+
+		defer func() {
+			os.Stderr = origStderr
+			_ = r.Close()
+		}()
+
 		fn()
 		_ = w.Close()
 		var buf bytes.Buffer
