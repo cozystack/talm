@@ -1984,16 +1984,8 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	buf := &bytes.Buffer{}
-	enc := yaml.NewEncoder(buf)
-	enc.SetIndent(2)
-
-	err = enc.Encode(&targetNode)
-	if err != nil {
-		return nil, errors.Wrap(err, "encoding target config")
-	}
-
-	if err := enc.Close(); err != nil {
-		return nil, errors.Wrap(err, "closing target config encoder")
+	if err := encodeYAMLNodeIndented(buf, &targetNode); err != nil {
+		return nil, err
 	}
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
@@ -2004,6 +1996,26 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	return buf.Bytes(), nil
+}
+
+// encodeYAMLNodeIndented writes node to w as 2-space-indented YAML
+// and returns wrapped errors for both the encode and close phases.
+// Hoisted out of applyPatchesAndRenderConfig so the close-error wrap
+// is unit-testable via a fault-injecting writer; sister sites at
+// engine.go:585 and :765 use the same encode+close idiom inline.
+func encodeYAMLNodeIndented(w io.Writer, node *yaml.Node) error {
+	enc := yaml.NewEncoder(w)
+	enc.SetIndent(2)
+
+	if err := enc.Encode(node); err != nil {
+		return errors.Wrap(err, "encoding target config")
+	}
+
+	if err := enc.Close(); err != nil {
+		return errors.Wrap(err, "closing target config encoder")
+	}
+
+	return nil
 }
 
 func readUnexportedField(field reflect.Value) any {
