@@ -468,33 +468,34 @@ func TestContract_NetworkMultidoc_HetznerTopology_IPv6VIPOnPrivateVLAN(t *testin
 	assertContains(t, out, "gateway: 88.99.210.1")
 }
 
-// Contract: a non-configurable link (CNI bridge, kernel-managed
-// virtual interface, Wireguard, etc.) cannot win VIP-link selection
-// even if its discovered address CIDR contains the floatingIP.
+// Contract: a non-configurable link (Wireguard, kernel-managed
+// loopback, or other interface the chart does not emit a per-link
+// document for) cannot win VIP-link selection even if its
+// discovered address CIDR contains the floatingIP.
 // configurable_link_names is the gate — addresses on links outside
 // that set are skipped before CIDR membership is even checked. The
 // chart does not emit LinkConfig for non-configurable links, so a
 // VIP pinned to one would have no surrounding network document and
-// would race CNI's address management on apply.
+// would race the link's own address management on apply.
 //
-// Fixture: pod-CIDR 10.244.0.0/16 on cni0 (kind=ether, no busPath,
-// not in configurable_link_names). floatingIP 10.244.0.5 is INSIDE
-// cni0's CIDR. The helper must skip cni0 and fall back to
-// $defaultLinkName (the IPv4-default-route physical NIC).
+// Fixture: Wireguard subnet 10.244.0.0/16 on wg0 (kind=ether, no
+// busPath, not in configurable_link_names). floatingIP 10.244.0.5
+// is INSIDE wg0's subnet. The helper must skip wg0 and fall back
+// to $defaultLinkName (the IPv4-default-route physical NIC).
 func TestContract_NetworkMultidoc_VIPSkipsNonConfigurableLink(t *testing.T) {
-	out := renderCozystackWith(t, hetznerWithCNIBridgeLookup(), map[string]any{
+	out := renderCozystackWith(t, hetznerWithWireguardLookup(), map[string]any{
 		"floatingIP":        "10.244.0.5",
 		"advertisedSubnets": []any{"192.168.100.0/24"},
 	})
 
 	assertContains(t, out, "kind: Layer2VIPConfig")
 	assertContains(t, out, `name: "10.244.0.5"`)
-	// Falls back to the IPv4-default-route NIC because cni0 is not
+	// Falls back to the IPv4-default-route NIC because wg0 is not
 	// in configurable_link_names — even though its /16 contains the
 	// VIP.
 	assertContains(t, out, "link: enp0s31f6\n")
-	if strings.Contains(out, "link: cni0") {
-		t.Errorf("Layer2VIPConfig stole link=cni0 (non-configurable bridge); must skip non-configurable links:\n%s", out)
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("Layer2VIPConfig stole link=wg0 (non-configurable Wireguard); must skip non-configurable links:\n%s", out)
 	}
 	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
 		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
@@ -598,6 +599,32 @@ func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP(t *testing.T) {
 		t.Fatal("expected render to fail on malformed floatingIP, got nil error")
 	}
 	if !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("error must echo the bad floatingIP literal so the operator can correlate; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// Contract: the malformed-floatingIP fail-fast block runs BEFORE
+// either VIP-emission branch, so even an operator who set vipLink
+// (which would normally suppress the discovery branch entirely)
+// still gets a clear render-time error rather than a Layer2VIPConfig
+// document with a nonsense `name:` value. Pin the validation order
+// here — the override block is at the top of the multi-doc network
+// section, so a future refactor that moves the validation BELOW the
+// override would silently regress this case.
+func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIPEvenWithVipLinkOverride(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "192.168.300.10",
+		"vipLink":           "enp0s31f6.4000",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if err == nil {
+		t.Fatal("expected render to fail on malformed floatingIP, got nil error (vipLink override must NOT bypass validation)")
+	}
+	if !strings.Contains(err.Error(), "192.168.300.10") {
 		t.Errorf("error must echo the bad floatingIP literal so the operator can correlate; got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "floatingIP") {

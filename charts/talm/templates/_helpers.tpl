@@ -303,10 +303,11 @@ true
 
          1. The link must be in the configurable-link set
             (talm.discovered.configurable_link_names) — addresses on
-            CNI bridges, kernel-managed loopbacks, or other
-            non-configurable links must not steal the VIP. The chart
-            does not emit LinkConfig for those links, so a VIP pinned
-            to one would have no surrounding network document.
+            links the chart does not emit a per-link document for
+            (Wireguard, kernel-managed loopback, slave NICs of a
+            bond, anything outside the {physical NIC, bond, vlan,
+            bridge} set) must not steal the VIP. A VIP pinned there
+            would have no surrounding network document.
 
          2. The address must be globally scoped — host-local,
             link-local, and nowhere-scoped addresses are skipped, the
@@ -328,7 +329,11 @@ true
        address table cannot crash the entire render. */ -}}
 {{- define "talm.discovered.link_name_for_address" -}}
 {{- $target := . -}}
-{{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" .) -}}
+{{- /* configurable_link_names ignores its dot input — it walks the
+       links collection via lookup. Pass $target to keep the call
+       shape consistent with sister callers in cozystack and generic
+       charts that pass their full chart context. */ -}}
+{{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" $target) -}}
 {{- /* Track best match across iterations. dict-mutation via Sprig
        set is the established pattern for cross-iteration state in
        Go templates; range introduces a new scope per iteration so

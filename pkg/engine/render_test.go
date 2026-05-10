@@ -4641,21 +4641,29 @@ func hetznerWithLinkScopedAddressLookup() func(string, string, string) (map[stri
 	}
 }
 
-// hetznerWithCNIBridgeLookup mirrors hetznerPublicNICWithPrivateVLANLookup
-// but adds a CNI-style bridge interface (cni0) carrying the pod CIDR
-// 10.244.0.0/16. Pins that an address on a non-configurable link
-// (CNI bridges, kernel-managed virtual interfaces, Wireguard, etc.)
-// cannot win VIP-link selection — the multi-doc loop only emits
-// LinkConfig for links in talm.discovered.configurable_link_names,
-// so a VIP pinned to cni0 would have no surrounding LinkConfig and
-// would race CNI's address management on apply.
+// hetznerWithWireguardLookup mirrors hetznerPublicNICWithPrivateVLANLookup
+// but adds a Wireguard interface (wg0) carrying a private subnet that
+// happens to encompass the floatingIP. Pins that an address on a
+// non-configurable link cannot win VIP-link selection — the multi-doc
+// loop only emits LinkConfig for links in
+// talm.discovered.configurable_link_names, so a VIP pinned to wg0
+// would have no surrounding LinkConfig and would race the link's
+// own address management on apply.
+//
+// Wireguard is the canonical "real-world non-configurable link" because
+// it has no busPath (kernel-managed, no PCI) and reports a kind that
+// is neither bond/vlan/bridge. CNI bridges in production typically
+// report kind="bridge" and ARE in configurable_link_names today —
+// using Wireguard here keeps the fixture honest about what the filter
+// actually catches. Operators putting a VIP inside a pod CIDR is
+// already operationally wrong regardless of chart behavior.
 //
 // Selection logic must filter on the configurable-link set BEFORE
-// running CIDR-membership; this fixture's floatingIP (10.244.0.5)
-// is inside cni0's pod CIDR but cni0 isn't configurable, so the
-// helper must skip cni0 entirely and fall back to the default-route
-// link (enp0s31f6).
-func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, error) {
+// running CIDR-membership; this fixture's floatingIP (10.244.0.5) is
+// inside wg0's subnet but wg0 isn't configurable, so the helper must
+// skip wg0 entirely and fall back to the default-route link
+// (enp0s31f6).
+func hetznerWithWireguardLookup() func(string, string, string) (map[string]any, error) {
 	publicNIC := map[string]any{
 		"metadata": map[string]any{"id": "enp0s31f6"},
 		"spec": map[string]any{
@@ -4666,20 +4674,16 @@ func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, 
 			"mtu":          1500,
 		},
 	}
-	// CNI bridge has no busPath (virtual), kind is bridge but the
-	// configurable-link filter today excludes interfaces with the
-	// "bridge" kind only when they're not also marked. The actual
-	// exclusion mechanism here is naming + busPath: the chart's
-	// configurable_link_names accepts kinds {bond, vlan, bridge}, so
-	// a bridge IS configurable today. Use a name pattern (cni0)
-	// that does not match the physical-NIC regex AND is "ether"
-	// kind so neither isPhysical nor isVirtual fires.
-	cniBridge := map[string]any{
-		"metadata": map[string]any{"id": "cni0"},
+	// Wireguard interface: no busPath (kernel-managed, no PCI), kind
+	// is "ether" (Wireguard typically reports this on Linux), name
+	// does not match the physical-NIC regex. Neither isPhysical nor
+	// isVirtual fires in configurable_link_names, so wg0 is excluded.
+	wireguard := map[string]any{
+		"metadata": map[string]any{"id": "wg0"},
 		"spec": map[string]any{
 			"kind":  "ether",
 			"index": 3,
-			"mtu":   1500,
+			"mtu":   1420,
 		},
 	}
 	privateVLAN := map[string]any{
@@ -4711,7 +4715,7 @@ func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, 
 	linksList := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "List",
-		"items":      []any{publicNIC, privateVLAN, cniBridge},
+		"items":      []any{publicNIC, privateVLAN, wireguard},
 	}
 	addressesList := map[string]any{
 		"apiVersion": "v1",
@@ -4720,9 +4724,9 @@ func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, 
 			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
 			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
 			// CNI bridge carrying pod CIDR. The floatingIP (10.244.0.5
-			// in the test) is inside this CIDR — but cni0 is not in
+			// in the test) is inside this CIDR — but wg0 is not in
 			// configurable_link_names, so the helper must NOT pick it.
-			map[string]any{"spec": map[string]any{"linkName": "cni0", "address": "10.244.0.1/16", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "wg0", "address": "10.244.0.1/16", "family": "inet4", "scope": "global"}},
 		},
 	}
 	nodeDefault := map[string]any{
@@ -4746,8 +4750,8 @@ func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, 
 				return publicNIC, nil
 			case "enp0s31f6.4000":
 				return privateVLAN, nil
-			case "cni0":
-				return cniBridge, nil
+			case "wg0":
+				return wireguard, nil
 			case "":
 				return linksList, nil
 			}
