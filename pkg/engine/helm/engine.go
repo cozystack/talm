@@ -285,15 +285,27 @@ func cidrNetwork(cidr string) (string, error) {
 // whose subnet hosts the operator-declared floatingIP — net/netip handles
 // IPv4 and IPv6 uniformly so chart templates do not have to do per-family bit
 // math.
+//
+// Parse failures on either input return (false, nil) rather than an error.
+// Set-membership semantics: an undefined CIDR cannot contain anything; an
+// undefined IP is not in any defined set. The chart-side helper that drives
+// the membership search runs over every entry in the addresses COSI
+// resource, so a single corrupt or future-format entry must not crash the
+// entire render. An operator-typoed floatingIP likewise falls through to the
+// default-route fallback link rather than failing the render — Talos itself
+// rejects malformed IP literals with a clear error on apply, so the chart
+// layer does not need to duplicate that check.
 func cidrContains(cidr, addrStr string) (bool, error) {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
-		return false, fmt.Errorf("cidrContains: parse cidr %q: %w", cidr, err)
+		//nolint:nilerr // parse-failure is deliberately the "no match" case; see docstring
+		return false, nil
 	}
 
 	addr, err := netip.ParseAddr(addrStr)
 	if err != nil {
-		return false, fmt.Errorf("cidrContains: parse ip %q: %w", addrStr, err)
+		//nolint:nilerr // parse-failure is deliberately the "no match" case; see docstring
+		return false, nil
 	}
 
 	return prefix.Contains(addr), nil

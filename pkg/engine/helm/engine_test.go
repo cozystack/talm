@@ -1308,10 +1308,19 @@ func TestCidrContainsTemplateFunc(t *testing.T) {
 		{"ipv6 outside /64", "2001:db8::/64", "2001:db9::1", "false", false},
 		{"hetzner case: VIP in private VLAN /24", "192.168.100.4/24", "192.168.100.10", "true", false},
 		{"hetzner case: VIP NOT in public /26", "88.99.210.37/26", "192.168.100.10", "false", false},
-		{"malformed cidr", "not-a-cidr", "10.0.0.1", "", true},
-		{"malformed ip", "10.0.0.0/24", "not-an-ip", "", true},
-		{"empty cidr", "", "10.0.0.1", "", true},
-		{"empty ip", "10.0.0.0/24", "", "", true},
+		// Parse failures fall through to "no match" rather than an
+		// error so the chart-side helper that iterates over every
+		// address in the COSI table doesn't crash the entire render
+		// on a single corrupt or future-format entry. An operator-
+		// typoed floatingIP likewise produces a "no match" outcome,
+		// which routes through the default-link fallback — Talos
+		// rejects the malformed IP literal on apply with a clearer
+		// error than the chart could produce.
+		{"malformed cidr returns false", "not-a-cidr", "10.0.0.1", "false", false},
+		{"malformed ip returns false", "10.0.0.0/24", "not-an-ip", "false", false},
+		{"empty cidr returns false", "", "10.0.0.1", "false", false},
+		{"empty ip returns false", "10.0.0.0/24", "", "false", false},
+		{"both empty returns false", "", "", "false", false},
 	}
 
 	for _, tt := range tests {
