@@ -288,6 +288,41 @@ true
 {{- end -}}
 {{- end -}}
 
+{{- /* Returns the link name whose discovered addresses contain a CIDR
+       encompassing the supplied IP literal. Used by the multi-doc
+       Layer2VIPConfig path to pin the VIP onto the link carrying the
+       relevant subnet, rather than the IPv4 default-route link (which
+       is wrong whenever the floatingIP lives on a non-default-route
+       NIC, e.g. a private VLAN child on a Hetzner-style topology).
+       Returns the empty string when no link's addresses contain the
+       IP — caller is responsible for falling back to
+       default_link_name_by_gateway. CIDR-membership is computed by
+       the engine-registered cidrContains helper (net/netip-backed)
+       so this helper does not have to do per-family bit math in
+       template land. */ -}}
+{{- define "talm.discovered.link_name_for_address" -}}
+{{- $target := . -}}
+{{- range (lookup "addresses" "" "").items -}}
+{{- if and .spec.address .spec.linkName -}}
+{{- if eq (include "talm.cidrContainsTarget" (dict "cidr" .spec.address "ip" $target)) "true" -}}
+{{- .spec.linkName -}}
+{{- break -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Wrapper around the engine-registered cidrContains helper so the
+       caller above can use it inside an `eq` comparison via include.
+       The native `cidrContains` returns a bool, but `include` always
+       yields a string; emit "true" / "" so the caller can `eq ... "true"`
+       and short-circuit on the first match. */ -}}
+{{- define "talm.cidrContainsTarget" -}}
+{{- if cidrContains .cidr .ip -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- /* Check if a link is a vlan interface */ -}}
 {{- define "talm.discovered.is_vlan" -}}
 {{- $linkName := . -}}
