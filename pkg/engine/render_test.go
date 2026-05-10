@@ -4533,6 +4533,109 @@ func hetznerPublicNICWithPrivateVLANLookup() func(string, string, string) (map[s
 	}
 }
 
+// hetznerPublicNICWithPrivateIPv6VLANLookup is the IPv6-equivalent of
+// hetznerPublicNICWithPrivateVLANLookup. The same physical / VLAN
+// topology, but the private subnet is a /64 ULA and the VIP is an
+// IPv6 literal. Pins that the VIP-link selection helper handles
+// IPv6 just as it does IPv4 — net/netip.Prefix.Contains is family-
+// agnostic, so the chart side has no per-family branches; this
+// fixture exists to surface a regression that ever introduces one.
+//
+// IPv4 default-route stays on the public NIC (matching real-world
+// dual-stack: IPv4 default goes upstream, the IPv6 ULA never has a
+// default route — operators run IPv6 only between cluster nodes).
+func hetznerPublicNICWithPrivateIPv6VLANLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "2001:db8:cafe::4/64", "family": "inet6", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"2001:db8:cafe::4/64"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // legacyInterfacesInRunningConfigLookup returns a lookup fixture
 // shaped like a node that was originally bootstrapped on a legacy
 // chart (talosVersion v1.11) and carries non-empty

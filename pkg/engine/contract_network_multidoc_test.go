@@ -420,6 +420,54 @@ func TestContract_NetworkMultidoc_HetznerTopology_VIPOnPrivateVLAN(t *testing.T)
 	assertContains(t, out, "gateway: 88.99.210.1")
 }
 
+// Contract: the IPv6 counterpart of the Hetzner-topology test.
+// Same shape — public NIC carries the IPv4 default route, VLAN
+// child carries the private cluster network — but the private
+// subnet and the floatingIP are IPv6 (ULA /64 and a host inside
+// it). net/netip's Prefix.Contains is family-agnostic, so the
+// VIP-link helper resolves the same way as for IPv4. Without this
+// pin, a future swap of cidrContains for a per-family
+// implementation could silently regress only the IPv6 path.
+//
+// Real-world relevance: dual-stack Hetzner / colo deployments where
+// IPv4 reaches the upstream gateway and the cluster speaks IPv6
+// internally over a private VLAN. The cluster VIP must land on the
+// VLAN's IPv6 ULA, not on the public NIC.
+func TestContract_NetworkMultidoc_HetznerTopology_IPv6VIPOnPrivateVLAN(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateIPv6VLANLookup(), map[string]any{
+		"floatingIP":        "2001:db8:cafe::10",
+		"advertisedSubnets": []any{"2001:db8:cafe::/64"},
+	})
+
+	// VLANConfig for the private VLAN child must still be emitted
+	// with the IPv6 ULA as a global-scope address.
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: enp0s31f6.4000")
+	assertContains(t, out, "vlanID: 4000")
+	assertContains(t, out, "parent: enp0s31f6")
+	assertContains(t, out, "- address: 2001:db8:cafe::4/64")
+
+	// Layer2VIPConfig pinned to the VLAN child via subnet membership.
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "2001:db8:cafe::10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+
+	// Must not pin the IPv6 VIP to the public NIC; exactly one
+	// Layer2VIPConfig document.
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig points at the public IPv4-default-route NIC; should be the VLAN child:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
+
+	// Public NIC keeps its IPv4 address and default route — the IPv6
+	// fix must not collaterally drop the IPv4 uplink.
+	assertContains(t, out, "name: enp0s31f6\n")
+	assertContains(t, out, "- address: 88.99.210.37/26")
+	assertContains(t, out, "gateway: 88.99.210.1")
+}
+
 // Contract: when the floatingIP isn't on any discovered subnet (e.g.
 // an upstream-routable VIP that arrives via the default-route link,
 // or an operator typo), Layer2VIPConfig falls back to the
