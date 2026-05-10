@@ -234,7 +234,11 @@ func loadConfig(filename string) error {
 
 		commands.Config.ApplyOptions.TimeoutDuration, err = time.ParseDuration(commands.Config.ApplyOptions.Timeout)
 		if err != nil {
-			panic(err)
+			//nolint:wrapcheck // already wrapped via errors.Wrapf, WithHint adds operator-facing guidance
+			return errors.WithHint(
+				errors.Wrapf(err, "parsing applyOptions.timeout %q from %s", commands.Config.ApplyOptions.Timeout, filename),
+				"applyOptions.timeout in Chart.yaml must be a Go duration literal (e.g. \"30s\", \"2m\", \"1h\")",
+			)
 		}
 	}
 

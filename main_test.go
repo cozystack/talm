@@ -1,8 +1,13 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
+	"github.com/cozystack/talm/pkg/commands"
 	"github.com/spf13/cobra"
 )
 
@@ -66,6 +71,73 @@ func TestIsCommandOrParent(t *testing.T) {
 				t.Errorf("isCommandOrParent() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestLoadConfig_InvalidApplyTimeoutReturnsError pins that a
+// malformed `applyOptions.timeout` in the project Chart.yaml
+// surfaces as a regular error (with operator-facing hint), not a
+// runtime panic. main used to call `panic(err)` here, which
+// crashed the talm process before cobra could format the error;
+// the error path lets the surrounding command runner print a
+// cleanly-wrapped failure instead.
+func TestLoadConfig_InvalidApplyTimeoutReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	chartPath := filepath.Join(dir, "Chart.yaml")
+	body := "apiVersion: v2\nname: test\nversion: 0.1.0\napplyOptions:\n  timeout: \"this-is-not-a-duration\"\n"
+	if err := os.WriteFile(chartPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write Chart.yaml: %v", err)
+	}
+
+	// Snapshot global commands.Config and restore on exit so we do
+	// not leak the parsed (and un-parsed) state into other tests.
+	saved := commands.Config
+	t.Cleanup(func() { commands.Config = saved })
+
+	err := loadConfig(chartPath)
+	if err == nil {
+		t.Fatal("expected error for malformed applyOptions.timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "applyOptions.timeout") {
+		t.Errorf("error message must mention applyOptions.timeout (the bad field); got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "this-is-not-a-duration") {
+		t.Errorf("error message must echo the bad value so the operator can correlate; got: %v", err)
+	}
+
+	// The hint chain must keep an operator-actionable explanation
+	// of the expected format. Without it, the operator sees only
+	// "time: invalid duration" and has to guess the canonical form.
+	hints := errors.GetAllHints(err)
+	if len(hints) == 0 {
+		t.Errorf("expected at least one hint guiding the operator on the duration format; got bare error: %v", err)
+	}
+	combined := strings.Join(hints, "\n")
+	if !strings.Contains(combined, "duration") {
+		t.Errorf("hint chain must mention the duration format; got %q", combined)
+	}
+}
+
+// TestLoadConfig_ValidApplyTimeoutParses pins the success path:
+// a well-formed duration parses into TimeoutDuration. Guards
+// against a refactor that flips the polarity of the error branch
+// or stops storing the parsed duration.
+func TestLoadConfig_ValidApplyTimeoutParses(t *testing.T) {
+	dir := t.TempDir()
+	chartPath := filepath.Join(dir, "Chart.yaml")
+	body := "apiVersion: v2\nname: test\nversion: 0.1.0\napplyOptions:\n  timeout: \"45s\"\n"
+	if err := os.WriteFile(chartPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write Chart.yaml: %v", err)
+	}
+
+	saved := commands.Config
+	t.Cleanup(func() { commands.Config = saved })
+
+	if err := loadConfig(chartPath); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if got := commands.Config.ApplyOptions.TimeoutDuration; got.String() != "45s" {
+		t.Errorf("TimeoutDuration = %v, want 45s", got)
 	}
 }
 
