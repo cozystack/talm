@@ -4641,6 +4641,107 @@ func hetznerWithLinkScopedAddressLookup() func(string, string, string) (map[stri
 	}
 }
 
+// noDefaultRouteWithSubnetMatchLookup pins the contract that the
+// discovery-derived Layer2VIPConfig path emits even when discovery
+// has not yet resolved an IPv4 default route, as long as
+// link_name_for_address resolves a configurable link whose subnet
+// contains the floatingIP. The fallback to $defaultLinkName fires
+// only when the subnet-match returns empty; a successful match
+// must not be gated on the default route being known.
+//
+// Two real-world reasons this matters: a fresh-boot node before the
+// gateway is reachable but with addresses already plumbed on a
+// VLAN child, and a policy-routing-only topology where there is no
+// "default" route at all but each network has its own scoped route
+// table. In both, the cluster subnet is reachable on a
+// configurable link and the VIP belongs there.
+//
+// Topology: physical NIC carries a public address with no default
+// route, VLAN child carries 192.168.100.4/24. floatingIP
+// 192.168.100.10. Expected: Layer2VIPConfig.link=enp0s31f6.4000.
+func noDefaultRouteWithSubnetMatchLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	// Empty routes list — no default route, no policy routes. The
+	// addresses table below carries the cluster subnet anyway.
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // hetznerWithWireguardLookup mirrors hetznerPublicNICWithPrivateVLANLookup
 // but adds a Wireguard interface (wg0) carrying a private subnet that
 // happens to encompass the floatingIP. Pins that an address on a
@@ -4723,8 +4824,8 @@ func hetznerWithWireguardLookup() func(string, string, string) (map[string]any, 
 		"items": []any{
 			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
 			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
-			// CNI bridge carrying pod CIDR. The floatingIP (10.244.0.5
-			// in the test) is inside this CIDR — but wg0 is not in
+			// Wireguard subnet on wg0. The floatingIP (10.244.0.5 in
+			// the test) is inside this CIDR — but wg0 is not in
 			// configurable_link_names, so the helper must NOT pick it.
 			map[string]any{"spec": map[string]any{"linkName": "wg0", "address": "10.244.0.1/16", "family": "inet4", "scope": "global"}},
 		},

@@ -330,9 +330,9 @@ true
 {{- define "talm.discovered.link_name_for_address" -}}
 {{- $target := . -}}
 {{- /* configurable_link_names ignores its dot input — it walks the
-       links collection via lookup. Pass $target to keep the call
-       shape consistent with sister callers in cozystack and generic
-       charts that pass their full chart context. */ -}}
+       links collection via lookup. Any value is safe; passing
+       $target rather than synthesizing a new dot here keeps the
+       define body uncluttered. */ -}}
 {{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" $target) -}}
 {{- /* Track best match across iterations. dict-mutation via Sprig
        set is the established pattern for cross-iteration state in
@@ -342,12 +342,19 @@ true
 {{- range (lookup "addresses" "" "").items -}}
 {{- $address := .spec.address | toString -}}
 {{- $linkName := .spec.linkName | toString -}}
-{{- $scope := .spec.scope | toString -}}
 {{- if and $address $linkName -}}
 {{- /* Filter 1: link must be configurable. */ -}}
 {{- if has $linkName $configurable -}}
-{{- /* Filter 2: scope must be set and not host/link/nowhere. */ -}}
-{{- if and (ne $scope "") (not (has $scope (list "host" "link" "nowhere"))) -}}
+{{- /* Filter 2: scope must be set and not host/link/nowhere.
+       Match the addresses_by_link rule exactly: truthy check on
+       the raw .spec.scope field (rejects nil) AND non-empty
+       string check on its toString'd value AND not in the
+       skip-list. The looser variant (only the toString'd check)
+       would let a nil-scope entry through as the literal
+       "<nil>" string, which is neither "" nor in the skip set.
+       Real Talos COSI always sets scope, so this is a latent
+       guardrail rather than a hot path. */ -}}
+{{- if and .spec.scope (ne (.spec.scope | toString) "") (not (has (.spec.scope | toString) (list "host" "link" "nowhere"))) -}}
 {{- /* Filter 3: CIDR must contain the target. */ -}}
 {{- if cidrContains $address $target -}}
 {{- /* Filter 4: longest-prefix match. cidrPrefixLen is the
@@ -356,8 +363,12 @@ true
        prefix length under `gt`. The prior shape split the CIDR on
        "/" and atoi-d the second part — masked the failure mode
        where a /0 default-route entry mixed into the address table
-       would tie at 0 and let iteration order pick the winner. */ -}}
-{{- $prefixLen := int (cidrPrefixLen $address) -}}
+       would tie at 0 and let iteration order pick the winner.
+       Ties at the same prefix length resolve by COSI's emission
+       order for the addresses resource — rare in practice (two
+       configurable links with identically-sized CIDRs both
+       containing the floatingIP). */ -}}
+{{- $prefixLen := cidrPrefixLen $address -}}
 {{- if gt $prefixLen (get $best "prefixLen") -}}
 {{- $_ := set $best "link" $linkName -}}
 {{- $_ := set $best "prefixLen" $prefixLen -}}
