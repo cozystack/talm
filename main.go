@@ -19,13 +19,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// completionInternal is cobra's reserved internal subcommand name
-// driving Tab-key autocompletion. Constant because it appears both
-// in skipConfigCommands and in cobra's exported API.
 const (
-	initSubcommandName   = "init"
+	// initSubcommandName is the cobra subcommand that creates the
+	// project Chart.yaml and the init-time prefix check in main()
+	// branches on.
+	initSubcommandName = "init"
+	// completionSubcommand is cobra's user-facing shell-completion
+	// subcommand (talm completion bash | zsh | fish).
 	completionSubcommand = "completion"
-	completionInternal   = "__complete"
+	// completionInternal is cobra's reserved internal subcommand
+	// name driving Tab-key autocompletion. Constant because it
+	// appears both in skipConfigCommands and in cobra's exported
+	// API.
+	completionInternal = "__complete"
 )
 
 // cmdNameTalm is the binary name used both as the cobra root
