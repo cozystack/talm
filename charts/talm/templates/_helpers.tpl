@@ -506,11 +506,26 @@ vlans:
 {{- define "talm.discovered.addresses_by_link" -}}
 {{- $linkName := . -}}
 {{- $addresses := list -}}
+{{- /* Hoist the scope skip-list out of the range body so it is
+       built once per call rather than once per address-table
+       entry. Symmetric to the hoisted skip-list inside
+       link_name_for_address. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" -}}
 {{- range (lookup "addresses" "" "").items -}}
 {{- $hasScope := and .spec.scope (ne (.spec.scope | toString) "") -}}
-{{- $skip := has (.spec.scope | toString) (list "host" "link" "nowhere") -}}
-{{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) -}}
-{{- $addresses = append $addresses .spec.address -}}
+{{- $skip := has (.spec.scope | toString) $skipScopes -}}
+{{- /* Filter out corrupt or future-format entries whose address
+       does not parse as a CIDR. cidrPrefixLen returns -1 on parse
+       failure, which we treat as "skip" the same way
+       link_name_for_address does — a single bad entry in COSI
+       must not propagate into LinkConfig / VLANConfig / BridgeConfig
+       addresses where it would produce a config Talos rejects on
+       apply with a less-informative error than the chart could
+       give. */ -}}
+{{- $address := .spec.address | toString -}}
+{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 -}}
+{{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) $validCidr -}}
+{{- $addresses = append $addresses $address -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $addresses -}}

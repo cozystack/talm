@@ -4833,6 +4833,119 @@ func bridgeWithClusterSubnetLookup() func(string, string, string) (map[string]an
 	}
 }
 
+// bridgeWithVLANOnlyLookup is a slim BridgeConfig fixture where
+// spec.bridgeMaster carries ONLY a vlan.filteringEnabled setting
+// (no stp). The contract under test: the chart emits the
+// BridgeConfig.vlan block even when stp is unset, and does NOT
+// emit a stp block at all. Together with bridgeWithSTPOnlyLookup
+// this pins the independence of the two sub-blocks against a
+// future refactor that accidentally nests one inside the other.
+func bridgeWithVLANOnlyLookup() func(string, string, string) (map[string]any, error) {
+	br0 := map[string]any{
+		"metadata": map[string]any{"id": "br0"},
+		"spec": map[string]any{
+			"kind":  "bridge",
+			"index": 1,
+			"bridgeMaster": map[string]any{
+				"vlan": map[string]any{"filteringEnabled": true},
+			},
+		},
+	}
+
+	return bridgeOnlyLookup(br0)
+}
+
+// bridgeWithSTPOnlyLookup is the stp-only counterpart of
+// bridgeWithVLANOnlyLookup. Pins that the BridgeConfig.stp block
+// emits even when vlan is unset.
+func bridgeWithSTPOnlyLookup() func(string, string, string) (map[string]any, error) {
+	br0 := map[string]any{
+		"metadata": map[string]any{"id": "br0"},
+		"spec": map[string]any{
+			"kind":  "bridge",
+			"index": 1,
+			"bridgeMaster": map[string]any{
+				"stp": map[string]any{"enabled": true},
+			},
+		},
+	}
+
+	return bridgeOnlyLookup(br0)
+}
+
+// bridgeOnlyLookup builds a single-bridge lookup fixture given a
+// pre-shaped br0 link map. The bridge owns the IPv4 default route
+// at 10.5.0.1 via address 10.5.0.10/24. No physical NIC, no
+// slaves — keeps the fixture tight around the BridgeConfig
+// sub-block contracts the callers exercise.
+func bridgeOnlyLookup(br0 map[string]any) func(string, string, string) (map[string]any, error) {
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.5.0.1",
+					"outLinkName": "br0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{br0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "br0", "address": "10.5.0.10/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"10.5.0.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "br0":
+				return br0, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // defaultRouteOnNonConfigurableLinkLookup pins the contract that
 // the default-route-link fallback in the discovery-derived
 // Layer2VIPConfig path must also pass the configurable-link gate.

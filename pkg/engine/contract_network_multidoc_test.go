@@ -572,6 +572,63 @@ func TestContract_NetworkMultidoc_VIPLinkLongestPrefixMatch(t *testing.T) {
 	}
 }
 
+// Contract: BridgeConfig emits the vlan sub-block even when
+// spec.bridgeMaster carries no stp setting. Pins the independence
+// of the two BridgeConfig sub-blocks (stp / vlan) against a future
+// refactor that accidentally nests one inside the other or
+// conditions one on the other.
+func TestContract_NetworkMultidoc_BridgeConfig_VLANOnlyNoStp(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithVLANOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
+	if strings.Contains(out, "stp:") {
+		t.Errorf("BridgeConfig emits stp: block when spec.bridgeMaster.stp is unset; sub-blocks must be independent:\n%s", out)
+	}
+}
+
+// Contract: BridgeConfig emits the stp sub-block even when
+// spec.bridgeMaster carries no vlan setting. Mirror of the
+// VLAN-only contract above.
+func TestContract_NetworkMultidoc_BridgeConfig_StpOnlyNoVlan(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithSTPOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	if strings.Contains(out, "vlan:") {
+		t.Errorf("BridgeConfig emits vlan: block when spec.bridgeMaster.vlan is unset; sub-blocks must be independent:\n%s", out)
+	}
+}
+
+// Contract: malformed entries in COSI's addresses table do not
+// propagate into the rendered LinkConfig / VLANConfig / BridgeConfig
+// `addresses` blocks. The chart's addresses_by_link helper filters
+// out entries whose `.spec.address` fails to parse as a CIDR
+// (cidrPrefixLen returns -1), so a corrupt or future-format entry
+// stays inside discovery and never reaches a typed document Talos
+// would reject on apply.
+//
+// Fixture: malformedAddressEntryLookup carries
+// "definitely-not-a-cidr" on enp0s31f6.4000 sandwiched between two
+// well-formed entries. The test asserts the bad value is absent
+// from any `- address:` line and the valid sibling
+// 192.168.100.4/24 IS present.
+func TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderCozystackWith(t, malformedAddressEntryLookup(), map[string]any{
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("malformed CIDR leaked into LinkConfig/VLANConfig.addresses; corrupt COSI entries must be filtered at addresses_by_link:\n%s", out)
+	}
+	if !strings.Contains(out, "- address: 192.168.100.4/24") {
+		t.Errorf("valid sibling CIDR 192.168.100.4/24 missing from VLANConfig.addresses; filter must not drop well-formed entries:\n%s", out)
+	}
+}
+
 // Contract: a malformed address entry in COSI's addresses table does
 // not crash the chart render. cidrContains is lenient on parse
 // failures (returns false), so the helper skips the bad entry and
