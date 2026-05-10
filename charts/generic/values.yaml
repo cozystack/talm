@@ -19,14 +19,34 @@ endpoint: ""
 floatingIP: ""
 
 # Optional override for the link Layer2VIPConfig is pinned to. When
-# left empty the chart picks the IPv4-default-gateway-bearing link
-# the node already has (the VLAN sub-interface if one carries the
-# default route, otherwise the physical NIC). Set this when the
-# target link does not yet exist on the live system at first apply
-# — typically a VLAN sub-interface that the same template is about
-# to bring up. Without an override the chart would derive the link
-# from discovery on the bare-metal NIC, pin the VIP there, and the
-# VIP would land on the wrong link once the VLAN comes up.
+# left empty the chart picks the link automatically using a two-step
+# discovery rule, with longest-prefix-match across configurable
+# links:
+#
+#   1. If the floatingIP falls inside the CIDR of any address on a
+#      configurable link (physical NIC, bond, vlan, bridge — same
+#      set the multi-doc renderer emits LinkConfig for), the link
+#      with the most-specific (longest-prefix) match wins. This is
+#      what handles the Hetzner-style topology: a public NIC
+#      carrying the IPv4 default route plus a VLAN child carrying
+#      the private cluster network — the VIP lands on the VLAN
+#      child where the cluster subnet lives.
+#
+#   2. Otherwise, fall back to the IPv4-default-gateway-bearing
+#      link. This handles upstream-routable VIPs that arrive via
+#      the default route and have no matching subnet on the node.
+#
+# Addresses on non-configurable links (CNI bridges, kernel-managed
+# loopbacks, Wireguard, etc.) cannot win selection — the chart does
+# not emit LinkConfig for those links, so a VIP pinned to one would
+# have no surrounding network document.
+#
+# Set vipLink explicitly when the target link does not yet exist on
+# the live system at first apply — typically a VLAN sub-interface
+# that the same template is about to bring up. Without the override,
+# fresh-node renders before discovery has populated the addresses
+# table would fall back to the default-gateway link (or skip
+# emission entirely if discovery has not yet resolved one).
 # When set, Layer2VIPConfig is emitted unconditionally, even on a
 # totally fresh node where discovery has not yet resolved a default-
 # gateway link. The chart does NOT auto-emit a LinkConfig/VLANConfig
