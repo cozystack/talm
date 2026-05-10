@@ -369,3 +369,36 @@ func TestContract_WriteGitignoreFile_CreatedVsUpdatedReporting(t *testing.T) {
 		t.Errorf("second invocation must NOT print 'Created ...', got:\n%s", second)
 	}
 }
+
+// TestGitignoreReportVerb_BranchesOnIsNotExist pins the verb-pick
+// contract: only ENOENT (the file truly did not exist before
+// WriteFile) yields "Created"; any other stat error — EACCES on a
+// parent directory, ENOTDIR mid-path, EIO on a flaky disk, or even
+// a successful stat (nil error) — yields "Updated". The "Updated"
+// wording in the ambiguous-error branch is deliberate: it does not
+// falsely promise the absence we never confirmed.
+//
+// The previous bare `statErrBefore == nil` test would have wrongly
+// reported "Created" for any non-IsNotExist stat error — wrong if
+// the file already existed but a permission glitch hid it from us.
+func TestGitignoreReportVerb_BranchesOnIsNotExist(t *testing.T) {
+	cases := []struct {
+		name string
+		in   error
+		want string
+	}{
+		{"file_existed_before_write", nil, "Updated"},
+		{"file_did_not_exist_before_write", os.ErrNotExist, "Created"},
+		{"permission_denied_on_parent", os.ErrPermission, "Updated"},
+		{"unwrapped_pathError_notexist", &os.PathError{Op: "stat", Path: "x", Err: os.ErrNotExist}, "Created"},
+		{"unwrapped_pathError_permission", &os.PathError{Op: "stat", Path: "x", Err: os.ErrPermission}, "Updated"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gitignoreReportVerb(tc.in)
+			if got != tc.want {
+				t.Errorf("gitignoreReportVerb(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

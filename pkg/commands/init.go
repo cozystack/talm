@@ -73,6 +73,12 @@ const (
 	// secret-bearing files so an over-permissive umask cannot widen
 	// access.
 	secureDirMode os.FileMode = 0o700
+	// reportVerbCreated and reportVerbUpdated are the operator-facing
+	// verbs the init flow prints when materialising or rewriting a
+	// project artefact. Hoisted so goconst sees a single canonical
+	// reference for each.
+	reportVerbCreated = "Created"
+	reportVerbUpdated = "Updated"
 )
 
 // initCmdFlags is the package-level flag struct backing the init
@@ -914,7 +920,7 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 			relPath = filePath
 		}
 
-		fmt.Fprintf(os.Stderr, "Created %s\n", relPath)
+		fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbCreated, relPath)
 
 		return nil
 	}
@@ -958,7 +964,7 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 		relPath = filePath
 	}
 
-	fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+	fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbUpdated, relPath)
 
 	return nil
 }
@@ -1050,7 +1056,7 @@ func updateTalmLibraryChart() error {
 			}
 
 			relPath, _ := filepath.Rel(Config.RootDir, file)
-			fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+			fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbUpdated, relPath)
 		}
 	}
 
@@ -1231,14 +1237,23 @@ func writeGitignoreFile() error {
 	// who clones the project — 0o644 is the standard, not a leak.
 	err := os.WriteFile(gitignoreFile, []byte(existingStr), presetFileMode) //nolint:gosec // .gitignore is world-readable by design
 	if err == nil {
-		if os.IsNotExist(statErrBefore) {
-			fmt.Fprintf(os.Stderr, "Created %s\n", gitignoreFile)
-		} else {
-			fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
-		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", gitignoreReportVerb(statErrBefore), gitignoreFile)
 	}
 
 	return errors.Wrap(err, "writing .gitignore")
+}
+
+// gitignoreReportVerb returns the operator-facing verb for the
+// .gitignore write report. The branch is hoisted out of
+// writeGitignoreFile so the IsNotExist contract is unit-testable
+// without an os.Stat fault injection — see
+// TestGitignoreReportVerb_*.
+func gitignoreReportVerb(statErrBefore error) string {
+	if os.IsNotExist(statErrBefore) {
+		return reportVerbCreated
+	}
+
+	return reportVerbUpdated
 }
 
 func fileExists(file string) bool {
@@ -1377,7 +1392,7 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 	// presetFileMode (0o644) by design — they are world-readable.
 	err := os.WriteFile(destination, data, permissions)
 	if err == nil {
-		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+		_, _ = fmt.Fprintf(createdSink, "%s %s\n", reportVerbCreated, destination)
 	}
 
 	return errors.Wrapf(err, "writing %s", destination)
@@ -1403,7 +1418,7 @@ func writeSecureToDestination(data []byte, destination string) error {
 
 	err := secureperm.WriteFile(destination, data)
 	if err == nil {
-		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+		_, _ = fmt.Fprintf(createdSink, "%s %s\n", reportVerbCreated, destination)
 	}
 
 	return errors.Wrapf(err, "writing secret %s", destination)
