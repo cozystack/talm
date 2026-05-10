@@ -57,9 +57,9 @@ floatingIP: ""
 # Addresses on links the chart does not emit a per-link document
 # for (Wireguard, kernel-managed loopback, slave NICs of a bond,
 # anything outside the {physical NIC, bond, vlan, bridge} set
-# enumerated by configurable_link_names) cannot win selection.
-# A VIP pinned there would have no surrounding network document
-# and would race the link's own address management on apply.
+# above) cannot win selection. A VIP pinned there would have no
+# surrounding network document and would race the link's own
+# address management on apply.
 #
 # Set vipLink explicitly when the target link does not yet exist on
 # the live system at first apply -- typically a VLAN sub-interface
