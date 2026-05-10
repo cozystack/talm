@@ -61,7 +61,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 
 			endpointsFromArgs := len(GlobalArgs.Endpoints) > 0
 			if _, err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, true); err != nil {
-				return fmt.Errorf("failed to process modeline: %w", err)
+				return errors.Wrap(err, "failed to process modeline")
 			}
 
 			// Get talos-version, with-secrets, kubernetes-version from flags or config
@@ -113,7 +113,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 
 			config, err := configloader.NewFromBytes(result)
 			if err != nil {
-				return fmt.Errorf("error loading config: %w", err)
+				return errors.Wrap(err, "error loading config")
 			}
 
 			image := config.Machine().Install().Image()

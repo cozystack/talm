@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cockroachdb/errors"
 	taloscommands "github.com/siderolabs/talos/cmd/talosctl/cmd/talos"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -266,7 +267,7 @@ func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 	// Load kubeconfig
 	config, err := clientcmd.LoadFromFile(kubeconfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load kubeconfig: %w", err)
+		return errors.Wrap(err, "failed to load kubeconfig")
 	}
 
 	// Normalize endpoint
@@ -287,7 +288,7 @@ func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 	// Save kubeconfig if updated
 	if updated {
 		if err := clientcmd.WriteToFile(*config, kubeconfigPath); err != nil {
-			return fmt.Errorf("failed to write kubeconfig: %w", err)
+			return errors.Wrap(err, "failed to write kubeconfig")
 		}
 	}
 
@@ -304,7 +305,7 @@ func addToGitignore(entry string) error {
 	if _, err := os.Stat(gitignoreFile); err == nil {
 		existingContent, err := os.ReadFile(gitignoreFile)
 		if err != nil {
-			return fmt.Errorf("failed to read .gitignore: %w", err)
+			return errors.Wrap(err, "failed to read .gitignore")
 		}
 
 		content = string(existingContent)

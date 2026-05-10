@@ -106,7 +106,7 @@ func regenerateTalosconfig() error {
 
 		oldConfig, err = config.Open(talosconfigFile)
 		if err != nil {
-			return fmt.Errorf("failed to read existing talosconfig: %w", err)
+			return errors.Wrap(err, "failed to read existing talosconfig")
 		}
 
 		clusterName = oldConfig.Context
@@ -125,7 +125,7 @@ func regenerateTalosconfig() error {
 	// Load secrets bundle
 	secretsBundle, err := secrets.LoadBundle(secretsPath)
 	if err != nil {
-		return fmt.Errorf("failed to load secrets bundle: %w", err)
+		return errors.Wrap(err, "failed to load secrets bundle")
 	}
 
 	// Build generate options
@@ -137,7 +137,7 @@ func regenerateTalosconfig() error {
 	if Config.TemplateOptions.TalosVersion != "" {
 		versionContract, err := machineconfig.ParseContractFromVersion(Config.TemplateOptions.TalosVersion)
 		if err != nil {
-			return fmt.Errorf("invalid talos-version: %w", err)
+			return errors.Wrap(err, "invalid talos-version")
 		}
 
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
@@ -164,7 +164,7 @@ func regenerateTalosconfig() error {
 		[]string{},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to generate config bundle: %w", err)
+		return errors.Wrap(err, "failed to generate config bundle")
 	}
 
 	// Get the new talosconfig
@@ -195,11 +195,11 @@ func regenerateTalosconfig() error {
 	// Marshal and write the new talosconfig
 	data, err := yaml.Marshal(newConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal talosconfig: %w", err)
+		return errors.Wrap(err, "failed to marshal talosconfig")
 	}
 
 	if err := secureperm.WriteFile(talosconfigFile, data); err != nil {
-		return fmt.Errorf("failed to write talosconfig: %w", err)
+		return errors.Wrap(err, "failed to write talosconfig")
 	}
 
 	return nil
