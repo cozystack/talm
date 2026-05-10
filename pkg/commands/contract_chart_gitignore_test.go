@@ -335,8 +335,13 @@ func captureStderr(t *testing.T, fn func()) string {
 	}
 	os.Stderr = w
 
+	// Close both pipe ends in the defer so a panic or t.Fatal
+	// inside fn() does not leak the writer fd. Closing w twice is
+	// safe — os.File.Close on an already-closed file returns an
+	// error which we discard explicitly.
 	defer func() {
 		os.Stderr = origStderr
+		_ = w.Close()
 		_ = r.Close()
 	}()
 
