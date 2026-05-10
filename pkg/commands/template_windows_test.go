@@ -59,15 +59,9 @@ func TestResolveEngineTemplatePaths_BackslashInput(t *testing.T) {
 
 	// Chdir so relative paths resolve against rootDir exactly as they
 	// would when a user cd's into their project directory and runs
-	// `talm template -t templates\controlplane.yaml`.
-	origCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(rootDir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origCwd) })
+	// `talm template -t templates\controlplane.yaml`. t.Chdir handles
+	// the cleanup itself.
+	t.Chdir(rootDir)
 
 	inputs := []string{
 		`templates\controlplane.yaml`,

@@ -17,13 +17,13 @@
 package secureperm
 
 import (
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"unsafe"
 
+	"github.com/cockroachdb/errors"
 	"golang.org/x/sys/windows"
 )
 
@@ -33,13 +33,13 @@ import (
 func ownerOnlyDACL() (*windows.ACL, error) {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
-		return nil, fmt.Errorf("open process token: %w", err)
+		return nil, errors.Wrap(err, "open process token")
 	}
 	defer func() { _ = token.Close() }()
 
 	tokenUser, err := token.GetTokenUser()
 	if err != nil {
-		return nil, fmt.Errorf("get token user: %w", err)
+		return nil, errors.Wrap(err, "get token user")
 	}
 
 	entries := []windows.EXPLICIT_ACCESS{
@@ -54,10 +54,12 @@ func ownerOnlyDACL() (*windows.ACL, error) {
 			},
 		},
 	}
+
 	acl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build DACL: %w", err)
+		return nil, errors.Wrap(err, "build DACL")
 	}
+
 	return acl, nil
 }
 
@@ -68,18 +70,21 @@ func ownerOnlyDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	if err != nil {
 		return nil, err
 	}
-	sd, err := windows.NewSecurityDescriptor()
+
+	sd, err := windows.NewSecurityDescriptor() //nolint:varnamelen // Windows API conventional short name
 	if err != nil {
-		return nil, fmt.Errorf("create security descriptor: %w", err)
+		return nil, errors.Wrap(err, "create security descriptor")
 	}
+
 	if err := sd.SetDACL(dacl, true, false); err != nil {
-		return nil, fmt.Errorf("attach DACL: %w", err)
+		return nil, errors.Wrap(err, "attach DACL")
 	}
 	// Mark the DACL protected so inherited ACEs are stripped rather
 	// than merged.
 	if err := sd.SetControl(windows.SE_DACL_PROTECTED, windows.SE_DACL_PROTECTED); err != nil {
-		return nil, fmt.Errorf("protect DACL: %w", err)
+		return nil, errors.Wrap(err, "protect DACL")
 	}
+
 	return sd, nil
 }
 
@@ -89,24 +94,36 @@ func ownerOnlyDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 // member when opening an existing file, so using the NEW variant on a
 // filename we already verified didn't exist is what makes the DACL
 // actually apply at creation time.
-func createSecureTmp(dir string) (tmpPath string, handle windows.Handle, err error) {
-	sd, err := ownerOnlyDescriptor()
+//
+//nolint:nonamedreturns // documents the (path, OS handle, error) tuple semantics; naked returns aren't used.
+func createSecureTmp(dir string) (tmpPath string, h windows.Handle, err error) {
+	sd, err := ownerOnlyDescriptor() //nolint:varnamelen // Windows API conventional short name
 	if err != nil {
 		return "", 0, err
 	}
-	sa := windows.SecurityAttributes{
+
+	// SecurityAttributes.Length is uint32 by ABI; unsafe.Sizeof
+	// returns uintptr. windows.SecurityAttributes is 1 uint32 + 2
+	// pointers, so its size is 24 bytes on win64 and 12 on win32 —
+	// both fit uint32 trivially. The conversion is the canonical
+	// Windows ABI idiom (mirrored across golang.org/x/sys/windows
+	// examples) and not a real overflow risk.
+	sa := windows.SecurityAttributes{ //nolint:varnamelen // Windows API conventional short name
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		SecurityDescriptor: sd,
 		InheritHandle:      0,
 	}
 
 	for range 100 {
+		//nolint:gosec // G404: tmpfile name suffix; non-cryptographic randomness is sufficient.
 		candidate := filepath.Join(dir, fmt.Sprintf(".secureperm-%d-%d", os.Getpid(), rand.Uint32()))
+
 		utf16, err := windows.UTF16PtrFromString(candidate)
 		if err != nil {
-			return "", 0, fmt.Errorf("encode tmp path: %w", err)
+			return "", 0, errors.Wrap(err, "encode tmp path")
 		}
-		h, err := windows.CreateFile(
+
+		h, err := windows.CreateFile( //nolint:varnamelen // Windows API conventional short name
 			utf16,
 			windows.GENERIC_WRITE,
 			0, // exclusive — no sharing during write
@@ -118,11 +135,13 @@ func createSecureTmp(dir string) (tmpPath string, handle windows.Handle, err err
 		if err == nil {
 			return candidate, h, nil
 		}
+
 		if !errors.Is(err, windows.ERROR_FILE_EXISTS) && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
-			return "", 0, fmt.Errorf("create tmp %s: %w", candidate, err)
+			return "", 0, errors.Wrapf(err, "create tmp %s", candidate)
 		}
 		// Name already in use — pick another.
 	}
+
 	return "", 0, errors.New("could not find unused tmp filename after 100 attempts")
 }
 
@@ -151,7 +170,8 @@ func WriteFile(path string, data []byte) error {
 		return err
 	}
 
-	f := os.NewFile(uintptr(handle), tmpPath)
+	f := os.NewFile(uintptr(handle), tmpPath) //nolint:varnamelen // Windows API conventional short name
+
 	committed := false
 	defer func() {
 		if !committed {
@@ -161,7 +181,7 @@ func WriteFile(path string, data []byte) error {
 	}()
 
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write tmp %s: %w", tmpPath, err)
+		return errors.Wrapf(err, "write tmp %s", tmpPath)
 	}
 	// FlushFileBuffers (the Windows backend for *os.File.Sync) before
 	// rename so the tmp's contents are on stable storage. os.Rename on
@@ -172,15 +192,19 @@ func WriteFile(path string, data []byte) error {
 	// rename pattern is meant to avoid. Secrets files are not
 	// reconstructible, so the flush is warranted.
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync tmp %s: %w", tmpPath, err)
+		return errors.Wrapf(err, "sync tmp %s", tmpPath)
 	}
+
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close tmp %s: %w", tmpPath, err)
+		return errors.Wrapf(err, "close tmp %s", tmpPath)
 	}
+
 	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename tmp %s -> %s: %w", tmpPath, path, err)
+		return errors.Wrapf(err, "rename tmp %s -> %s", tmpPath, path)
 	}
+
 	committed = true
+
 	return nil
 }
 
@@ -192,13 +216,15 @@ func LockDown(path string) error {
 	if err != nil {
 		return err
 	}
+
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		nil, nil, dacl, nil,
 	); err != nil {
-		return fmt.Errorf("set file DACL: %w", err)
+		return errors.Wrap(err, "set file DACL")
 	}
+
 	return nil
 }

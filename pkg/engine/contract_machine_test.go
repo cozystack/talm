@@ -238,14 +238,14 @@ func TestContract_Machine_CertSANs_LoopbackUnconditional_Cozystack(t *testing.T)
 }
 
 // Contract: cozystack emits two `machine.files[]` entries:
-// 1. /etc/cri/conf.d/20-customization.part — sets
-//    device_ownership_from_security_context = true on both legacy
-//    (io.containerd.grpc.v1.cri) and v2 (io.containerd.cri.v1.runtime)
-//    plugin paths. Required for SR-IOV / GPU device plugins to
-//    surface inside privileged containers.
-// 2. /etc/lvm/lvm.conf — disables LVM backup/archive and sets a
-//    global_filter that excludes drbd, dm-, zd- devices. Required so
-//    LVM does not race the storage stack at boot.
+//  1. /etc/cri/conf.d/20-customization.part — sets
+//     device_ownership_from_security_context = true on both legacy
+//     (io.containerd.grpc.v1.cri) and v2 (io.containerd.cri.v1.runtime)
+//     plugin paths. Required for SR-IOV / GPU device plugins to
+//     surface inside privileged containers.
+//  2. /etc/lvm/lvm.conf — disables LVM backup/archive and sets a
+//     global_filter that excludes drbd, dm-, zd- devices. Required so
+//     LVM does not race the storage stack at boot.
 //
 // Both files use op: create / op: overwrite respectively. A regression
 // removing either silently breaks GPU/SRIOV or LVM ordering.

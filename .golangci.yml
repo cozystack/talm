@@ -1,0 +1,151 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    - depguard
+    - exhaustruct
+    - gochecknoinits
+    - wsl
+    - lll
+    - errchkjson
+    - ireturn
+    - gocheckcompilerdirectives
+    # noinlineerr: this codebase wholesale uses 'if err := X(); err != nil' inline form
+    # — 219+ occurrences across packages. Converting to plain-assignment style would
+    # produce a noisy diff with zero correctness benefit AND create variable-scope leaks
+    # in many places where err is locally scoped to the check.
+    - noinlineerr
+    # gomodguard: deprecated in v2.12+ in favour of gomodguard_v2; we don't use
+    # either (no allow/blocklists configured), so disable to silence the warning.
+    - gomodguard
+  settings:
+    dupl:
+      threshold: 100
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      disabled-checks:
+        - dupImport
+        - unnamedResult
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    funlen:
+      lines: 60
+      statements: 60
+    gomoddirectives:
+      # The cozystack fork of Talos carries a downstream-only patch
+      # (siderolabs/talos#12652, --skip-verify) that upstream declined.
+      # Until that flag lands upstream, the replace directive is the
+      # only way to consume the fork — it is not generic dependency
+      # rewriting and must stay.
+      replace-allow-list:
+        - github.com/siderolabs/talos
+        - github.com/siderolabs/talos/pkg/machinery
+    gocyclo:
+      min-complexity: 15
+    cyclop:
+      max-complexity: 15
+    mnd:
+      ignored-numbers:
+        - "10"
+        - "100"
+        - "1000"
+        - "2"
+        - "60"
+        - "60.0"
+        - "64"
+        - "500"
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    varnamelen:
+      max-distance: 5
+      min-name-length: 3
+      check-receiver: false
+      check-return: false
+      ignore-type-assert-ok: false
+      ignore-map-index-ok: false
+      ignore-chan-recv-ok: false
+      ignore-decls:
+        - wg sync.WaitGroup
+        - wg *sync.WaitGroup
+        - mu sync.Mutex
+        - ok bool
+      ignore-names:
+        - i
+        - w
+        - r
+        - b
+        - c
+        - m
+        - n
+        - tt
+        - rw
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - generated\.go$
+      - pkg/generated/
+      - \.claude/
+    rules:
+      - linters:
+          - funlen
+          - dupl
+          - gocognit
+          - gocyclo
+          - cyclop
+          - errcheck
+          - testableexamples
+          - testpackage
+          - forcetypeassert
+          - gocritic
+          - nlreturn
+          - wsl_v5
+          - varnamelen
+          - unparam
+          - modernize
+          - gosec
+          - testifylint
+          - perfsprint
+          - paralleltest
+          - maintidx
+          # goconst on _test.go: tests intentionally repeat literals
+          # (IPs, CIDRs, MAC addresses, YAML keys) inside backtick raw
+          # strings that are EXPECTED template outputs, alongside Go
+          # string literals used as assertion values. Substituting the
+          # Go literal into a const desynchronises it from the
+          # backtick fixture, breaking the test silently. Empirically
+          # observed during the strict-lint adoption pass: every
+          # blanket goconst substitution in pkg/engine/contract_*.go
+          # broke at least one TestRender* case. Sub-agent attempts
+          # failed for the same reason. Disable goconst on test files.
+          - goconst
+        path: _test\.go
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - generated\.go$
+      - pkg/generated/
+      - \.claude/

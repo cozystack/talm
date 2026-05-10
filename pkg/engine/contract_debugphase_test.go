@@ -56,7 +56,7 @@ func TestContract_DebugPhase_TolerantOfEmptyPatch(t *testing.T) {
 		return // unreachable, debugPhase calls os.Exit(0)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestContract_DebugPhase_TolerantOfEmptyPatch$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestContract_DebugPhase_TolerantOfEmptyPatch$")
 	cmd.Env = append(os.Environ(), "TEST_DEBUG_PHASE_HELPER=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -93,7 +93,7 @@ func TestContract_DebugPhase_HandlesAllEmpty(t *testing.T) {
 		return
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestContract_DebugPhase_HandlesAllEmpty$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestContract_DebugPhase_HandlesAllEmpty$")
 	cmd.Env = append(os.Environ(), "TEST_DEBUG_PHASE_HELPER_ALL_EMPTY=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -1,6 +1,6 @@
 module github.com/cozystack/talm
 
-go 1.26.2
+go 1.26.3
 
 // Kubernetes dependencies sharing the same version.
 require (
@@ -96,7 +96,6 @@ require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/cockroachdb/errors v1.13.0
 	github.com/gobwas/glob v0.2.3
-	github.com/pkg/errors v0.9.1
 	github.com/siderolabs/talos v1.12.6
 	helm.sh/helm/v3 v3.20.2
 )
@@ -227,6 +226,7 @@ require (
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

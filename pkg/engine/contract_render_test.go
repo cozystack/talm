@@ -266,7 +266,7 @@ func TestContract_SerializeConfiguration_ControlplaneVsWorker(t *testing.T) {
 // machine.TypeUnknown — a reduced state operators do not normally
 // reach.
 func TestContract_FullConfigProcess_NoPatchesUsesBundleDefault(t *testing.T) {
-	bundle, mtype, err := FullConfigProcess(context.Background(), Options{}, nil)
+	bundle, mtype, err := FullConfigProcess(Options{}, nil)
 	if err != nil {
 		t.Fatalf("FullConfigProcess: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestContract_FullConfigProcess_NoPatchesUsesBundleDefault(t *testing.T) {
 // own machineType inference does not interfere.
 func TestContract_FullConfigProcess_ControlplaneFromPatch(t *testing.T) {
 	patch := "machine:\n  type: controlplane\n"
-	_, mtype, err := FullConfigProcess(context.Background(), Options{}, []string{patch})
+	_, mtype, err := FullConfigProcess(Options{}, []string{patch})
 	if err != nil {
 		t.Fatalf("FullConfigProcess: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestContract_FullConfigProcess_ControlplaneFromPatch(t *testing.T) {
 // silently swallows malformed patches surfaces here.
 func TestContract_FullConfigProcess_MalformedPatchError(t *testing.T) {
 	bad := "this is not valid YAML\n  : :"
-	_, _, err := FullConfigProcess(context.Background(), Options{}, []string{bad})
+	_, _, err := FullConfigProcess(Options{}, []string{bad})
 	if err == nil {
 		t.Fatal("expected error for malformed patch")
 	}
@@ -309,7 +309,7 @@ func TestContract_FullConfigProcess_MalformedPatchError(t *testing.T) {
 // Contract: FullConfigProcess with a malformed TalosVersion option
 // surfaces InitializeConfigBundle's error path.
 func TestContract_FullConfigProcess_BadTalosVersionError(t *testing.T) {
-	_, _, err := FullConfigProcess(context.Background(), Options{TalosVersion: "garbage"}, nil)
+	_, _, err := FullConfigProcess(Options{TalosVersion: "garbage"}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

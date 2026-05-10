@@ -25,7 +25,8 @@ import (
 )
 
 func TestFuncs(t *testing.T) {
-	//TODO write tests for failure cases
+	//nolint:godox // upstream Helm carries this TODO; preserved verbatim.
+	// TODO write tests for failure cases
 	tests := []struct {
 		tpl, expect string
 		vars        any

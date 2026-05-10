@@ -24,19 +24,21 @@ import (
 	"testing"
 	"text/template"
 
+	"github.com/cockroachdb/errors"
+
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chartutil"
 )
 
 func TestSortTemplates(t *testing.T) {
 	tpls := map[string]renderable{
-		"/mychart/templates/foo.tpl":                                 {},
-		"/mychart/templates/charts/foo/charts/bar/templates/foo.tpl": {},
-		"/mychart/templates/bar.tpl":                                 {},
-		"/mychart/templates/charts/foo/templates/bar.tpl":            {},
-		"/mychart/templates/_foo.tpl":                                {},
-		"/mychart/templates/charts/foo/templates/foo.tpl":            {},
-		"/mychart/templates/charts/bar/templates/foo.tpl":            {},
+		tplFooDirect:        {},
+		tplFooNested:        {},
+		tplBarDirect:        {},
+		tplBarSubChartFoo:   {},
+		tplFooHelpersDirect: {},
+		tplFooSubChartFoo:   {},
+		tplFooSubChartBar:   {},
 	}
 	got := sortTemplates(tpls)
 	if len(got) != len(tpls) {
@@ -44,13 +46,13 @@ func TestSortTemplates(t *testing.T) {
 	}
 
 	expect := []string{
-		"/mychart/templates/charts/foo/charts/bar/templates/foo.tpl",
-		"/mychart/templates/charts/foo/templates/foo.tpl",
-		"/mychart/templates/charts/foo/templates/bar.tpl",
-		"/mychart/templates/charts/bar/templates/foo.tpl",
-		"/mychart/templates/foo.tpl",
-		"/mychart/templates/bar.tpl",
-		"/mychart/templates/_foo.tpl",
+		tplFooNested,
+		tplFooSubChartFoo,
+		tplBarSubChartFoo,
+		tplFooSubChartBar,
+		tplFooDirect,
+		tplBarDirect,
+		tplFooHelpersDirect,
 	}
 	for i, e := range expect {
 		if got[i] != e {
@@ -72,7 +74,7 @@ func TestFuncMap(t *testing.T) {
 	}
 
 	// Test for Engine-specific template functions.
-	expect := []string{"include", "required", "tpl", "toYaml", "fromYaml", "toToml", "toJson", "fromJson", "lookup"}
+	expect := []string{"include", "required", "tpl", "toYaml", "fromYaml", "toToml", "toJson", helmFuncFromJSON, "lookup"}
 	for _, f := range expect {
 		if _, ok := fns[f]; !ok {
 			t.Errorf("Expected add-on function %q", f)
@@ -84,7 +86,7 @@ func TestRender(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{
 			Name:    "moby",
-			Version: "1.2.3",
+			Version: helmTestVersion,
 		},
 		Templates: []*chart.File{
 			{Name: "templates/test1", Data: []byte("{{.Values.outer | title }} {{.Values.inner | title}}")},
@@ -93,11 +95,11 @@ func TestRender(t *testing.T) {
 			{Name: "templates/test4", Data: []byte("{{toJson .Values}}")},
 			{Name: "templates/test5", Data: []byte("{{getHostByName \"helm.sh\"}}")},
 		},
-		Values: map[string]any{"outer": "DEFAULT", "inner": "DEFAULT"},
+		Values: map[string]any{"outer": helmTestDefaultValue, "inner": helmTestDefaultValue},
 	}
 
 	vals := map[string]any{
-		"Values": map[string]any{
+		helmKeyValues: map[string]any{
 			"outer": "spouter",
 			"inner": "inn",
 			"global": map[string]any{
@@ -134,7 +136,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 	parentChart := &chart.Chart{
 		Metadata: &chart.Metadata{
 			Name:    "parent",
-			Version: "1.2.3",
+			Version: helmTestVersion,
 		},
 		Templates: []*chart.File{
 			{Name: "templates/_helpers.tpl", Data: []byte(`{{- define "test" -}}parent value{{- end -}}`)},
@@ -143,8 +145,8 @@ func TestRenderRefsOrdering(t *testing.T) {
 	}
 	childChart := &chart.Chart{
 		Metadata: &chart.Metadata{
-			Name:    "child",
-			Version: "1.2.3",
+			Name:    helmKeyChartChild,
+			Version: helmTestVersion,
 		},
 		Templates: []*chart.File{
 			{Name: "templates/_helpers.tpl", Data: []byte(`{{- define "test" -}}child value{{- end -}}`)},
@@ -173,7 +175,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 func TestRenderInternals(t *testing.T) {
 	// Test the internals of the rendering tool.
 
-	vals := chartutil.Values{"Name": "one", "Value": "two"}
+	vals := chartutil.Values{helmKeyName: "one", "Value": "two"}
 	tpls := map[string]renderable{
 		"one": {tpl: `Hello {{title .Name}}`, vals: vals},
 		"two": {tpl: `Goodbye {{upper .Value}}`, vals: vals},
@@ -208,7 +210,7 @@ func TestRenderWithDNS(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{
 			Name:    "moby",
-			Version: "1.2.3",
+			Version: helmTestVersion,
 		},
 		Templates: []*chart.File{
 			{Name: "templates/test1", Data: []byte("{{getHostByName \"helm.sh\"}}")},
@@ -217,7 +219,7 @@ func TestRenderWithDNS(t *testing.T) {
 	}
 
 	vals := map[string]any{
-		"Values": map[string]any{},
+		helmKeyValues: map[string]any{},
 	}
 
 	v, err := chartutil.CoalesceValues(c, vals)
@@ -268,7 +270,7 @@ func TestParallelRenderInternals(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	vals := chartutil.Values{"Values": map[string]any{}}
+	vals := chartutil.Values{helmKeyValues: map[string]any{}}
 
 	tplsUndefinedFunction := map[string]renderable{
 		"undefined_function": {tpl: `{{foo}}`, vals: vals},
@@ -284,7 +286,7 @@ func TestParseErrors(t *testing.T) {
 }
 
 func TestExecErrors(t *testing.T) {
-	vals := chartutil.Values{"Values": map[string]any{}}
+	vals := chartutil.Values{helmKeyValues: map[string]any{}}
 	cases := []struct {
 		name     string
 		tpls     map[string]renderable
@@ -319,7 +321,7 @@ func TestExecErrors(t *testing.T) {
 		{
 			name: "MissingRequiredWithNewlines",
 			tpls: map[string]renderable{
-				"issue9981": {tpl: `{{required "foo is required\nmore info after the break" .Values.foo}}`, vals: vals},
+				helmFixtureIssue9981: {tpl: `{{required "foo is required\nmore info after the break" .Values.foo}}`, vals: vals},
 			},
 			expected: `execution error at (issue9981:1:2): foo is required
 more info after the break`,
@@ -327,7 +329,7 @@ more info after the break`,
 		{
 			name: "FailWithNewlines",
 			tpls: map[string]renderable{
-				"issue9981": {tpl: `{{fail "something is wrong\nlinebreak"}}`, vals: vals},
+				helmFixtureIssue9981: {tpl: `{{fail "something is wrong\nlinebreak"}}`, vals: vals},
 			},
 			expected: `execution error at (issue9981:1:2): something is wrong
 linebreak`,
@@ -348,7 +350,7 @@ linebreak`,
 }
 
 func TestFailErrors(t *testing.T) {
-	vals := chartutil.Values{"Values": map[string]any{}}
+	vals := chartutil.Values{helmKeyValues: map[string]any{}}
 
 	failtpl := `All your base are belong to us{{ fail "This is an error" }}`
 	tplsFailed := map[string]renderable{
@@ -370,7 +372,7 @@ func TestFailErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectStr := "All your base are belong to us"
+	expectStr := helmFixtureBaseAreUs
 	if gotStr := out["failtpl"]; gotStr != expectStr {
 		t.Errorf("Expected %q, got %q (%v)", expectStr, gotStr, out)
 	}
@@ -415,7 +417,7 @@ func TestChartValuesContainsIsRoot(t *testing.T) {
 		},
 	}
 	dep1 := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "child"},
+		Metadata: &chart.Metadata{Name: helmKeyChartChild},
 		Templates: []*chart.File{
 			{Name: "templates/isroot", Data: []byte("{{.Chart.IsRoot}}")},
 		},
@@ -466,7 +468,6 @@ func TestRenderDependency(t *testing.T) {
 	if out["outerchart/templates/outer"] != expect {
 		t.Errorf("Expected %q, got %q", expect, out["outer"])
 	}
-
 }
 
 func TestRenderNestedValues(t *testing.T) {
@@ -479,7 +480,7 @@ func TestRenderNestedValues(t *testing.T) {
 	subchartspath := "templates/subcharts.tpl"
 
 	deepest := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "deepest"},
+		Metadata: &chart.Metadata{Name: helmFixtureDeepest},
 		Templates: []*chart.File{
 			{Name: deepestpath, Data: []byte(`And this same {{.Values.what}} that smiles {{.Values.global.when}}`)},
 			{Name: checkrelease, Data: []byte(`Tomorrow will be {{default "happy" .Release.Name }}`)},
@@ -488,7 +489,7 @@ func TestRenderNestedValues(t *testing.T) {
 	}
 
 	inner := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "herrick"},
+		Metadata: &chart.Metadata{Name: helmFixtureHerrick},
 		Templates: []*chart.File{
 			{Name: innerpath, Data: []byte(`Old {{.Values.who}} is still a-flyin'`)},
 		},
@@ -505,7 +506,7 @@ func TestRenderNestedValues(t *testing.T) {
 		Values: map[string]any{
 			"what": "stinkweed",
 			"who":  "me",
-			"herrick": map[string]any{
+			helmFixtureHerrick: map[string]any{
 				"who":  "time",
 				"what": "Sun",
 			},
@@ -515,8 +516,8 @@ func TestRenderNestedValues(t *testing.T) {
 
 	injValues := map[string]any{
 		"what": "rosebuds",
-		"herrick": map[string]any{
-			"deepest": map[string]any{
+		helmFixtureHerrick: map[string]any{
+			helmFixtureDeepest: map[string]any{
 				"what":  "flower",
 				"where": "Heaven",
 			},
@@ -532,10 +533,10 @@ func TestRenderNestedValues(t *testing.T) {
 	}
 
 	inject := chartutil.Values{
-		"Values": tmp,
-		"Chart":  outer.Metadata,
-		"Release": chartutil.Values{
-			"Name": "dyin",
+		helmKeyValues: tmp,
+		helmKeyChart:  outer.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: "dyin",
 		},
 	}
 
@@ -595,10 +596,10 @@ func TestRenderBuiltinValues(t *testing.T) {
 	outer.AddDependency(inner)
 
 	inject := chartutil.Values{
-		"Values": "",
-		"Chart":  outer.Metadata,
-		"Release": chartutil.Values{
-			"Name": "Aeneid",
+		helmKeyValues: "",
+		helmKeyChart:  outer.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: "Aeneid",
 		},
 	}
 
@@ -620,7 +621,6 @@ func TestRenderBuiltinValues(t *testing.T) {
 			t.Errorf("Expected %q, got %q", expect, out[file])
 		}
 	}
-
 }
 
 func TestAlterFuncMap_include(t *testing.T) {
@@ -642,10 +642,10 @@ func TestAlterFuncMap_include(t *testing.T) {
 	}
 
 	v := chartutil.Values{
-		"Values": "",
-		"Chart":  c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "Mistah Kurtz",
+		helmKeyValues: "",
+		helmKeyChart:  c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: "Mistah Kurtz",
 		},
 	}
 
@@ -676,13 +676,13 @@ func TestAlterFuncMap_require(t *testing.T) {
 	}
 
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"who":   "us",
 			"bases": 2,
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "That 90s meme",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixture90sMeme,
 		},
 	}
 
@@ -691,7 +691,7 @@ func TestAlterFuncMap_require(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectStr := "All your base are belong to us"
+	expectStr := helmFixtureBaseAreUs
 	if gotStr := out["conan/templates/quote"]; gotStr != expectStr {
 		t.Errorf("Expected %q, got %q (%v)", expectStr, gotStr, out)
 	}
@@ -703,12 +703,12 @@ func TestAlterFuncMap_require(t *testing.T) {
 	// test required without passing in needed values with lint mode on
 	// verifies lint replaces required with an empty string (should not fail)
 	lintValues := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"who": "us",
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "That 90s meme",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixture90sMeme,
 		},
 	}
 	var e Engine
@@ -718,7 +718,7 @@ func TestAlterFuncMap_require(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectStr = "All your base are belong to us"
+	expectStr = helmFixtureBaseAreUs
 	if gotStr := out["conan/templates/quote"]; gotStr != expectStr {
 		t.Errorf("Expected %q, got %q (%v)", expectStr, gotStr, out)
 	}
@@ -730,19 +730,19 @@ func TestAlterFuncMap_require(t *testing.T) {
 
 func TestAlterFuncMap_tpl(t *testing.T) {
 	c := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "TplFunction"},
+		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
 		Templates: []*chart.File{
 			{Name: "templates/base", Data: []byte(`Evaluate tpl {{tpl "Value: {{ .Values.value}}" .}}`)},
 		},
 	}
 
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"value": "myvalue",
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -759,19 +759,19 @@ func TestAlterFuncMap_tpl(t *testing.T) {
 
 func TestAlterFuncMap_tplfunc(t *testing.T) {
 	c := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "TplFunction"},
+		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
 		Templates: []*chart.File{
 			{Name: "templates/base", Data: []byte(`Evaluate tpl {{tpl "Value: {{ .Values.value | quote}}" .}}`)},
 		},
 	}
 
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"value": "myvalue",
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -788,19 +788,19 @@ func TestAlterFuncMap_tplfunc(t *testing.T) {
 
 func TestAlterFuncMap_tplinclude(t *testing.T) {
 	c := &chart.Chart{
-		Metadata: &chart.Metadata{Name: "TplFunction"},
+		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
 		Templates: []*chart.File{
 			{Name: "templates/base", Data: []byte(`{{ tpl "{{include ` + "`" + `TplFunction/templates/_partial` + "`" + ` .  | quote }}" .}}`)},
 			{Name: "templates/_partial", Data: []byte(`{{.Template.Name}}`)},
 		},
 	}
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"value": "myvalue",
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -813,7 +813,6 @@ func TestAlterFuncMap_tplinclude(t *testing.T) {
 	if got := out["TplFunction/templates/base"]; got != expect {
 		t.Errorf("Expected %q, got %q (%v)", expect, got, out)
 	}
-
 }
 
 func TestRenderRecursionLimit(t *testing.T) {
@@ -826,10 +825,10 @@ func TestRenderRecursionLimit(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Values": "",
-		"Chart":  c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyValues: "",
+		helmKeyChart:  c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 	expectErr := "rendering template has a nested reference name: recursion: unable to execute template"
@@ -862,7 +861,6 @@ func TestRenderRecursionLimit(t *testing.T) {
 	if got := out["overlook/templates/quote"]; got != expect {
 		t.Errorf("Expected %q, got %q (%v)", expect, got, out)
 	}
-
 }
 
 func TestRenderLoadTemplateForTplFromFile(t *testing.T) {
@@ -879,13 +877,13 @@ func TestRenderLoadTemplateForTplFromFile(t *testing.T) {
 	}
 
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"filename":  "test",
 			"filename2": "test2",
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -910,9 +908,9 @@ func TestRenderTplEmpty(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -946,18 +944,18 @@ func TestRenderTplTemplateNames(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"dot": chartutil.Values{
 				"Template": chartutil.Values{
-					"BasePath": "path/to/template",
-					"Name":     "name-of-template",
-					"Field":    "extra-field",
+					helmKeyBasePath: "path/to/template",
+					helmKeyName:     "name-of-template",
+					"Field":         helmFixtureExtraField,
 				},
 			},
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -971,7 +969,7 @@ func TestRenderTplTemplateNames(t *testing.T) {
 		"TplTemplateNames/templates/default-name":      "TplTemplateNames/templates/default-name",
 		"TplTemplateNames/templates/modified-basepath": "path/to/template",
 		"TplTemplateNames/templates/modified-name":     "name-of-template",
-		"TplTemplateNames/templates/modified-field":    "extra-field",
+		"TplTemplateNames/templates/modified-field":    helmFixtureExtraField,
 	}
 	for file, expect := range expects {
 		if out[file] != expect {
@@ -1007,7 +1005,7 @@ func TestRenderTplRedefines(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Values": chartutil.Values{
+		helmKeyValues: chartutil.Values{
 			"partialText":      `{{define "partial"}}redefined-in-tpl{{end}}tpl: {{include "partial" .}}`,
 			"manifestText":     `{{define "manifest"}}redefined-in-tpl{{end}}tpl: {{include "manifest" .}}`,
 			"manifestOnlyText": `tpl: {{include "manifest-only" .}}`,
@@ -1018,9 +1016,9 @@ func TestRenderTplRedefines(t *testing.T) {
 				`after-inner-tpl: {{include "nested" .}} {{include "nested-outer" . }}`,
 			"innerText": `{{define "nested"}}redefined-in-inner-tpl{{end}}inner-tpl: {{include "nested" .}} {{include "nested-outer" . }}`,
 		},
-		"Chart": c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyChart: c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -1057,10 +1055,10 @@ func TestRenderTplMissingKey(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Values": chartutil.Values{},
-		"Chart":  c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyValues: chartutil.Values{},
+		helmKeyChart:  c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -1090,10 +1088,10 @@ func TestRenderTplMissingKeyString(t *testing.T) {
 		},
 	}
 	v := chartutil.Values{
-		"Values": chartutil.Values{},
-		"Chart":  c.Metadata,
-		"Release": chartutil.Values{
-			"Name": "TestRelease",
+		helmKeyValues: chartutil.Values{},
+		helmKeyChart:  c.Metadata,
+		helmKeyRelease: chartutil.Values{
+			helmKeyName: helmFixtureTestRelease,
 		},
 	}
 
@@ -1105,15 +1103,14 @@ func TestRenderTplMissingKeyString(t *testing.T) {
 		t.Errorf("Expected error, got %v", out)
 		return
 	}
-	switch err.(type) {
-	case (template.ExecError):
-		errTxt := fmt.Sprint(err)
-		if !strings.Contains(errTxt, "noSuchKey") {
-			t.Errorf("Expected error to contain 'noSuchKey', got %s", errTxt)
-		}
-	default:
+	var execErr template.ExecError
+	if !errors.As(err, &execErr) {
 		// Some unexpected error.
 		t.Fatal(err)
+	}
+	errTxt := fmt.Sprint(err)
+	if !strings.Contains(errTxt, "noSuchKey") {
+		t.Errorf("Expected error to contain 'noSuchKey', got %s", errTxt)
 	}
 }
 
@@ -1131,7 +1128,7 @@ func TestTalosVersionInTemplateContext(t *testing.T) {
 	}
 
 	vals := chartutil.Values{
-		"Values":       chartutil.Values{},
+		helmKeyValues:  chartutil.Values{},
 		"TalosVersion": "v1.12",
 	}
 
@@ -1161,7 +1158,7 @@ func TestTalosVersionEmpty(t *testing.T) {
 	}
 
 	vals := chartutil.Values{
-		"Values": chartutil.Values{},
+		helmKeyValues: chartutil.Values{},
 	}
 
 	out, err := Render(c, vals)
@@ -1190,7 +1187,7 @@ func TestTalosVersionConcurrentRender(t *testing.T) {
 			},
 		}
 		vals := chartutil.Values{
-			"Values":       chartutil.Values{},
+			helmKeyValues:  chartutil.Values{},
 			"TalosVersion": version,
 		}
 		out, err := Render(c, vals)
@@ -1231,7 +1228,7 @@ func TestCidrNetworkTemplateFunc(t *testing.T) {
 			Values:    map[string]any{},
 		}
 		var eng Engine
-		out, err := eng.Render(chrt, chartutil.Values{"Values": map[string]any{}})
+		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
 		if err != nil {
 			return "", err
 		}

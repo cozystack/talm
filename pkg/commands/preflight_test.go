@@ -24,6 +24,16 @@ import (
 )
 
 func TestEvaluateVersionMismatch(t *testing.T) {
+	const (
+		// versionCurrentSubstring is the rendering of machinery's
+		// TalosVersionCurrent (nil contract); the warning embeds it
+		// when no configured version is supplied.
+		versionCurrentSubstring = "current"
+		// unparseableVersion is a sentinel that
+		// machineryconfig.ParseContractFromVersion rejects.
+		unparseableVersion = "garbage"
+	)
+
 	tests := []struct {
 		name        string
 		configured  string
@@ -36,11 +46,12 @@ func TestEvaluateVersionMismatch(t *testing.T) {
 		{"configured older than running", "v1.10", "v1.12.6", false, ""},
 		{"configured equal exact", "v1.11", "v1.11.0", false, ""},
 		// Empty configured = TalosVersionCurrent (nil contract = newest); the warning
-		// must fire because that's the documented reproduction case in cozystack/talm#132.
-		{"configured empty means current and warns", "", "v1.11.6", true, "current"},
-		{"configured empty equal-modern still warns", "", "v1.12.6", true, "current"},
-		{"running unparseable", "v1.12", "garbage", false, ""},
-		{"configured unparseable", "garbage", "v1.12.6", false, ""},
+		// must fire because that's the documented reproduction case for an unset
+		// talosVersion against an older node.
+		{"configured empty means current and warns", "", "v1.11.6", true, versionCurrentSubstring},
+		{"configured empty equal-modern still warns", "", "v1.12.6", true, versionCurrentSubstring},
+		{"running unparseable", "v1.12", unparseableVersion, false, ""},
+		{"configured unparseable", unparseableVersion, "v1.12.6", false, ""},
 		{"both empty silent", "", "", false, ""},
 	}
 
@@ -78,7 +89,7 @@ func TestAnnotateApplyConfigError(t *testing.T) {
 		},
 		{
 			"strict decoder error",
-			errors.New("rpc error: code = Unknown desc = failed to parse config: unknown keys found during decoding:\nmachine:\n    install:\n        grubUseUKICmdline: true\n"),
+			errors.New("rpc error: code = Unknown desc = failed to parse config: unknown keys found during decoding:\nmachine:\n    install:\n        grubUseUKICmdline: true"),
 			true,
 		},
 	}

@@ -30,6 +30,18 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
+// File-local fixtures for the helpers contract tests. The literals
+// these constants stand in for show up across many table-driven and
+// scenario tests; centralising them lets goconst stop firing.
+const (
+	fixtureEndpointIPv4Canonical     = "https://1.2.3.4:6443"
+	fixtureEndpointHostnameCanonical = "https://node.example.com:6443"
+	fixtureEndpointIPv6Canonical     = "https://[2001:db8::1]:6443"
+	fixtureEndpointRotatedCanonical  = "https://10.0.0.1:6443"
+	fixtureClusterNameMy             = "my-cluster"
+	fixtureClusterNameFallback       = "chart-fallback"
+)
+
 // === normalizeEndpoint ===
 
 // Contract: every endpoint variant collapses to a canonical
@@ -41,21 +53,21 @@ func TestContract_NormalizeEndpoint(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
-		{"ipv4_no_port", "1.2.3.4", "https://1.2.3.4:6443"},
-		{"ipv4_with_port", "1.2.3.4:50000", "https://1.2.3.4:6443"},
-		{"ipv4_https_with_port", "https://1.2.3.4:50000", "https://1.2.3.4:6443"},
-		{"ipv4_http", "http://1.2.3.4", "https://1.2.3.4:6443"},
-		{"hostname_https_canonical", "https://node.example.com:6443", "https://node.example.com:6443"},
-		{"hostname_no_port", "node.example.com", "https://node.example.com:6443"},
+		{"ipv4_no_port", "1.2.3.4", fixtureEndpointIPv4Canonical},
+		{"ipv4_with_port", "1.2.3.4:50000", fixtureEndpointIPv4Canonical},
+		{"ipv4_https_with_port", "https://1.2.3.4:50000", fixtureEndpointIPv4Canonical},
+		{"ipv4_http", "http://1.2.3.4", fixtureEndpointIPv4Canonical},
+		{"hostname_https_canonical", fixtureEndpointHostnameCanonical, fixtureEndpointHostnameCanonical},
+		{"hostname_no_port", "node.example.com", fixtureEndpointHostnameCanonical},
 		// IPv6 with brackets — net.JoinHostPort re-adds them for any
 		// host containing a colon, so the canonical output is
 		// "https://[2001:db8::1]:6443". URI-bracketed IPv6 literals
 		// per RFC 3986 §3.2.2.
-		{"ipv6_bracketed_with_port", "[2001:db8::1]:6443", "https://[2001:db8::1]:6443"},
+		{"ipv6_bracketed_with_port", "[2001:db8::1]:6443", fixtureEndpointIPv6Canonical},
 		// IPv6 without explicit port — bare bracketed literal. The
 		// no-port branch strips the outer brackets so JoinHostPort
 		// can add exactly one pair back.
-		{"ipv6_bracketed_no_port", "[2001:db8::1]", "https://[2001:db8::1]:6443"},
+		{"ipv6_bracketed_no_port", "[2001:db8::1]", fixtureEndpointIPv6Canonical},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +92,7 @@ func TestContract_UpdateKubeconfigServer_RewritesAllClusters(t *testing.T) {
 	kcPath := filepath.Join(dir, "kubeconfig")
 
 	cfg := clientcmdapi.NewConfig()
-	cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: "https://1.2.3.4:6443"}
+	cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: fixtureEndpointIPv4Canonical}
 	cfg.Clusters["two"] = &clientcmdapi.Cluster{Server: "https://5.6.7.8:6443"}
 	if err := clientcmd.WriteToFile(*cfg, kcPath); err != nil {
 		t.Fatal(err)
@@ -95,8 +107,8 @@ func TestContract_UpdateKubeconfigServer_RewritesAllClusters(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, c := range got.Clusters {
-		if c.Server != "https://10.0.0.1:6443" {
-			t.Errorf("cluster %q server = %q, want https://10.0.0.1:6443", name, c.Server)
+		if c.Server != fixtureEndpointRotatedCanonical {
+			t.Errorf("cluster %q server = %q, want %s", name, c.Server, fixtureEndpointRotatedCanonical)
 		}
 	}
 }
@@ -110,7 +122,7 @@ func TestContract_UpdateKubeconfigServer_NoChangeWhenAlreadyNormalised(t *testin
 	kcPath := filepath.Join(dir, "kubeconfig")
 
 	cfg := clientcmdapi.NewConfig()
-	cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: "https://10.0.0.1:6443"}
+	cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: fixtureEndpointRotatedCanonical}
 	if err := clientcmd.WriteToFile(*cfg, kcPath); err != nil {
 		t.Fatal(err)
 	}
@@ -173,14 +185,14 @@ func TestContract_AddToGitignore_PreservesExisting(t *testing.T) {
 	setRoot(t, dir)
 
 	gitignore := filepath.Join(dir, ".gitignore")
-	if err := os.WriteFile(gitignore, []byte("# Sensitive\nsecrets.yaml\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitignore, []byte("# Sensitive\n"+localSecretsYamlName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := addToGitignore("artifacts/"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(gitignore)
-	for _, want := range []string{"# Sensitive", "secrets.yaml", "artifacts/"} {
+	for _, want := range []string{"# Sensitive", localSecretsYamlName, "artifacts/"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("expected %q in:\n%s", want, got)
 		}
@@ -229,13 +241,13 @@ func TestContract_AddToGitignore_PathPrefixMatch(t *testing.T) {
 func TestContract_GetClusterNameFromChart_ReadsTopLevelName(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
-	yaml := "apiVersion: v2\nname: my-cluster\nversion: 0.1.0\n"
+	yaml := "apiVersion: v2\nname: " + fixtureClusterNameMy + "\nversion: 0.1.0\n"
 	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := getClusterNameFromChart()
-	if got != "my-cluster" {
-		t.Errorf("expected 'my-cluster', got %q", got)
+	if got != fixtureClusterNameMy {
+		t.Errorf("expected %q, got %q", fixtureClusterNameMy, got)
 	}
 }
 
@@ -266,14 +278,14 @@ func TestContract_GetClusterNameFromChart_ValuesYamlOverridesChartYaml(t *testin
 func TestContract_GetClusterNameFromChart_EmptyValuesClusterNameFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: "+fixtureClusterNameFallback+"\nversion: 0.1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("clusterName: \"\"\nendpoint: \"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := getClusterNameFromChart()
-	if got != "chart-fallback" {
+	if got != fixtureClusterNameFallback {
 		t.Errorf("expected fallback to Chart.yaml name, got %q", got)
 	}
 }
@@ -286,14 +298,14 @@ func TestContract_GetClusterNameFromChart_EmptyValuesClusterNameFallsBack(t *tes
 func TestContract_GetClusterNameFromChart_AbsentValuesKeyFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: "+fixtureClusterNameFallback+"\nversion: 0.1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("endpoint: \"https://example.com:6443\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := getClusterNameFromChart()
-	if got != "chart-fallback" {
+	if got != fixtureClusterNameFallback {
 		t.Errorf("expected fallback to Chart.yaml name, got %q", got)
 	}
 }
@@ -306,14 +318,14 @@ func TestContract_GetClusterNameFromChart_AbsentValuesKeyFallsBack(t *testing.T)
 func TestContract_GetClusterNameFromChart_MalformedValuesFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: chart-fallback\nversion: 0.1.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: "+fixtureClusterNameFallback+"\nversion: 0.1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte(":bad: yaml :"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := getClusterNameFromChart()
-	if got != "chart-fallback" {
+	if got != fixtureClusterNameFallback {
 		t.Errorf("expected fallback on malformed values.yaml, got %q", got)
 	}
 }
@@ -383,5 +395,59 @@ func TestContract_UpdateFileWithConfirmation_SameContentSkips(t *testing.T) {
 	infoAfter, _ := os.Stat(target)
 	if !infoBefore.ModTime().Equal(infoAfter.ModTime()) {
 		t.Errorf("identical content should not touch mtime")
+	}
+}
+
+// === updateKubeconfigEndpoint ===
+
+// Contract: updateKubeconfigEndpoint normalises the supplied endpoint
+// through the same canonical form as normalizeEndpoint. The IPv6
+// `[host]` no-port input must round-trip to `https://[host]:6443` —
+// not `https://[[host]]:6443` (the historic bug from re-implementing
+// the trim-and-rejoin logic without the bracket-stripping branch).
+// Multiple clusters in the kubeconfig all receive the same rewrite.
+func TestContract_UpdateKubeconfigEndpoint_NormalisesAllClusters(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"ipv4_no_port", "1.2.3.4", fixtureEndpointIPv4Canonical},
+		{"ipv4_with_port", "1.2.3.4:50000", fixtureEndpointIPv4Canonical},
+		{"hostname_no_port", "node.example.com", fixtureEndpointHostnameCanonical},
+		// The regression case: bracketed IPv6 literal with no port.
+		// A naive trim+rejoin (re-implemented without the bracket-
+		// stripping branch from normalizeEndpoint) would emit
+		// "https://[[2001:db8::1]]:6443" because net.SplitHostPort
+		// fails on the bare bracketed form and net.JoinHostPort then
+		// re-brackets the already-bracketed string. Pinning the
+		// canonical IPv6 output guards against any future inline
+		// re-implementation.
+		{"ipv6_bracketed_no_port", "[2001:db8::1]", fixtureEndpointIPv6Canonical},
+		{"ipv6_bracketed_with_port", "[2001:db8::1]:6443", fixtureEndpointIPv6Canonical},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := clientcmdapi.NewConfig()
+			cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: fixtureEndpointIPv4Canonical}
+			cfg.Clusters["two"] = &clientcmdapi.Cluster{Server: "https://5.6.7.8:6443"}
+			data, err := clientcmd.Write(*cfg)
+			if err != nil {
+				t.Fatalf("clientcmd.Write: %v", err)
+			}
+
+			got, err := updateKubeconfigEndpoint(data, tc.in)
+			if err != nil {
+				t.Fatalf("updateKubeconfigEndpoint(%q): %v", tc.in, err)
+			}
+
+			parsed, err := clientcmd.Load(got)
+			if err != nil {
+				t.Fatalf("clientcmd.Load round-trip: %v", err)
+			}
+			for name, c := range parsed.Clusters {
+				if c.Server != tc.want {
+					t.Errorf("cluster %q server = %q, want %q (input %q)", name, c.Server, tc.want, tc.in)
+				}
+			}
+		})
 	}
 }

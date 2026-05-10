@@ -16,12 +16,11 @@ package commands
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/modeline"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -31,12 +30,19 @@ import (
 )
 
 // GlobalArgs is the common arguments for the root command.
+//
+//nolint:gochecknoglobals // cobra CLI architecture: persistent flags bind to package-level state shared across all subcommands; refactoring out the global would require threading state through every command's RunE.
 var GlobalArgs global.Args
 
+// Config is the package-level configuration populated from Chart.yaml and
+// CLI persistent flags. Mirrors GlobalArgs for project-root-relative path
+// resolution across every subcommand.
+//
+//nolint:gochecknoglobals // cobra CLI architecture: persistent flags bind to package-level config; mirrors GlobalArgs and is read by every subcommand for project-root-relative path resolution.
 var Config struct {
-	RootDir       string
+	RootDir         string
 	RootDirExplicit bool // true if --root was explicitly set
-	GlobalOptions struct {
+	GlobalOptions   struct {
 		Talosconfig string `yaml:"talosconfig"`
 		Kubeconfig  string `yaml:"kubeconfig"`
 	} `yaml:"globalOptions"`
@@ -46,7 +52,7 @@ var Config struct {
 		Values            []string `yaml:"values"`
 		StringValues      []string `yaml:"stringValues"`
 		FileValues        []string `yaml:"fileValues"`
-		JsonValues        []string `yaml:"jsonValues"`
+		JsonValues        []string `yaml:"jsonValues"` //nolint:revive // public field name kept for backwards compatibility with existing consumers in template.go and pkg/engine
 		LiteralValues     []string `yaml:"literalValues"`
 		TalosVersion      string   `yaml:"talosVersion"`
 		WithSecrets       string   `yaml:"withSecrets"`
@@ -74,6 +80,7 @@ var Config struct {
 //
 // WithClientNoNodes doesn't set any node information on the request context.
 func WithClientNoNodes(action func(context.Context, *client.Client) error, dialOptions ...grpc.DialOption) error {
+	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
 	return GlobalArgs.WithClientNoNodes(action, dialOptions...)
 }
 
@@ -84,7 +91,10 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 			if len(GlobalArgs.Nodes) < 1 {
 				configContext := cli.GetConfigContext()
 				if configContext == nil {
-					return errors.New("failed to resolve config context")
+					return errors.WithHint(
+						errors.New("failed to resolve config context"),
+						"verify ~/.talos/config or pass --talosconfig pointing at a valid file",
+					)
 				}
 
 				GlobalArgs.Nodes = configContext.Nodes
@@ -96,11 +106,11 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 		},
 		dialOptions...,
 	)
-
 }
 
 // WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).
 func WithClientMaintenance(enforceFingerprints []string, action func(context.Context, *client.Client) error) error {
+	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
 	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
 }
 
@@ -108,6 +118,7 @@ func WithClientMaintenance(enforceFingerprints []string, action func(context.Con
 // but with client certificate authentication preserved.
 // This is useful when connecting to nodes via IP addresses not listed in the server certificate's SANs.
 func WithClientSkipVerify(action func(context.Context, *client.Client) error) error {
+	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
 	return GlobalArgs.WithClientSkipVerify(action)
 }
 
@@ -117,10 +128,13 @@ func WithClientAuto(action func(context.Context, *client.Client) error) error {
 	if GlobalArgs.SkipVerify {
 		return WithClientSkipVerify(action)
 	}
+
 	return WithClientNoNodes(action)
 }
 
 // Commands is a list of commands published by the package.
+//
+//nolint:gochecknoglobals // command registry: each subcommand's init() registers itself via addCommand(); main.go iterates the slice to attach all commands to the root cobra command.
 var Commands []*cobra.Command
 
 func addCommand(cmd *cobra.Command) {
@@ -133,12 +147,12 @@ func addCommand(cmd *cobra.Command) {
 func DetectProjectRoot(startDir string) (string, error) {
 	absStartDir, err := filepath.Abs(startDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path: %w", err)
+		return "", errors.Wrap(err, "failed to get absolute path")
 	}
 
 	currentDir := absStartDir
 	for {
-		chartYaml := filepath.Join(currentDir, "Chart.yaml")
+		chartYaml := filepath.Join(currentDir, chartYamlName)
 		secretsYaml := filepath.Join(currentDir, "secrets.yaml")
 		secretsEncryptedYaml := filepath.Join(currentDir, "secrets.encrypted.yaml")
 
@@ -148,9 +162,11 @@ func DetectProjectRoot(startDir string) (string, error) {
 		if _, err := os.Stat(chartYaml); err == nil {
 			chartExists = true
 		}
+
 		if _, err := os.Stat(secretsYaml); err == nil {
 			secretsExists = true
 		}
+
 		if _, err := os.Stat(secretsEncryptedYaml); err == nil {
 			secretsExists = true
 		}
@@ -164,6 +180,7 @@ func DetectProjectRoot(startDir string) (string, error) {
 			// Reached filesystem root
 			break
 		}
+
 		currentDir = parentDir
 	}
 
@@ -175,11 +192,12 @@ func DetectProjectRoot(startDir string) (string, error) {
 func DetectProjectRootForFile(filePath string) (string, error) {
 	absFilePath, err := filepath.Abs(filePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path: %w", err)
+		return "", errors.Wrap(err, "failed to get absolute path")
 	}
 
 	// Get directory containing the file
 	fileDir := filepath.Dir(absFilePath)
+
 	return DetectProjectRoot(fileDir)
 }
 
@@ -191,22 +209,32 @@ func ValidateAndDetectRootsForFiles(filePaths []string) (string, error) {
 	}
 
 	var commonRoot string
+
 	roots := make(map[string]bool)
 
 	for _, filePath := range filePaths {
 		fileRoot, err := DetectProjectRootForFile(filePath)
 		if err != nil {
-			return "", fmt.Errorf("failed to detect root for file %s: %w", filePath, err)
+			return "", errors.Wrapf(err, "failed to detect root for file %s", filePath)
 		}
+
 		if fileRoot == "" {
-			return "", fmt.Errorf("failed to detect project root for file %s (Chart.yaml and secrets.yaml not found)", filePath)
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return "", errors.WithHint(
+				errors.Newf("failed to detect project root for file %s (Chart.yaml and secrets.yaml not found)", filePath),
+				"run `talm init` at the project root, or move the file under an existing talm project",
+			)
 		}
 
 		roots[fileRoot] = true
 		if commonRoot == "" {
 			commonRoot = fileRoot
 		} else if commonRoot != fileRoot {
-			return "", fmt.Errorf("files belong to different project roots: %s and %s", commonRoot, fileRoot)
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return "", errors.WithHint(
+				errors.Newf("files belong to different project roots: %s and %s", commonRoot, fileRoot),
+				"run the command separately for each project, or pass files from a single project root",
+			)
 		}
 	}
 
@@ -219,37 +247,53 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 	return DetectProjectRootForFile(templatePath)
 }
 
-func processModelineAndUpdateGlobals(configFile string, nodesFromArgs bool, endpointsFromArgs bool, overwrite bool) ([]string, error) {
+func processModelineAndUpdateGlobals(configFile string, nodesFromArgs, endpointsFromArgs, overwrite bool) ([]string, error) {
 	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
 	if err != nil {
-		fmt.Printf("Warning: modeline parsing failed: %v\n", err)
-		return nil, err
+		// Don't print the error here — cobra surfaces the wrapped
+		// return through stderr at the command level. Printing here
+		// AND returning the wrap caused the same message to appear
+		// twice with a misleading "Warning:" prefix on the first copy.
+		return nil, errors.Wrapf(err, "parsing modeline in %s", configFile)
 	}
 
-	var templates []string
-
-	// Update global settings if modeline was successfully parsed
-	if modelineConfig != nil {
-		if !nodesFromArgs && len(modelineConfig.Nodes) > 0 {
-			if overwrite {
-				GlobalArgs.Nodes = modelineConfig.Nodes
-			} else {
-				GlobalArgs.Nodes = append(GlobalArgs.Nodes, modelineConfig.Nodes...)
-			}
-		}
-		if !endpointsFromArgs && len(modelineConfig.Endpoints) > 0 {
-			if overwrite {
-				GlobalArgs.Endpoints = modelineConfig.Endpoints
-			} else {
-				GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, modelineConfig.Endpoints...)
-			}
-		}
-		templates = modelineConfig.Templates
-	}
+	templates := updateGlobalsFromModeline(modelineConfig, nodesFromArgs, endpointsFromArgs, overwrite)
 
 	if len(GlobalArgs.Nodes) < 1 {
-		return nil, errors.New("nodes are not set for the command: please use `--nodes` flag or configuration file to set the nodes to run the command against")
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return nil, errors.WithHint(
+			errors.New("nodes are not set for the command"),
+			"use --nodes flag or configuration file to set the nodes to run the command against",
+		)
 	}
 
 	return templates, nil
+}
+
+// updateGlobalsFromModeline merges modeline-supplied nodes/endpoints into
+// GlobalArgs and returns the templates list. Split out of
+// processModelineAndUpdateGlobals to flatten the surrounding nestif and
+// keep modeline-merge logic isolated from validation.
+func updateGlobalsFromModeline(modelineConfig *modeline.Config, nodesFromArgs, endpointsFromArgs, overwrite bool) []string {
+	if modelineConfig == nil {
+		return nil
+	}
+
+	if !nodesFromArgs && len(modelineConfig.Nodes) > 0 {
+		if overwrite {
+			GlobalArgs.Nodes = modelineConfig.Nodes
+		} else {
+			GlobalArgs.Nodes = append(GlobalArgs.Nodes, modelineConfig.Nodes...)
+		}
+	}
+
+	if !endpointsFromArgs && len(modelineConfig.Endpoints) > 0 {
+		if overwrite {
+			GlobalArgs.Endpoints = modelineConfig.Endpoints
+		} else {
+			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, modelineConfig.Endpoints...)
+		}
+	}
+
+	return modelineConfig.Templates
 }

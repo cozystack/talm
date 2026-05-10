@@ -21,26 +21,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var cases = []struct {
+type filesTestCase struct {
 	path, data string
-}{
-	{"ship/captain.txt", "The Captain"},
-	{"ship/stowaway.txt", "Legatt"},
-	{"story/name.txt", "The Secret Sharer"},
-	{"story/author.txt", "Joseph Conrad"},
-	{"multiline/test.txt", "bar\nfoo\n"},
-	{"multiline/test_with_blank_lines.txt", "bar\nfoo\n\n\n"},
+}
+
+func filesTestCases() []filesTestCase {
+	return []filesTestCase{
+		{"ship/captain.txt", "The Captain"},
+		{"ship/stowaway.txt", "Legatt"},
+		{"story/name.txt", "The Secret Sharer"},
+		{"story/author.txt", "Joseph Conrad"},
+		{"multiline/test.txt", "bar\nfoo\n"},
+		{"multiline/test_with_blank_lines.txt", "bar\nfoo\n\n\n"},
+	}
 }
 
 func getTestFiles() files {
-	a := make(files, len(cases))
+	cases := filesTestCases()
+	out := make(files, len(cases))
 	for _, c := range cases {
-		a[c.path] = []byte(c.data)
+		out[c.path] = []byte(c.data)
 	}
-	return a
+	return out
 }
 
 func TestNewFiles(t *testing.T) {
+	cases := filesTestCases()
 	files := getTestFiles()
 	if len(files) != len(cases) {
 		t.Errorf("Expected len() = %d, got %d", len(cases), len(files))
@@ -108,4 +114,29 @@ func TestBlankLines(t *testing.T) {
 
 	as.Equal("bar", out[0])
 	as.Equal("", out[3])
+}
+
+// TestLines_EmptyContent pins the guard against an `index out of
+// range` panic when a key in the files map exists but maps to an
+// empty []byte value. The trailing-newline stripper at the end of
+// Lines reads `content[len(content)-1]` unconditionally, which would
+// panic on a zero-length string. The empty-content branch returns an
+// empty slice (matching the `f[name] == nil` shape) so a `{{ range
+// .Files.Lines "empty.txt" }}` template iterates zero times instead
+// of taking the engine down.
+func TestLines_EmptyContent(t *testing.T) {
+	as := assert.New(t)
+
+	f := files{
+		"empty.txt":        []byte{},
+		"explicitly_nil":   nil,
+		"only_newline.txt": []byte("\n"),
+		"single_line.txt":  []byte("only"),
+	}
+
+	as.Equal([]string{}, f.Lines("empty.txt"), "empty []byte must produce an empty slice without panicking")
+	as.Equal([]string{}, f.Lines("explicitly_nil"), "nil entry must short-circuit before the trailing-newline strip")
+	as.Equal([]string{}, f.Lines("missing.txt"), "absent key must short-circuit before the trailing-newline strip")
+	as.Equal([]string{""}, f.Lines("only_newline.txt"), "single trailing newline strips to one empty line")
+	as.Equal([]string{"only"}, f.Lines("single_line.txt"), "no-trailing-newline content is preserved as a single line")
 }

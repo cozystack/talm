@@ -36,6 +36,7 @@ func newFiles(from []*chart.File) files {
 	for _, f := range from {
 		files[f.Name] = f.Data
 	}
+
 	return files
 }
 
@@ -50,6 +51,7 @@ func (f files) GetBytes(name string) []byte {
 	if v, ok := f[name]; ok {
 		return v
 	}
+
 	return []byte{}
 }
 
@@ -70,21 +72,22 @@ func (f files) Get(name string) string {
 //
 // {{ range $name, $content := .Files.Glob("foo/**") }}
 // {{ $name }}: |
-// {{ .Files.Get($name) | indent 4 }}{{ end }}
+// {{ .Files.Get($name) | indent 4 }}{{ end }}.
 func (f files) Glob(pattern string) files {
-	g, err := glob.Compile(pattern, '/')
+	matcher, err := glob.Compile(pattern, '/')
 	if err != nil {
-		g, _ = glob.Compile("**")
+		matcher, _ = glob.Compile("**")
 	}
 
-	nf := newFiles(nil)
+	matched := newFiles(nil)
+
 	for name, contents := range f {
-		if g.Match(name) {
-			nf[name] = contents
+		if matcher.Match(name) {
+			matched[name] = contents
 		}
 	}
 
-	return nf
+	return matched
 }
 
 // AsConfig turns a Files group and flattens it to a YAML map suitable for
@@ -101,7 +104,7 @@ func (f files) Glob(pattern string) files {
 //
 //	data:
 //
-// {{ .Files.Glob("config/**").AsConfig() | indent 4 }}
+// {{ .Files.Glob("config/**").AsConfig() | indent 4 }}.
 func (f files) AsConfig() string {
 	if f == nil {
 		return ""
@@ -131,7 +134,7 @@ func (f files) AsConfig() string {
 //
 //	data:
 //
-// {{ .Files.Glob("secrets/*").AsSecrets() | indent 4 }}
+// {{ .Files.Glob("secrets/*").AsSecrets() | indent 4 }}.
 func (f files) AsSecrets() string {
 	if f == nil {
 		return ""
@@ -152,14 +155,20 @@ func (f files) AsSecrets() string {
 // This is designed to be called from a template.
 //
 // {{ range .Files.Lines "foo/bar.html" }}
-// {{ . }}{{ end }}
-func (f files) Lines(path string) []string {
-	if f == nil || f[path] == nil {
+// {{ . }}{{ end }}.
+func (f files) Lines(name string) []string {
+	if f == nil || f[name] == nil {
 		return []string{}
 	}
-	s := string(f[path])
-	if s[len(s)-1] == '\n' {
-		s = s[:len(s)-1]
+
+	content := string(f[name])
+	if content == "" {
+		return []string{}
 	}
-	return strings.Split(s, "\n")
+
+	if content[len(content)-1] == '\n' {
+		content = content[:len(content)-1]
+	}
+
+	return strings.Split(content, "\n")
 }

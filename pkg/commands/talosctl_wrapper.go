@@ -21,13 +21,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cockroachdb/errors"
 	taloscommands "github.com/siderolabs/talos/cmd/talosctl/cmd/talos"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// wrapTalosCommand wraps a talosctl command to add --file flag support
+// wrapTalosCommand wraps a talosctl command to add --file flag support.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // cobra wrapper for talosctl forward; branching over (--insecure, --talosconfig override, file/template flags, modeline) is each one short branch.
 func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	// Create a copy of the command to avoid modifying the original
 	wrappedCmd := &cobra.Command{
@@ -47,6 +50,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 	// Copy all flags from original command and handle -f flag conflict
 	fileFlagExists := false
+
 	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 		// Check if this is the --file flag
 		if flag.Name == "file" {
@@ -76,6 +80,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 	// Add --file flag only if it doesn't already exist in the original command
 	var configFiles []string
+
 	if !fileFlagExists {
 		// Double-check that the flag doesn't exist after copying
 		if wrappedCmd.Flags().Lookup("file") == nil {
@@ -92,8 +97,10 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		if idx := strings.Index(cmdName, " "); idx > 0 {
 			baseCmdName = cmdName[:idx]
 		}
-		if baseCmdName == "kubeconfig" {
+
+		if baseCmdName == defaultKubeconfigName {
 			if !cmd.Flags().Changed("force") && cmd.Flags().Lookup("force") != nil {
+				//nolint:wrapcheck // pflag.Set typed error surfaced verbatim.
 				if err := cmd.Flags().Set("force", "true"); err != nil {
 					return err
 				}
@@ -143,6 +150,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		if originalPreRunE != nil {
 			return originalPreRunE(cmd, args)
 		}
+
 		return nil
 	}
 
@@ -155,7 +163,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	originalRunE := wrappedCmd.RunE
 
 	// Special handling for kubeconfig command
-	if baseCmdName == "kubeconfig" {
+	if baseCmdName == defaultKubeconfigName {
 		wrapKubeconfigCommand(wrappedCmd, originalRunE)
 	}
 
@@ -181,11 +189,11 @@ func init() {
 	// Import all commands from talosctl package, except those in the exclusion list
 	// Commands to exclude (these are talm-specific or should not be exposed)
 	excludedCommands := map[string]bool{
-		"apply-config": true, // talm has its own apply command
-		"config":       true, // talm manages config differently
-		"patch":        true, // not needed in talm
-		"upgrade-k8s":  true, // not needed in talm
-		"talosconfig":  true, // talm has its own talosconfig command
+		"apply-config":  true, // talm has its own apply command
+		"config":        true, // talm manages config differently
+		"patch":         true, // not needed in talm
+		"upgrade-k8s":   true, // not needed in talm
+		talosconfigName: true, // talm has its own talosconfig command
 	}
 
 	// Import and wrap each command from talosctl
@@ -197,6 +205,7 @@ func init() {
 			for i, r := range baseName {
 				if r == ' ' || r == '<' || r == '[' {
 					baseName = baseName[:i]
+
 					break
 				}
 			}
@@ -253,12 +262,12 @@ func normalizeEndpoint(endpoint string) string {
 	return "https://" + net.JoinHostPort(host, "6443")
 }
 
-// updateKubeconfigServer updates the server field in all clusters of the kubeconfig file
+// updateKubeconfigServer updates the server field in all clusters of the kubeconfig file.
 func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 	// Load kubeconfig
 	config, err := clientcmd.LoadFromFile(kubeconfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load kubeconfig: %w", err)
+		return errors.Wrap(err, "failed to load kubeconfig")
 	}
 
 	// Normalize endpoint
@@ -266,10 +275,12 @@ func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 
 	// Update server for all clusters
 	updated := false
+
 	for clusterName, cluster := range config.Clusters {
 		if cluster.Server != normalizedEndpoint {
 			cluster.Server = normalizedEndpoint
 			updated = true
+
 			fmt.Fprintf(os.Stderr, "Updated cluster %s server to %s\n", clusterName, normalizedEndpoint)
 		}
 	}
@@ -277,24 +288,26 @@ func updateKubeconfigServer(kubeconfigPath, endpoint string) error {
 	// Save kubeconfig if updated
 	if updated {
 		if err := clientcmd.WriteToFile(*config, kubeconfigPath); err != nil {
-			return fmt.Errorf("failed to write kubeconfig: %w", err)
+			return errors.Wrap(err, "failed to write kubeconfig")
 		}
 	}
 
 	return nil
 }
 
-// addToGitignore adds an entry to .gitignore if it doesn't already exist
+// addToGitignore adds an entry to .gitignore if it doesn't already exist.
 func addToGitignore(entry string) error {
 	gitignoreFile := filepath.Join(Config.RootDir, ".gitignore")
 
 	// Read existing .gitignore if it exists
 	var content string
+
 	if _, err := os.Stat(gitignoreFile); err == nil {
 		existingContent, err := os.ReadFile(gitignoreFile)
 		if err != nil {
-			return fmt.Errorf("failed to read .gitignore: %w", err)
+			return errors.Wrap(err, "failed to read .gitignore")
 		}
+
 		content = string(existingContent)
 
 		// Check if entry already exists
@@ -311,8 +324,9 @@ func addToGitignore(entry string) error {
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
+
 	content += entry + "\n"
 
 	// Write back
-	return os.WriteFile(gitignoreFile, []byte(content), 0o644)
+	return os.WriteFile(gitignoreFile, []byte(content), 0o644) //nolint:gosec,mnd,wrapcheck // talosconfig is intentionally readable by sibling tooling.
 }

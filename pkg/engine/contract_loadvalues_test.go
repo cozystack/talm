@@ -149,10 +149,12 @@ func TestContract_LoadValues_ValueFilesOrderPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.yaml")
 	second := filepath.Join(dir, "second.yaml")
-	if err := os.WriteFile(first, []byte("a: 1\nshared: from-first\n"), 0o644); err != nil {
+	err := os.WriteFile(first, []byte("a: 1\nshared: from-first\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(second, []byte("b: 2\nshared: from-second\n"), 0o644); err != nil {
+	err = os.WriteFile(second, []byte("b: 2\nshared: from-second\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 	out, err := loadValues(Options{ValueFiles: []string{first, second}})
@@ -173,7 +175,8 @@ func TestContract_LoadValues_ValueFilesOrderPrecedence(t *testing.T) {
 func TestContract_LoadValues_JsonValues(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "v.yaml")
-	if err := os.WriteFile(file, []byte("a: 1\n"), 0o644); err != nil {
+	err := os.WriteFile(file, []byte("a: 1\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 	out, err := loadValues(Options{

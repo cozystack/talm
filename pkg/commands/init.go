@@ -16,6 +16,7 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/generated"
 	"github.com/cozystack/talm/pkg/secureperm"
@@ -38,6 +40,54 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
+// Init-flow file and chart name constants. Cross-subcommand strings
+// (initSubcommand, chartYamlName, defaultKubeconfigName,
+// defaultLocalEndpoint) live in consts.go.
+const (
+	// secretsYamlName is the unencrypted secrets manifest written
+	// during init and consumed by chart rendering.
+	secretsYamlName = "secrets.yaml"
+	// secretsEncryptedYamlName is the age-encrypted secrets manifest
+	// committed to git in encrypted form.
+	secretsEncryptedYamlName = "secrets.encrypted.yaml"
+	// talmKeyName is the age private-key file the init flow generates
+	// alongside the encrypted bundle; it is what `.gitignore` excludes
+	// and what tests pin as a sensitive artefact name.
+	talmKeyName = "talm.key"
+	// talosconfigName is the talosctl client-config filename written
+	// during init and rotated by --encrypt/--decrypt.
+	talosconfigName = "talosconfig"
+	// valuesYamlName is the chart's values.yaml manifest filename;
+	// the init flow rewrites it when --image is provided and reads
+	// it from updateTalmLibraryChart.
+	valuesYamlName = "values.yaml"
+	// presetTalmLibrary is the name of the bundled library chart;
+	// it ships with every preset and is excluded from preset-name
+	// detection.
+	presetTalmLibrary = "talm"
+	// presetFileMode is the permission applied to chart artefacts
+	// (Chart.yaml, values.yaml, helpers, templates) that are not
+	// secret-bearing.
+	presetFileMode os.FileMode = 0o644
+	// secureDirMode is the permission used for parent directories of
+	// secret-bearing files so an over-permissive umask cannot widen
+	// access.
+	secureDirMode os.FileMode = 0o700
+	// reportVerbCreated and reportVerbUpdated are the operator-facing
+	// verbs the init flow prints when materialising or rewriting a
+	// project artefact. Hoisted so goconst sees a single canonical
+	// reference for each.
+	reportVerbCreated = "Created"
+	reportVerbUpdated = "Updated"
+)
+
+// initCmdFlags is the package-level flag struct backing the init
+// subcommand; cobra binds Flags() entries directly to these fields,
+// which forces a global. The global also exposes the flag values to
+// helpers (validateImageOverride, updateTalmLibraryChart) that share
+// the same configuration without threading it through every signature.
+//
+//nolint:gochecknoglobals // cobra flag binding requires a stable address
 var initCmdFlags struct {
 	force        bool
 	preset       string
@@ -50,12 +100,14 @@ var initCmdFlags struct {
 }
 
 // initCmd represents the `init` command.
+//
+//nolint:gochecknoglobals // cobra command registration requires a package-level value
 var initCmd = &cobra.Command{
-	Use:   "init",
+	Use:   initSubcommand,
 	Short: "Initialize a new project and generate default values",
 	Long:  ``,
 	Args:  cobra.NoArgs,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("talos-version") {
 			initCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
@@ -65,7 +117,10 @@ var initCmd = &cobra.Command{
 		// --decrypt / --update would let the flag silently disappear —
 		// surface the mismatch up front instead.
 		if initCmdFlags.image != "" && (initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update) {
-			return fmt.Errorf("--image is honored on initial init only; not valid with --encrypt, --decrypt, or --update")
+			return errors.WithHint(
+				errors.New("--image is honored on initial init only; not valid with --encrypt, --decrypt, or --update"),
+				"drop --image, or run init without --encrypt/--decrypt/--update",
+			)
 		}
 
 		// For -e, -d, and -u flags, always check that we're in a project root
@@ -73,14 +128,19 @@ var initCmd = &cobra.Command{
 			// Verify that Config.RootDir is actually a project root
 			detectedRoot, err := DetectProjectRoot(Config.RootDir)
 			if err != nil {
-				return fmt.Errorf("failed to verify project root: %w", err)
+				return errors.Wrap(err, "failed to verify project root")
 			}
+
 			if detectedRoot == "" {
-				return fmt.Errorf("not in a project root: Chart.yaml and secrets.yaml (or secrets.encrypted.yaml) must exist in %s or parent directories", Config.RootDir)
+				return errors.WithHintf(
+					errors.Newf("not in a project root: Chart.yaml and secrets.yaml (or secrets.encrypted.yaml) must exist in %s or parent directories", Config.RootDir),
+					"run from a project directory or pass --root explicitly",
+				)
 			}
 			// Ensure Config.RootDir is set to the detected root
 			absDetectedRoot, _ := filepath.Abs(detectedRoot)
 			absConfigRoot, _ := filepath.Abs(Config.RootDir)
+
 			if absDetectedRoot != absConfigRoot {
 				Config.RootDir = detectedRoot
 			}
@@ -96,11 +156,19 @@ var initCmd = &cobra.Command{
 			// where it can come from -p flag or Chart.yaml
 			return nil
 		}
+
 		if initCmdFlags.preset == "" {
-			return fmt.Errorf("preset is required (use --preset or -p flag)")
+			return errors.WithHint(
+				errors.New("preset is required (use --preset or -p flag)"),
+				"pass --preset cozystack (or another available preset) to choose a chart layout",
+			)
 		}
+
 		if initCmdFlags.name == "" {
-			return fmt.Errorf("cluster name is required (use --name or -N flag)")
+			return errors.WithHint(
+				errors.New("cluster name is required (use --name or -N flag)"),
+				"pass --name <cluster-name> to set the new project's cluster identifier",
+			)
 		}
 		// Validate the operator-supplied cluster name against the same
 		// DNS-1123 subdomain rule the chart helpers enforce at render
@@ -109,7 +177,10 @@ var initCmd = &cobra.Command{
 		// it here means the operator sees the precise upstream message
 		// (length, character class, etc.) before any file is written.
 		if errs := validation.IsDNS1123Subdomain(initCmdFlags.name); len(errs) > 0 {
-			return fmt.Errorf("--name %q is not a valid DNS-1123 subdomain: %s", initCmdFlags.name, strings.Join(errs, "; "))
+			return errors.WithHintf(
+				errors.Newf("--name %q is not a valid DNS-1123 subdomain: %s", initCmdFlags.name, strings.Join(errs, "; ")),
+				"cluster names must be lowercase, alphanumeric or '-'/'.', and start/end with an alphanumeric character",
+			)
 		}
 
 		// Refuse to init when CWD is inside an existing talm project but
@@ -128,11 +199,12 @@ var initCmd = &cobra.Command{
 		// prevent.
 		cwd, err := os.Getwd()
 		if err != nil {
-			return fmt.Errorf("failed to determine current working directory: %w", err)
+			return errors.Wrap(err, "failed to determine current working directory")
 		}
+
 		absCwd, err := filepath.Abs(cwd)
 		if err != nil {
-			return fmt.Errorf("failed to resolve absolute path of current working directory: %w", err)
+			return errors.Wrap(err, "failed to resolve absolute path of current working directory")
 		}
 		// Config.RootDir may be a relative path (defaults to ".");
 		// filepath.Abs calls os.Getwd internally for relative inputs,
@@ -142,18 +214,23 @@ var initCmd = &cobra.Command{
 		// and let the comparison go the wrong way.
 		absRootDir, err := filepath.Abs(Config.RootDir)
 		if err != nil {
-			return fmt.Errorf("failed to resolve absolute path of project root %q: %w", Config.RootDir, err)
+			return errors.Wrapf(err, "failed to resolve absolute path of project root %q", Config.RootDir)
 		}
+
 		if !Config.RootDirExplicit && absRootDir != absCwd {
 			// %s, not %q: %q calls strconv.Quote which escapes
 			// backslashes in Windows paths (C:\Users\... renders as
 			// "C:\\Users\\..."), making the message harder to read
 			// for the operator and breaking substring tests.
-			return fmt.Errorf("refusing to init: %s is inside an existing talm project at %s. To create a new project under the current directory, pass --root . explicitly. To re-initialise the parent, run from the parent directory", absCwd, absRootDir)
+			return errors.WithHint(
+				errors.Newf("refusing to init: %s is inside an existing talm project at %s. To create a new project under the current directory, pass --root . explicitly. To re-initialise the parent, run from the parent directory", absCwd, absRootDir),
+				"pass --root . to create a new project here, or run from the parent directory to re-initialise it",
+			)
 		}
+
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		var (
 			secretsBundle   *secrets.Bundle
 			versionContract *config.VersionContract
@@ -163,10 +240,11 @@ var initCmd = &cobra.Command{
 		if initCmdFlags.update {
 			return updateTalmLibraryChart()
 		}
+
 		if initCmdFlags.talosVersion != "" {
 			versionContract, err = config.ParseContractFromVersion(initCmdFlags.talosVersion)
 			if err != nil {
-				return fmt.Errorf("invalid talos-version: %w", err)
+				return errors.Wrap(err, "invalid talos-version")
 			}
 		}
 
@@ -174,29 +252,37 @@ var initCmd = &cobra.Command{
 			versionContract,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to create secrets bundle: %w", err)
+			return errors.Wrap(err, "failed to create secrets bundle")
 		}
-		var genOptions []generate.Option //nolint:prealloc
+
+		var genOptions []generate.Option
+
 		// Validate preset only if not using --encrypt or --decrypt
 		if !initCmdFlags.encrypt && !initCmdFlags.decrypt {
 			availablePresets, err := generated.AvailablePresets()
 			if err != nil {
-				return fmt.Errorf("failed to get available presets: %w", err)
+				return errors.Wrap(err, "failed to get available presets")
 			}
+
 			if !isValidPreset(initCmdFlags.preset, availablePresets) {
-				return fmt.Errorf("invalid preset: %s. Valid presets are: %v", initCmdFlags.preset, availablePresets)
+				return errors.WithHintf(
+					errors.Newf("invalid preset: %s. Valid presets are: %v", initCmdFlags.preset, availablePresets),
+					"pick one of the listed presets and pass it via --preset",
+				)
 			}
 		}
+
 		if initCmdFlags.talosVersion != "" {
 			var versionContract *config.VersionContract
 
 			versionContract, err = config.ParseContractFromVersion(initCmdFlags.talosVersion)
 			if err != nil {
-				return fmt.Errorf("invalid talos-version: %w", err)
+				return errors.Wrap(err, "invalid talos-version")
 			}
 
 			genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 		}
+
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 
 		// Pre-check every preset-loop destination so a fresh init is
@@ -223,10 +309,12 @@ var initCmd = &cobra.Command{
 		if !initCmdFlags.encrypt && !initCmdFlags.decrypt {
 			presetFiles, err = generated.PresetFiles()
 			if err != nil {
-				return fmt.Errorf("failed to get preset files: %w", err)
+				return errors.Wrap(err, "failed to get preset files")
 			}
+
 			if !initCmdFlags.force {
 				var conflicts []string
+
 				for path := range presetFiles {
 					parts := strings.SplitN(path, "/", 2)
 					// PresetFiles walks an embed.FS so it only ever
@@ -240,7 +328,9 @@ var initCmd = &cobra.Command{
 					if len(parts) < 2 {
 						continue
 					}
+
 					chartName := parts[0]
+
 					var dest string
 					// Library chart files always land under charts/talm/.
 					// Checked first so a hypothetical preset literally
@@ -249,29 +339,35 @@ var initCmd = &cobra.Command{
 					// "talm" today, but the dispatch should not depend
 					// on that invariant).
 					switch chartName {
-					case "talm":
+					case presetTalmLibrary:
 						dest = filepath.Join(Config.RootDir, "charts", path)
 					case initCmdFlags.preset:
 						dest = filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
 					default:
 						continue
 					}
+
 					if _, statErr := os.Stat(dest); statErr == nil {
 						conflicts = append(conflicts, dest)
 					}
 				}
+
 				if len(conflicts) > 0 {
 					slices.Sort(conflicts)
-					return fmt.Errorf("refusing to init: %d file(s) already exist in target directory; pass --force to overwrite, or --update to refresh only the talm library chart:\n  - %s",
-						len(conflicts), strings.Join(conflicts, "\n  - "))
+
+					return errors.WithHint(
+						errors.Newf("refusing to init: %d file(s) already exist in target directory; pass --force to overwrite, or --update to refresh only the talm library chart:\n  - %s",
+							len(conflicts), strings.Join(conflicts, "\n  - ")),
+						"rerun with --force to overwrite, --update to refresh only the talm library chart, or remove the listed files manually",
+					)
 				}
 			}
 		}
 
 		// Handle age encryption logic
-		secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
-		encryptedSecretsFile := filepath.Join(Config.RootDir, "secrets.encrypted.yaml")
-		keyFile := filepath.Join(Config.RootDir, "talm.key")
+		secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
+		encryptedSecretsFile := filepath.Join(Config.RootDir, secretsEncryptedYamlName)
+		keyFile := filepath.Join(Config.RootDir, talmKeyName)
 
 		secretsFileExists := fileExists(secretsFile)
 		encryptedSecretsFileExists := fileExists(encryptedSecretsFile)
@@ -280,19 +376,24 @@ var initCmd = &cobra.Command{
 
 		// Check for invalid state: encrypted file exists but secrets.yaml and key don't
 		if encryptedSecretsFileExists && !secretsFileExists && !keyFileExists {
-			return fmt.Errorf("secrets.encrypted.yaml exists but secrets.yaml and talm.key are missing. Cannot decrypt without key")
+			return errors.WithHint(
+				errors.New("secrets.encrypted.yaml exists but secrets.yaml and talm.key are missing. Cannot decrypt without key"),
+				"restore talm.key from your backup, or recreate the project from scratch if the key is unrecoverable",
+			)
 		}
 
 		// Handle --encrypt flag (early return, doesn't need preset)
 		if initCmdFlags.encrypt {
 			// Ensure key exists before encryption
-			keyFile := filepath.Join(Config.RootDir, "talm.key")
+			keyFile := filepath.Join(Config.RootDir, talmKeyName)
 			keyFileExists := fileExists(keyFile)
+
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
-					return fmt.Errorf("failed to generate key: %w", err)
+					return errors.Wrap(err, "failed to generate key")
 				}
+
 				if keyCreated {
 					fmt.Fprintf(os.Stderr, "Generated new encryption key: talm.key\n")
 					printSecretsWarning()
@@ -300,12 +401,14 @@ var initCmd = &cobra.Command{
 			}
 
 			// Encrypt all sensitive files
-			secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
+			secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
 			talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
+
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
 			if kubeconfigPath == "" {
-				kubeconfigPath = "kubeconfig"
+				kubeconfigPath = defaultKubeconfigName
 			}
+
 			kubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath)
 
 			encryptedCount := 0
@@ -313,18 +416,24 @@ var initCmd = &cobra.Command{
 			// Encrypt secrets.yaml
 			if fileExists(secretsFile) {
 				fmt.Fprintf(os.Stderr, "Encrypting secrets.yaml -> secrets.encrypted.yaml\n")
-				if err := age.EncryptSecretsFile(Config.RootDir); err != nil {
-					return fmt.Errorf("failed to encrypt secrets: %w", err)
+
+				err := age.EncryptSecretsFile(Config.RootDir)
+				if err != nil {
+					return errors.Wrap(err, "failed to encrypt secrets")
 				}
+
 				encryptedCount++
 			}
 
 			// Encrypt talosconfig
 			if fileExists(talosconfigFile) {
 				fmt.Fprintf(os.Stderr, "Encrypting talosconfig -> talosconfig.encrypted\n")
-				if err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted"); err != nil {
-					return fmt.Errorf("failed to encrypt talosconfig: %w", err)
+
+				err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted")
+				if err != nil {
+					return errors.Wrap(err, "failed to encrypt talosconfig")
 				}
+
 				encryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping talosconfig (file not found)\n")
@@ -333,17 +442,21 @@ var initCmd = &cobra.Command{
 			// Encrypt kubeconfig
 			if fileExists(kubeconfigFile) {
 				fmt.Fprintf(os.Stderr, "Encrypting %s -> %s.encrypted\n", kubeconfigPath, kubeconfigPath)
-				if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, kubeconfigPath+".encrypted"); err != nil {
-					return fmt.Errorf("failed to encrypt kubeconfig: %w", err)
+
+				err = age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, kubeconfigPath+".encrypted")
+				if err != nil {
+					return errors.Wrap(err, "failed to encrypt kubeconfig")
 				}
+
 				encryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping %s (file not found)\n", kubeconfigPath)
 			}
 
 			// Update .gitignore file
-			if err := writeGitignoreFile(); err != nil {
-				return fmt.Errorf("failed to update .gitignore: %w", err)
+			err = writeGitignoreFile()
+			if err != nil {
+				return errors.Wrap(err, "failed to update .gitignore")
 			}
 
 			if encryptedCount > 0 {
@@ -351,18 +464,21 @@ var initCmd = &cobra.Command{
 			} else {
 				fmt.Fprintf(os.Stderr, "No files to encrypt.\n")
 			}
+
 			return nil
 		}
 
 		// Handle --decrypt flag (early return, doesn't need preset)
 		if initCmdFlags.decrypt {
 			// Decrypt all encrypted files
-			encryptedSecretsFile := filepath.Join(Config.RootDir, "secrets.encrypted.yaml")
+			encryptedSecretsFile := filepath.Join(Config.RootDir, secretsEncryptedYamlName)
 			encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
+
 			kubeconfigPath := Config.GlobalOptions.Kubeconfig
 			if kubeconfigPath == "" {
-				kubeconfigPath = "kubeconfig"
+				kubeconfigPath = defaultKubeconfigName
 			}
+
 			encryptedKubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath+".encrypted")
 
 			decryptedCount := 0
@@ -370,9 +486,11 @@ var initCmd = &cobra.Command{
 			// Decrypt secrets.encrypted.yaml
 			if fileExists(encryptedSecretsFile) {
 				fmt.Fprintf(os.Stderr, "Decrypting secrets.encrypted.yaml -> secrets.yaml\n")
+
 				if err := age.DecryptSecretsFile(Config.RootDir); err != nil {
-					return fmt.Errorf("failed to decrypt secrets: %w", err)
+					return errors.Wrap(err, "failed to decrypt secrets")
 				}
+
 				decryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping secrets.encrypted.yaml (file not found)\n")
@@ -381,9 +499,11 @@ var initCmd = &cobra.Command{
 			// Decrypt talosconfig.encrypted
 			if fileExists(encryptedTalosconfigFile) {
 				fmt.Fprintf(os.Stderr, "Decrypting talosconfig.encrypted -> talosconfig\n")
+
 				if err := age.DecryptYAMLFile(Config.RootDir, "talosconfig.encrypted", "talosconfig"); err != nil {
-					return fmt.Errorf("failed to decrypt talosconfig: %w", err)
+					return errors.Wrap(err, "failed to decrypt talosconfig")
 				}
+
 				decryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping talosconfig.encrypted (file not found)\n")
@@ -392,9 +512,11 @@ var initCmd = &cobra.Command{
 			// Decrypt kubeconfig.encrypted
 			if fileExists(encryptedKubeconfigFile) {
 				fmt.Fprintf(os.Stderr, "Decrypting %s.encrypted -> %s\n", kubeconfigPath, kubeconfigPath)
+
 				if err := age.DecryptYAMLFile(Config.RootDir, kubeconfigPath+".encrypted", kubeconfigPath); err != nil {
-					return fmt.Errorf("failed to decrypt kubeconfig: %w", err)
+					return errors.Wrap(err, "failed to decrypt kubeconfig")
 				}
+
 				decryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping %s.encrypted (file not found)\n", kubeconfigPath)
@@ -402,7 +524,7 @@ var initCmd = &cobra.Command{
 
 			// Update .gitignore file
 			if err := writeGitignoreFile(); err != nil {
-				return fmt.Errorf("failed to update .gitignore: %w", err)
+				return errors.Wrap(err, "failed to update .gitignore")
 			}
 
 			if decryptedCount > 0 {
@@ -410,13 +532,14 @@ var initCmd = &cobra.Command{
 			} else {
 				fmt.Fprintf(os.Stderr, "No files to decrypt.\n")
 			}
+
 			return nil
 		}
 
 		// If encrypted file exists, decrypt it
 		if encryptedSecretsFileExists && !secretsFileExists {
 			if err := age.DecryptSecretsFile(Config.RootDir); err != nil {
-				return fmt.Errorf("failed to decrypt secrets: %w", err)
+				return errors.Wrap(err, "failed to decrypt secrets")
 			}
 		}
 
@@ -425,6 +548,7 @@ var initCmd = &cobra.Command{
 			if err = writeSecretsBundleToFile(secretsBundle); err != nil {
 				return err
 			}
+
 			secretsFileExists = true // Update flag after creation
 		}
 
@@ -434,15 +558,16 @@ var initCmd = &cobra.Command{
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
-					return fmt.Errorf("failed to generate key: %w", err)
+					return errors.Wrap(err, "failed to generate key")
 				}
+
 				keyFileExists = true // Update flag after creation
 				keyWasCreated = keyCreated
 			}
 
 			// Encrypt secrets
 			if err := age.EncryptSecretsFile(Config.RootDir); err != nil {
-				return fmt.Errorf("failed to encrypt secrets: %w", err)
+				return errors.Wrap(err, "failed to encrypt secrets")
 			}
 		}
 
@@ -459,6 +584,7 @@ var initCmd = &cobra.Command{
 			if _, err := handleTalosconfigEncryption(false); err != nil {
 				return err
 			}
+
 			talosconfigFileExists = fileExists(talosconfigFile)
 		}
 
@@ -466,13 +592,14 @@ var initCmd = &cobra.Command{
 		if !talosconfigFileExists {
 			configBundle, err := gen.GenerateConfigBundle(genOptions, clusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
 			if err != nil {
-				return err
+				return errors.Wrap(err, "generating talos config bundle")
 			}
-			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
+
+			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
 
 			data, err := yaml.Marshal(configBundle.TalosConfig())
 			if err != nil {
-				return fmt.Errorf("failed to marshal config: %+v", err)
+				return errors.Wrap(err, "failed to marshal config")
 			}
 
 			if err = writeSecureToDestination(data, talosconfigFile); err != nil {
@@ -485,6 +612,7 @@ var initCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
 		if talosKeyCreated {
 			keyWasCreated = true
 		}
@@ -492,8 +620,9 @@ var initCmd = &cobra.Command{
 		// Handle kubeconfig encryption logic (check if kubeconfig exists from Chart.yaml)
 		kubeconfigPath := Config.GlobalOptions.Kubeconfig
 		if kubeconfigPath == "" {
-			kubeconfigPath = "kubeconfig"
+			kubeconfigPath = defaultKubeconfigName
 		}
+
 		kubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath)
 		encryptedKubeconfigFile := filepath.Join(Config.RootDir, kubeconfigPath+".encrypted")
 		kubeconfigFileExists := fileExists(kubeconfigFile)
@@ -502,8 +631,9 @@ var initCmd = &cobra.Command{
 		// If encrypted file exists, decrypt it
 		if encryptedKubeconfigFileExists && !kubeconfigFileExists {
 			if err := age.DecryptYAMLFile(Config.RootDir, kubeconfigPath+".encrypted", kubeconfigPath); err != nil {
-				return fmt.Errorf("failed to decrypt kubeconfig: %w", err)
+				return errors.Wrap(err, "failed to decrypt kubeconfig")
 			}
+
 			kubeconfigFileExists = true
 		}
 
@@ -513,14 +643,15 @@ var initCmd = &cobra.Command{
 			if !keyFileExists {
 				_, keyCreated, err := age.GenerateKey(Config.RootDir)
 				if err != nil {
-					return fmt.Errorf("failed to generate key: %w", err)
+					return errors.Wrap(err, "failed to generate key")
 				}
+
 				keyWasCreated = keyCreated
 			}
 
 			// Encrypt kubeconfig
 			if err := age.EncryptYAMLFile(Config.RootDir, kubeconfigPath, kubeconfigPath+".encrypted"); err != nil {
-				return fmt.Errorf("failed to encrypt kubeconfig: %w", err)
+				return errors.Wrap(err, "failed to encrypt kubeconfig")
 			}
 		}
 
@@ -531,7 +662,7 @@ var initCmd = &cobra.Command{
 
 		nodesDir := filepath.Join(Config.RootDir, "nodes")
 		if err := os.MkdirAll(nodesDir, os.ModePerm); err != nil {
-			return fmt.Errorf("failed to create nodes directory: %w", err)
+			return errors.Wrap(err, "failed to create nodes directory")
 		}
 
 		// presetFiles was loaded up-front for the pre-check above and
@@ -550,30 +681,34 @@ var initCmd = &cobra.Command{
 			if chartName == initCmdFlags.preset {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
 				switch parts[len(parts)-1] {
-				case "Chart.yaml":
-					err = writeToDestination(fmt.Appendf(nil, content, clusterName, Config.InitOptions.Version), file, 0o644)
-				case "values.yaml":
+				case chartYamlName:
+					err = writeToDestination(fmt.Appendf(nil, content, clusterName, Config.InitOptions.Version), file, presetFileMode)
+				case valuesYamlName:
 					var rendered []byte
+
 					rendered, err = applyImageOverride([]byte(content), initCmdFlags.image)
 					if err != nil {
 						return err
 					}
-					err = writeToDestination(rendered, file, 0o644)
+
+					err = writeToDestination(rendered, file, presetFileMode)
 				default:
-					err = writeToDestination([]byte(content), file, 0o644)
+					err = writeToDestination([]byte(content), file, presetFileMode)
 				}
+
 				if err != nil {
 					return err
 				}
 			}
 			// Write library chart
-			if chartName == "talm" {
+			if chartName == presetTalmLibrary {
 				file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
-				if parts[len(parts)-1] == "Chart.yaml" {
-					err = writeToDestination(fmt.Appendf(nil, content, "talm", Config.InitOptions.Version), file, 0o644)
+				if parts[len(parts)-1] == chartYamlName {
+					err = writeToDestination(fmt.Appendf(nil, content, presetTalmLibrary, Config.InitOptions.Version), file, presetFileMode)
 				} else {
-					err = writeToDestination([]byte(content), file, 0o644)
+					err = writeToDestination([]byte(content), file, presetFileMode)
 				}
+
 				if err != nil {
 					return err
 				}
@@ -586,28 +721,28 @@ var initCmd = &cobra.Command{
 		}
 
 		return nil
-
 	},
 }
 
 func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	bundleBytes, err := yaml.Marshal(bundle)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "marshalling secrets bundle")
 	}
 
-	secretsFile := filepath.Join(Config.RootDir, "secrets.yaml")
+	secretsFile := filepath.Join(Config.RootDir, secretsYamlName)
 	// validateFileExists is invoked inside writeSecureToDestination;
 	// no need to duplicate the --force / existing-file gate here.
 	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 
-// readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies
+// readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies.
 func readChartYamlPreset() (string, error) {
-	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
+
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read Chart.yaml: %w", err)
+		return "", errors.Wrap(err, "failed to read Chart.yaml")
 	}
 
 	var chartData struct {
@@ -617,17 +752,21 @@ func readChartYamlPreset() (string, error) {
 	}
 
 	if err := yaml.Unmarshal(data, &chartData); err != nil {
-		return "", fmt.Errorf("failed to parse Chart.yaml: %w", err)
+		return "", errors.Wrap(err, "failed to parse Chart.yaml")
 	}
 
 	// Find preset in dependencies (exclude "talm" which is the library chart)
 	for _, dep := range chartData.Dependencies {
-		if dep.Name != "talm" {
+		if dep.Name != presetTalmLibrary {
 			return dep.Name, nil
 		}
 	}
 
-	return "", fmt.Errorf("preset not found in Chart.yaml dependencies")
+	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+	return "", errors.WithHint(
+		errors.New("preset not found in Chart.yaml dependencies"),
+		"add a preset chart (e.g. cozystack) to Chart.yaml's dependencies, or pass --preset on the command line",
+	)
 }
 
 // imageLineRe matches the top-level `image:` line in a preset
@@ -669,9 +808,15 @@ func applyImageOverride(values []byte, override string) ([]byte, error) {
 	// depth for direct callers (unit tests, future code paths that
 	// might skip the validator) so the helper is safe in isolation.
 	if !imageLineRe.Match(values) {
-		return nil, fmt.Errorf("--image was set but the preset values.yaml does not declare a top-level image: field; remove --image, choose a different preset, or add the image field manually")
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return nil, errors.WithHint(
+			errors.New("--image was set but the preset values.yaml does not declare a top-level image: field; remove --image, choose a different preset, or add the image field manually"),
+			"choose a preset that exposes a top-level image: field (e.g. cozystack), or omit --image",
+		)
 	}
+
 	replacement := fmt.Appendf(nil, "image: %q", override)
+
 	return imageLineRe.ReplaceAllFunc(values, func([]byte) []byte {
 		return replacement
 	}), nil
@@ -686,23 +831,36 @@ func validateImageOverride(presetFiles map[string]string, presetName, override s
 	if override == "" {
 		return nil
 	}
+
 	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) != 2 || parts[0] != presetName {
 			continue
 		}
-		if parts[1] != "values.yaml" {
+
+		if parts[1] != valuesYamlName {
 			continue
 		}
+
 		if !imageLineRe.MatchString(content) {
-			return fmt.Errorf("--image was set but preset %q does not declare a top-level image: field in values.yaml; remove --image or choose a preset that exposes it (e.g. cozystack)", presetName)
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("--image was set but preset %q does not declare a top-level image: field in values.yaml; remove --image or choose a preset that exposes it (e.g. cozystack)", presetName),
+				"choose a preset that exposes a top-level image: field, or omit --image",
+			)
 		}
+
 		return nil
 	}
-	return fmt.Errorf("--image was set but preset %q has no values.yaml in the embedded chart files", presetName)
+
+	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+	return errors.WithHint(
+		errors.Newf("--image was set but preset %q has no values.yaml in the embedded chart files", presetName),
+		"this looks like a build-time issue with the embedded chart files; rebuild talm or pick a different preset",
+	)
 }
 
-// askUserOverwrite asks user if they want to overwrite a file
+// askUserOverwrite asks user if they want to overwrite a file.
 func askUserOverwrite(filePath string) (bool, error) {
 	// Show relative path from project root
 	relPath, err := filepath.Rel(Config.RootDir, filePath)
@@ -712,16 +870,20 @@ func askUserOverwrite(filePath string) (bool, error) {
 	}
 
 	reader := bufio.NewReader(os.Stdin)
+
 	fmt.Fprintf(os.Stderr, "File %s differs from template. Overwrite? [y/N]: ", relPath)
+
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		return false, err
+		return false, errors.Wrap(err, "reading interactive overwrite confirmation")
 	}
+
 	response = strings.TrimSpace(strings.ToLower(response))
+
 	return response == "y" || response == "yes", nil
 }
 
-// filesDiffer checks if two files have different content
+// filesDiffer checks if two files have different content.
 func filesDiffer(filePath string, newContent []byte) (bool, error) {
 	existingContent, err := os.ReadFile(filePath)
 	if err != nil {
@@ -729,12 +891,14 @@ func filesDiffer(filePath string, newContent []byte) (bool, error) {
 		if os.IsNotExist(err) {
 			return true, nil
 		}
-		return false, err
+
+		return false, errors.Wrapf(err, "reading %s for diff", filePath)
 	}
-	return string(existingContent) != string(newContent), nil
+
+	return !bytes.Equal(existingContent, newContent), nil
 }
 
-// updateFileWithConfirmation updates a file if it differs, asking user for confirmation
+// updateFileWithConfirmation updates a file if it differs, asking user for confirmation.
 func updateFileWithConfirmation(filePath string, newContent []byte, permissions os.FileMode) error {
 	// Check if file exists
 	exists := fileExists(filePath)
@@ -743,17 +907,21 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 		// File doesn't exist, create it without asking
 		parentDir := filepath.Dir(filePath)
 		if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-			return fmt.Errorf("failed to create output dir: %w", err)
+			return errors.Wrap(err, "failed to create output dir")
 		}
+
 		if err := os.WriteFile(filePath, newContent, permissions); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
+			return errors.Wrap(err, "failed to write file")
 		}
+
 		// Show relative path from project root
 		relPath, err := filepath.Rel(Config.RootDir, filePath)
 		if err != nil {
 			relPath = filePath
 		}
-		fmt.Fprintf(os.Stderr, "Created %s\n", relPath)
+
+		fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbCreated, relPath)
+
 		return nil
 	}
 
@@ -771,22 +939,23 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 	// File differs, ask user
 	overwrite, err := askUserOverwrite(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read user input: %w", err)
+		return errors.Wrap(err, "failed to read user input")
 	}
 
 	if !overwrite {
 		fmt.Fprintf(os.Stderr, "Skipping %s\n", filePath)
+
 		return nil
 	}
 
 	// Write file
 	parentDir := filepath.Dir(filePath)
 	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
+		return errors.Wrap(err, "failed to create output dir")
 	}
 
 	if err := os.WriteFile(filePath, newContent, permissions); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
+		return errors.Wrap(err, "failed to write file")
 	}
 
 	// Show relative path from project root
@@ -794,17 +963,32 @@ func updateFileWithConfirmation(filePath string, newContent []byte, permissions 
 	if err != nil {
 		relPath = filePath
 	}
-	fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+
+	fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbUpdated, relPath)
+
 	return nil
 }
 
+// updateTalmLibraryChart implements `talm init --update`: it refreshes
+// the bundled talm library chart and (optionally) the preset template
+// files in an existing project, leaving secrets and operator-edited
+// values intact. The function is a flat dispatcher over presetFiles
+// entries; splitting it apart at every nestif layer would scatter the
+// per-file dispatch across helpers without making any single branch
+// easier to follow.
+//
+//nolint:gocognit,gocyclo,cyclop,nestif,funlen // see doc above
 func updateTalmLibraryChart() error {
 	// --image is only honored on initial init (it customizes the
 	// preset's values.yaml at write time). Refusing it on --update
 	// surfaces the no-op trap explicitly instead of letting the
 	// user's flag silently disappear.
 	if initCmdFlags.image != "" {
-		return fmt.Errorf("--image is honored on initial init only; for an existing project, edit the image field in values.yaml directly")
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.New("--image is honored on initial init only; for an existing project, edit the image field in values.yaml directly"),
+			"drop --image and edit values.yaml manually if you need to change the installer image on an existing project",
+		)
 	}
 
 	// Determine preset: use -p flag if provided, otherwise try to read from Chart.yaml
@@ -816,78 +1000,101 @@ func updateTalmLibraryChart() error {
 		// Validate preset
 		availablePresets, err := generated.AvailablePresets()
 		if err != nil {
-			return fmt.Errorf("failed to get available presets: %w", err)
+			return errors.Wrap(err, "failed to get available presets")
 		}
+
 		if !isValidPreset(presetName, availablePresets) {
-			return fmt.Errorf("invalid preset: %s. Valid presets are: %v", presetName, availablePresets)
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("invalid preset: %s. Valid presets are: %v", presetName, availablePresets),
+				"pick one of the listed presets and pass it via --preset",
+			)
 		}
 	} else {
 		// Try to read from Chart.yaml
 		var err error
+
 		presetName, err = readChartYamlPreset()
 		if err != nil {
-			return fmt.Errorf("preset is required: use --preset flag or ensure Chart.yaml has a preset dependency: %w", err)
+			return errors.Wrap(err, "preset is required: use --preset flag or ensure Chart.yaml has a preset dependency")
 		}
 	}
 
 	presetFiles, err := generated.PresetFiles()
 	if err != nil {
-		return fmt.Errorf("failed to get preset files: %w", err)
+		return errors.Wrap(err, "failed to get preset files")
 	}
 
 	// Step 1: Update talm library chart files (without interactive confirmation)
 	fmt.Fprintf(os.Stderr, "Updating talm library chart...\n")
+
 	for path, content := range presetFiles {
 		parts := strings.SplitN(path, "/", 2)
+
 		chartName := parts[0]
-		if chartName == "talm" {
+		if chartName == presetTalmLibrary {
 			file := filepath.Join(Config.RootDir, filepath.Join("charts", path))
+
 			var fileContent []byte
-			if parts[len(parts)-1] == "Chart.yaml" {
-				fileContent = fmt.Appendf(nil, content, "talm", Config.InitOptions.Version)
+			if parts[len(parts)-1] == chartYamlName {
+				fileContent = fmt.Appendf(nil, content, presetTalmLibrary, Config.InitOptions.Version)
 			} else {
 				fileContent = []byte(content)
 			}
+
 			// For talm library, always update without asking
 			parentDir := filepath.Dir(file)
 			if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-				return fmt.Errorf("failed to create output dir: %w", err)
+				return errors.Wrap(err, "failed to create output dir")
 			}
-			if err := os.WriteFile(file, fileContent, 0o644); err != nil {
-				return fmt.Errorf("failed to write file: %w", err)
+
+			// Library chart files are public (Chart.yaml, helpers,
+			// templates) — 0o644 is the documented Helm convention,
+			// not a secret leak.
+			if err := os.WriteFile(file, fileContent, presetFileMode); err != nil {
+				return errors.Wrap(err, "failed to write file")
 			}
+
 			relPath, _ := filepath.Rel(Config.RootDir, file)
-			fmt.Fprintf(os.Stderr, "Updated %s\n", relPath)
+			fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbUpdated, relPath)
 		}
 	}
 
 	// Step 2: Update preset template files (with interactive confirmation)
 	if presetName != "" {
 		fmt.Fprintf(os.Stderr, "Updating preset templates...\n")
+
 		for path, content := range presetFiles {
 			parts := strings.SplitN(path, "/", 2)
+
 			chartName := parts[0]
 			if chartName == presetName {
 				file := filepath.Join(Config.RootDir, filepath.Join(parts[1:]...))
+
 				var fileContent []byte
-				if parts[len(parts)-1] == "Chart.yaml" {
+
+				if parts[len(parts)-1] == chartYamlName {
 					// Read cluster name from existing Chart.yaml
-					existingChartPath := filepath.Join(Config.RootDir, "Chart.yaml")
+					existingChartPath := filepath.Join(Config.RootDir, chartYamlName)
+
 					existingData, err := os.ReadFile(existingChartPath)
 					if err != nil {
-						return fmt.Errorf("failed to read existing Chart.yaml: %w", err)
+						return errors.Wrap(err, "failed to read existing Chart.yaml")
 					}
+
 					var existingChart struct {
 						Name string `yaml:"name"`
 					}
 					if err := yaml.Unmarshal(existingData, &existingChart); err != nil {
-						return fmt.Errorf("failed to parse existing Chart.yaml: %w", err)
+						return errors.Wrap(err, "failed to parse existing Chart.yaml")
 					}
+
 					fileContent = fmt.Appendf(nil, content, existingChart.Name, Config.InitOptions.Version)
 				} else {
 					fileContent = []byte(content)
 				}
-				if err := updateFileWithConfirmation(file, fileContent, 0o644); err != nil {
+
+				if err := updateFileWithConfirmation(file, fileContent, presetFileMode); err != nil {
 					return err
 				}
 			}
@@ -921,20 +1128,36 @@ func isValidPreset(preset string, availablePresets []string) bool {
 func validateFileExists(file string) error {
 	if !initCmdFlags.force {
 		if _, err := os.Stat(file); err == nil {
-			return fmt.Errorf("file %q already exists, use --force to overwrite, and --update to update Talm library chart only", file)
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("file %q already exists, use --force to overwrite, and --update to update Talm library chart only", file),
+				"rerun with --force to overwrite, --update to refresh only the talm library chart, or remove the file manually",
+			)
 		}
 	}
 
 	return nil
 }
 
+// gitignoreEntryCount is the size of the requiredEntries slice in
+// writeGitignoreFile: three secret-bearing artefacts plus the
+// kubeconfig base name. Hoisting it into a const sidesteps mnd's
+// magic-number lint without inlining the comment at every call site.
+const gitignoreEntryCount = 4
+
+//nolint:funlen // wrapping the secrets-list assembly in helpers buys nothing in clarity
 func writeGitignoreFile() error {
-	requiredEntries := []string{"secrets.yaml", "talosconfig", "talm.key"}
+	// Capacity gitignoreEntryCount: three secret-bearing artefacts
+	// (secrets.yaml, talosconfig, talm.key) plus the kubeconfig base
+	// name appended just below. Preallocating avoids the slice growth
+	// prealloc flags.
+	requiredEntries := make([]string, 0, gitignoreEntryCount)
+	requiredEntries = append(requiredEntries, secretsYamlName, talosconfigName, talmKeyName)
 
 	// Add kubeconfig to required entries (use path from config or default)
 	kubeconfigPath := Config.GlobalOptions.Kubeconfig
 	if kubeconfigPath == "" {
-		kubeconfigPath = "kubeconfig"
+		kubeconfigPath = defaultKubeconfigName
 	}
 	// Only add base name (not full path) to gitignore
 	kubeconfigBase := filepath.Base(kubeconfigPath)
@@ -947,8 +1170,9 @@ func writeGitignoreFile() error {
 	if _, err := os.Stat(gitignoreFile); err == nil {
 		existingContent, err := os.ReadFile(gitignoreFile)
 		if err != nil {
-			return fmt.Errorf("failed to read existing .gitignore: %w", err)
+			return errors.Wrap(err, "failed to read existing .gitignore")
 		}
+
 		existingStr = string(existingContent)
 	} else {
 		existingStr = "# Sensitive files\n"
@@ -956,21 +1180,27 @@ func writeGitignoreFile() error {
 
 	// Check which entries are missing
 	needsUpdate := false
+
 	for _, entry := range requiredEntries {
 		// Check if entry exists (as whole line or with comment)
 		lines := strings.Split(existingStr, "\n")
+
 		found := false
+
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == entry || strings.HasPrefix(line, entry+" ") || strings.HasPrefix(line, entry+"#") {
 				found = true
+
 				break
 			}
 		}
+
 		if !found {
 			if !strings.HasSuffix(existingStr, "\n") {
 				existingStr += "\n"
 			}
+
 			existingStr += entry + "\n"
 			needsUpdate = true
 		}
@@ -984,24 +1214,56 @@ func writeGitignoreFile() error {
 	// Write without validation (allow overwrite for .gitignore)
 	parentDir := filepath.Dir(gitignoreFile)
 	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
+		return errors.Wrap(err, "failed to create output dir")
 	}
-	err := os.WriteFile(gitignoreFile, []byte(existingStr), 0o644)
-	if _, statErr := os.Stat(gitignoreFile); statErr == nil {
-		fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
-	} else {
-		fmt.Fprintf(os.Stderr, "Created %s\n", gitignoreFile)
+	// Capture existence BEFORE the write so we can distinguish "created"
+	// from "updated" in the operator-facing log line. Doing the stat
+	// after WriteFile would always succeed (the file exists post-write)
+	// and the message would be wrong on a fresh init — we'd report
+	// "Updated" for a file we just created.
+	//
+	// Branch on os.IsNotExist explicitly so that ambiguous stat
+	// failures (e.g. EACCES on the parent directory, ENOTDIR mid-path)
+	// fall into the same bucket as "exists" — the file may already be
+	// there, we just can't see it. Reporting "Created" for an
+	// inscrutable stat error would be a lie when the WriteFile
+	// succeeded only because the operator separately fixed the
+	// permission. The "Updated" wording is correct in the ambiguous
+	// case because it does not falsely promise the absence we never
+	// confirmed.
+	_, statErrBefore := os.Stat(gitignoreFile)
+
+	// .gitignore is checked into the repo and read by every developer
+	// who clones the project — 0o644 is the standard, not a leak.
+	err := os.WriteFile(gitignoreFile, []byte(existingStr), presetFileMode) //nolint:gosec // .gitignore is world-readable by design
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "%s %s\n", gitignoreReportVerb(statErrBefore), gitignoreFile)
 	}
-	return err
+
+	return errors.Wrap(err, "writing .gitignore")
+}
+
+// gitignoreReportVerb returns the operator-facing verb for the
+// .gitignore write report. The branch is hoisted out of
+// writeGitignoreFile so the IsNotExist contract is unit-testable
+// without an os.Stat fault injection — see
+// TestGitignoreReportVerb_*.
+func gitignoreReportVerb(statErrBefore error) string {
+	if os.IsNotExist(statErrBefore) {
+		return reportVerbCreated
+	}
+
+	return reportVerbUpdated
 }
 
 func fileExists(file string) bool {
 	_, err := os.Stat(file)
+
 	return err == nil
 }
 
 func printSecretsWarning() {
-	keyFile := filepath.Join(Config.RootDir, "talm.key")
+	keyFile := filepath.Join(Config.RootDir, talmKeyName)
 	keyFileExists := fileExists(keyFile)
 
 	if !keyFileExists {
@@ -1030,16 +1292,25 @@ func printSecretsWarning() {
 	fmt.Fprintf(os.Stderr, "\n")
 }
 
-// handleTalosconfigEncryption handles encryption/decryption logic for talosconfig file.
-// It decrypts if encrypted file exists, encrypts if plain file exists.
-// requireKeyForDecrypt: if true, returns error if key is missing when trying to decrypt.
-// Returns true if key was created during this call, false otherwise.
+// handleTalosconfigEncryption handles encryption/decryption logic for
+// talosconfig file. It decrypts if encrypted file exists, encrypts if
+// plain file exists. requireKeyForDecrypt: if true, returns error if
+// key is missing when trying to decrypt. Returns true if key was
+// created during this call, false otherwise.
+//
+// requireKeyForDecrypt always receives false today, but the parameter
+// pins the intended contract for the planned init-time branch that
+// requires the key for an existing encrypted talosconfig. nestif fires
+// on the well-isolated decrypt/encrypt pair; splitting it into helpers
+// wouldn't make either branch easier to follow.
+//
+//nolint:unparam,nestif // see doc above
 func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
 	encryptedTalosconfigFile := filepath.Join(Config.RootDir, "talosconfig.encrypted")
 	talosconfigFileExists := fileExists(talosconfigFile)
 	encryptedTalosconfigFileExists := fileExists(encryptedTalosconfigFile)
-	keyFile := filepath.Join(Config.RootDir, "talm.key")
+	keyFile := filepath.Join(Config.RootDir, talmKeyName)
 	keyFileExists := fileExists(keyFile)
 	keyWasCreated := false
 
@@ -1047,15 +1318,22 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 	if encryptedTalosconfigFileExists && !talosconfigFileExists {
 		if !keyFileExists {
 			if requireKeyForDecrypt {
-				return false, fmt.Errorf("talosconfig.encrypted exists but talm.key is missing. Cannot decrypt without key")
+				//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+				return false, errors.WithHint(
+					errors.New("talosconfig.encrypted exists but talm.key is missing. Cannot decrypt without key"),
+					"restore talm.key from your backup before re-running this command",
+				)
 			}
 			// If key is not required, just return (don't decrypt)
 			return false, nil
 		}
+
 		fmt.Fprintf(os.Stderr, "Decrypting talosconfig.encrypted -> talosconfig\n")
+
 		if err := age.DecryptYAMLFile(Config.RootDir, "talosconfig.encrypted", "talosconfig"); err != nil {
-			return false, fmt.Errorf("failed to decrypt talosconfig: %w", err)
+			return false, errors.Wrap(err, "failed to decrypt talosconfig")
 		}
+
 		talosconfigFileExists = true
 	}
 
@@ -1065,8 +1343,9 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 		if !keyFileExists {
 			_, keyCreated, err := age.GenerateKey(Config.RootDir)
 			if err != nil {
-				return false, fmt.Errorf("failed to generate key: %w", err)
+				return false, errors.Wrap(err, "failed to generate key")
 			}
+
 			keyWasCreated = keyCreated
 			if keyCreated {
 				fmt.Fprintf(os.Stderr, "Generated new encryption key: talm.key\n")
@@ -1075,8 +1354,9 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 
 		// Encrypt talosconfig
 		fmt.Fprintf(os.Stderr, "Encrypting talosconfig -> talosconfig.encrypted\n")
+
 		if err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted"); err != nil {
-			return false, fmt.Errorf("failed to encrypt talosconfig: %w", err)
+			return false, errors.Wrap(err, "failed to encrypt talosconfig")
 		}
 	}
 
@@ -1085,8 +1365,17 @@ func handleTalosconfigEncryption(requireKeyForDecrypt bool) (bool, error) {
 
 // createdSink is where "Created <path>" messages go after a successful
 // write. Swappable in tests to assert no message is emitted on failure.
+//
+//nolint:gochecknoglobals // test seam: tests swap this to capture output without spinning up a fake fd
 var createdSink io.Writer = os.Stderr
 
+// writeToDestination writes a chart artefact (Chart.yaml, values.yaml,
+// helpers, templates) to destination with the supplied permissions.
+// permissions is always presetFileMode today, but the parameter pins
+// the signature for the planned per-file mode dispatch (e.g.
+// owner-only modes for embedded scripts).
+//
+//nolint:unparam // see doc above
 func writeToDestination(data []byte, destination string, permissions os.FileMode) error {
 	if err := validateFileExists(destination); err != nil {
 		return err
@@ -1096,14 +1385,17 @@ func writeToDestination(data []byte, destination string, permissions os.FileMode
 
 	// Create dir path, ignoring "already exists" messages
 	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
+		return errors.Wrap(err, "failed to create output dir")
 	}
 
+	// Permissions are caller-supplied; chart artefacts use
+	// presetFileMode (0o644) by design — they are world-readable.
 	err := os.WriteFile(destination, data, permissions)
 	if err == nil {
-		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+		_, _ = fmt.Fprintf(createdSink, "%s %s\n", reportVerbCreated, destination)
 	}
-	return err
+
+	return errors.Wrapf(err, "writing %s", destination)
 }
 
 // writeSecureToDestination writes a secret (talosconfig, secrets.yaml,
@@ -1120,13 +1412,14 @@ func writeSecureToDestination(data []byte, destination string) error {
 	// Use 0o700 so any newly-created parent dir for secrets is owner-only
 	// even under a permissive umask. MkdirAll is a no-op when the dir
 	// already exists, so this does not override pre-existing dir perms.
-	if err := os.MkdirAll(parentDir, 0o700); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
+	if err := os.MkdirAll(parentDir, secureDirMode); err != nil {
+		return errors.Wrap(err, "failed to create output dir")
 	}
 
 	err := secureperm.WriteFile(destination, data)
 	if err == nil {
-		_, _ = fmt.Fprintf(createdSink, "Created %s\n", destination)
+		_, _ = fmt.Fprintf(createdSink, "%s %s\n", reportVerbCreated, destination)
 	}
-	return err
+
+	return errors.Wrapf(err, "writing secret %s", destination)
 }

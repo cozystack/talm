@@ -19,18 +19,21 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
 )
 
-// wrapKubeconfigCommand adds special handling for kubeconfig command
+// wrapKubeconfigCommand adds special handling for kubeconfig command.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen,nestif // single linear cobra-command wrapper that branches over (--login present? args expected? path inside project? encrypted variant exists?); each branch is ~5 lines, splitting them would scatter the dispatch contract documented in CLAUDE.md.
 func wrapKubeconfigCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Command, []string) error) {
 	// Add --login flag to update system kubeconfig file instead of local one
 	wrappedCmd.Flags().BoolP("login", "l", false, "update system kubeconfig file, not local one")
 
 	// Fix help text for unused arg [local-path] from talosctl kubeconfig command
-	wrappedCmd.Use = "kubeconfig"
+	wrappedCmd.Use = defaultKubeconfigName
 	wrappedCmd.Long = `Download the admin kubeconfig from the node.
 If merge flag is true, config will be merged with ~/.kube/config.
 Otherwise, kubeconfig will be written to PWD.`
@@ -46,9 +49,11 @@ Otherwise, kubeconfig will be written to PWD.`
 
 		// Check if --login flag is set
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
-		
-		var newArgs []string
-		var kubeconfigPath string
+
+		var (
+			newArgs        []string
+			kubeconfigPath string
+		)
 
 		// If --login flag is set, use original args without auto-substitution
 		if loginFlagValue {
@@ -60,15 +65,15 @@ Otherwise, kubeconfig will be written to PWD.`
 			} else {
 				kubeconfigPath = Config.GlobalOptions.Kubeconfig
 				if kubeconfigPath == "" {
-					kubeconfigPath = "kubeconfig"
+					kubeconfigPath = defaultKubeconfigName
 				}
 			}
 		} else {
 			// Always use kubeconfig path from Chart.yaml globalOptions
 			kubeconfigPath = Config.GlobalOptions.Kubeconfig
 			if kubeconfigPath == "" {
-				// Default to "kubeconfig" if not specified in Chart.yaml
-				kubeconfigPath = "kubeconfig"
+				// Default to defaultKubeconfigName if not specified in Chart.yaml
+				kubeconfigPath = defaultKubeconfigName
 			}
 			// Resolve to absolute path relative to project root
 			if !filepath.IsAbs(kubeconfigPath) {
@@ -89,15 +94,18 @@ Otherwise, kubeconfig will be written to PWD.`
 
 		// After command execution, set secure permissions and check if kubeconfig path is in project root
 		// Resolve to absolute path
-		var absPath string
-		var err error
+		var (
+			absPath string
+			err     error
+		)
 		if !filepath.IsAbs(kubeconfigPath) {
 			absPath, err = filepath.Abs(filepath.Join(Config.RootDir, kubeconfigPath))
 		} else {
 			absPath, err = filepath.Abs(kubeconfigPath)
 		}
+
 		if err != nil {
-			return fmt.Errorf("failed to resolve kubeconfig path: %w", err)
+			return errors.Wrap(err, "failed to resolve kubeconfig path")
 		}
 
 		// Set secure permissions (600) on kubeconfig file. On Windows
@@ -113,8 +121,8 @@ Otherwise, kubeconfig will be written to PWD.`
 			if err == nil && !isOutsideRoot(relPath) {
 				// Path is within project root, add to .gitignore
 				fileName := filepath.Base(kubeconfigPath)
-				if fileName == "kubeconfig" {
-					if err := addToGitignore("kubeconfig"); err != nil {
+				if fileName == defaultKubeconfigName {
+					if err := addToGitignore(defaultKubeconfigName); err != nil {
 						// Don't fail the command if gitignore update fails
 						fmt.Fprintf(os.Stderr, "Warning: failed to update .gitignore: %v\n", err)
 					}
@@ -166,9 +174,9 @@ Otherwise, kubeconfig will be written to PWD.`
 	wrappedCmd.Args = func(cmd *cobra.Command, args []string) error {
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
 		if !loginFlagValue && len(args) > 0 {
-			return fmt.Errorf("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
+			return errors.New("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
 		}
+
 		return nil
 	}
 }
-

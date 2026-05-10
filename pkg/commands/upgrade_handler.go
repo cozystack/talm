@@ -15,20 +15,23 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"os"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/spf13/cobra"
 )
 
 // wrapUpgradeCommand adds special handling for upgrade command: extract image from config and set --image flag
+//
+//nolint:gocognit,gocyclo,cyclop,funlen,nestif // cobra wrapper branching over (image extraction, file paths, modeline) for the upgrade flow; each branch is short.
 func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Command, []string) error) {
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Get config files from --file flag
 		var filesToProcess []string
+
 		if fileFlag := cmd.Flags().Lookup("file"); fileFlag != nil {
 			if fileFlagValue, err := cmd.Flags().GetStringSlice("file"); err == nil {
 				filesToProcess = fileFlagValue
@@ -40,6 +43,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 		if err != nil {
 			return err
 		}
+
 		filesToProcess = expandedFiles
 
 		// Detect root from files if specified, otherwise fallback to cwd
@@ -54,13 +58,15 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 
 			// Process modeline to update GlobalArgs
 			nodesFromArgs := len(GlobalArgs.Nodes) > 0
+
 			endpointsFromArgs := len(GlobalArgs.Endpoints) > 0
 			if _, err := processModelineAndUpdateGlobals(configFile, nodesFromArgs, endpointsFromArgs, true); err != nil {
-				return fmt.Errorf("failed to process modeline: %w", err)
+				return errors.Wrap(err, "failed to process modeline")
 			}
 
 			// Get talos-version, with-secrets, kubernetes-version from flags or config
 			talosVersion := Config.TemplateOptions.TalosVersion
+
 			if cmd.Flags().Changed("talos-version") {
 				if val, err := cmd.Flags().GetString("talos-version"); err == nil {
 					talosVersion = val
@@ -68,6 +74,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 
 			withSecrets := Config.TemplateOptions.WithSecrets
+
 			if cmd.Flags().Changed("with-secrets") {
 				if val, err := cmd.Flags().GetString("with-secrets"); err == nil {
 					withSecrets = val
@@ -78,6 +85,7 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			withSecrets = ResolveSecretsPath(withSecrets)
 
 			kubernetesVersion := Config.TemplateOptions.KubernetesVersion
+
 			if cmd.Flags().Changed("kubernetes-version") {
 				if val, err := cmd.Flags().GetString("kubernetes-version"); err == nil {
 					kubernetesVersion = val
@@ -85,7 +93,6 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 
 			// Process config to extract image
-			ctx := context.Background()
 			eopts := engine.Options{
 				TalosVersion:      talosVersion,
 				WithSecrets:       withSecrets,
@@ -93,24 +100,25 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			}
 
 			patches := []string{"@" + configFile}
-			configBundle, machineType, err := engine.FullConfigProcess(ctx, eopts, patches)
+
+			configBundle, machineType, err := engine.FullConfigProcess(eopts, patches)
 			if err != nil {
-				return fmt.Errorf("full config processing error: %s", err)
+				return errors.Wrap(err, "full config processing error")
 			}
 
 			result, err := engine.SerializeConfiguration(configBundle, machineType)
 			if err != nil {
-				return fmt.Errorf("error serializing configuration: %s", err)
+				return errors.Wrap(err, "error serializing configuration")
 			}
 
 			config, err := configloader.NewFromBytes(result)
 			if err != nil {
-				return fmt.Errorf("error loading config: %w", err)
+				return errors.Wrap(err, "error loading config")
 			}
 
 			image := config.Machine().Install().Image()
 			if image == "" {
-				return fmt.Errorf("error getting image from config")
+				return errors.New("error getting image from config")
 			}
 
 			// Set --image flag with extracted image
@@ -127,9 +135,10 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			return originalRunE(cmd, args)
 		} else if wrappedCmd.Run != nil {
 			wrappedCmd.Run(cmd, args)
+
 			return nil
 		}
+
 		return nil
 	}
 }
-

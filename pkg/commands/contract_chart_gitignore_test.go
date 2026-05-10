@@ -23,6 +23,8 @@
 package commands
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +66,7 @@ dependencies:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "cozystack" {
+	if got != presetCozystack {
 		t.Errorf("expected preset 'cozystack', got %q", got)
 	}
 }
@@ -304,5 +306,169 @@ kubeconfig
 	}
 	if strings.Count(string(data), "talosconfig") != 1 {
 		t.Errorf("annotated 'talosconfig' duplicated:\n%s", data)
+	}
+}
+
+// Contract: writeGitignoreFile prints "Created <path>" the first
+// time it actually writes the file and "Updated <path>" on every
+// later write. Pinning this guards against a regression where the
+// existence-check happened AFTER WriteFile (when the file always
+// exists), so a fresh init reported "Updated" for a file it just
+// created. The second pass forces a write by changing the required
+// kubeconfig basename — writeGitignoreFile early-returns when no
+// new entries are needed.
+// captureStderr is a self-contained test helper: redirect os.Stderr
+// to a pipe for the duration of fn, then restore os.Stderr and
+// return whatever fn wrote. The "self-contained" part is
+// load-bearing — restoration happens via a per-call defer rather
+// than t.Cleanup, so back-to-back invocations from the same test do
+// not leak a closed writer into the next call's origStderr capture.
+// See TestCaptureStderr_RestoresOsStderrPerCall for the regression
+// guard.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+
+	// Close both pipe ends in the defer so a panic or t.Fatal
+	// inside fn() does not leak the writer fd. Closing w twice is
+	// safe — os.File.Close on an already-closed file returns an
+	// error which we discard explicitly.
+	defer func() {
+		os.Stderr = origStderr
+		_ = w.Close()
+		_ = r.Close()
+	}()
+
+	fn()
+	_ = w.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+
+	return buf.String()
+}
+
+func TestContract_WriteGitignoreFile_CreatedVsUpdatedReporting(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	originalKube := Config.GlobalOptions.Kubeconfig
+	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
+
+	// First call: fresh tempdir, no .gitignore exists.
+	Config.GlobalOptions.Kubeconfig = ""
+	first := captureStderr(t, func() {
+		if err := writeGitignoreFile(); err != nil {
+			t.Fatalf("first writeGitignoreFile: %v", err)
+		}
+	})
+	if !strings.Contains(first, "Created ") {
+		t.Errorf("first invocation must print 'Created ...', got:\n%s", first)
+	}
+	if strings.Contains(first, "Updated ") {
+		t.Errorf("first invocation must NOT print 'Updated ...', got:\n%s", first)
+	}
+
+	// Second call: change kubeconfig basename so a NEW required entry
+	// is added (otherwise writeGitignoreFile returns early without
+	// printing anything).
+	Config.GlobalOptions.Kubeconfig = "/etc/kubernetes/admin.kubeconfig"
+	second := captureStderr(t, func() {
+		if err := writeGitignoreFile(); err != nil {
+			t.Fatalf("second writeGitignoreFile: %v", err)
+		}
+	})
+	if !strings.Contains(second, "Updated ") {
+		t.Errorf("second invocation must print 'Updated ...', got:\n%s", second)
+	}
+	if strings.Contains(second, "Created ") {
+		t.Errorf("second invocation must NOT print 'Created ...', got:\n%s", second)
+	}
+}
+
+// TestGitignoreReportVerb_BranchesOnIsNotExist pins the verb-pick
+// contract: only ENOENT (the file truly did not exist before
+// WriteFile) yields "Created"; any other stat error — EACCES on a
+// parent directory, ENOTDIR mid-path, EIO on a flaky disk, or even
+// a successful stat (nil error) — yields "Updated". The "Updated"
+// wording in the ambiguous-error branch is deliberate: it does not
+// falsely promise the absence we never confirmed.
+//
+// The previous bare `statErrBefore == nil` test would have wrongly
+// reported "Created" for any non-IsNotExist stat error — wrong if
+// the file already existed but a permission glitch hid it from us.
+func TestGitignoreReportVerb_BranchesOnIsNotExist(t *testing.T) {
+	cases := []struct {
+		name string
+		in   error
+		want string
+	}{
+		{"file_existed_before_write", nil, "Updated"},
+		{"file_did_not_exist_before_write", os.ErrNotExist, "Created"},
+		{"permission_denied_on_parent", os.ErrPermission, "Updated"},
+		{"unwrapped_pathError_notexist", &os.PathError{Op: "stat", Path: "x", Err: os.ErrNotExist}, "Created"},
+		{"unwrapped_pathError_permission", &os.PathError{Op: "stat", Path: "x", Err: os.ErrPermission}, "Updated"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gitignoreReportVerb(tc.in)
+			if got != tc.want {
+				t.Errorf("gitignoreReportVerb(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCaptureStderr_RestoresOsStderrPerCall pins the helper's
+// per-call restore semantics. The previous t.Cleanup-based version
+// passed test assertions only because os.Pipe's buffer absorbed the
+// writes — but between sequential captureStderr calls os.Stderr
+// pointed at the first call's already-closed writer, so the second
+// call's origStderr capture preserved a closed fd, and the surrounding
+// test's t.Cleanup eventually restored that closed fd as the
+// "original" os.Stderr. A test that wrote to os.Stderr after
+// captureStderr returned would have crashed if the buffer had
+// overflowed.
+//
+// The fix replaced t.Cleanup with a per-call defer. This test pins
+// that contract directly: after each captureStderr call, os.Stderr
+// must point at exactly the file it pointed to before the call,
+// not at any pipe writer.
+func TestCaptureStderr_RestoresOsStderrPerCall(t *testing.T) {
+	original := os.Stderr
+
+	first := captureStderr(t, func() {
+		_, _ = os.Stderr.WriteString("first\n")
+	})
+
+	if os.Stderr != original {
+		t.Errorf("after first captureStderr call, os.Stderr is %p, want original %p", os.Stderr, original)
+	}
+	if !strings.Contains(first, "first") {
+		t.Errorf("first capture missing payload; got %q", first)
+	}
+
+	// The critical case: a second call. The buggy t.Cleanup-based
+	// version captured a closed pipe writer here as origStderr.
+	second := captureStderr(t, func() {
+		_, _ = os.Stderr.WriteString("second\n")
+	})
+
+	if os.Stderr != original {
+		t.Errorf("after second captureStderr call, os.Stderr is %p, want original %p", os.Stderr, original)
+	}
+	if !strings.Contains(second, "second") {
+		t.Errorf("second capture missing payload; got %q", second)
+	}
+
+	// Last guard: writing to os.Stderr after the helper returns
+	// must not blow up — proves the restore landed on the real
+	// stderr, not a closed pipe writer.
+	if _, err := os.Stderr.WriteString(""); err != nil {
+		t.Errorf("os.Stderr is no longer usable after captureStderr returned: %v", err)
 	}
 }
