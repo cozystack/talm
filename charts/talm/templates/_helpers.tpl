@@ -295,32 +295,71 @@ true
        is wrong whenever the floatingIP lives on a non-default-route
        NIC, e.g. a private VLAN child on a Hetzner-style topology).
        Returns the empty string when no link's addresses contain the
-       IP — caller is responsible for falling back to
-       default_link_name_by_gateway. CIDR-membership is computed by
-       the engine-registered cidrContains helper (net/netip-backed)
-       so this helper does not have to do per-family bit math in
-       template land. */ -}}
+       IP — the caller (multi-doc Layer2VIPConfig block in the
+       cozystack and generic charts) falls back to
+       default_link_name_by_gateway in that case.
+
+       Selection rules:
+
+         1. The link must be in the configurable-link set
+            (talm.discovered.configurable_link_names) — addresses on
+            CNI bridges, kernel-managed loopbacks, or other
+            non-configurable links must not steal the VIP. The chart
+            does not emit LinkConfig for those links, so a VIP pinned
+            to one would have no surrounding network document.
+
+         2. The address must be globally scoped — host-local,
+            link-local, and nowhere-scoped addresses are skipped, the
+            same filter addresses_by_link applies before emitting
+            LinkConfig.addresses.
+
+         3. Longest-prefix wins. When a node has overlapping subnets
+            (e.g. a /16 on a physical NIC and a /24 on a VLAN child
+            both containing the floatingIP), the more specific subnet
+            is the right answer — same rule the kernel uses for route
+            decisions. Without this, iteration order would silently
+            decide.
+
+       CIDR-membership is computed by the engine-registered
+       cidrContains helper (net/netip-backed); chart templates do not
+       have to do per-family bit math, and IPv4 / IPv6 are handled
+       uniformly. cidrContains is lenient on parse failures (returns
+       false), so a single corrupt or future-format entry in the
+       address table cannot crash the entire render. */ -}}
 {{- define "talm.discovered.link_name_for_address" -}}
 {{- $target := . -}}
+{{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" .) -}}
+{{- /* Track best match across iterations. dict-mutation via Sprig
+       set is the established pattern for cross-iteration state in
+       Go templates; range introduces a new scope per iteration so
+       a plain $var = ... reassignment does not propagate. */ -}}
+{{- $best := dict "link" "" "prefixLen" -1 -}}
 {{- range (lookup "addresses" "" "").items -}}
-{{- if and .spec.address .spec.linkName -}}
-{{- if eq (include "talm.cidrContainsTarget" (dict "cidr" .spec.address "ip" $target)) "true" -}}
-{{- .spec.linkName -}}
-{{- break -}}
+{{- $address := .spec.address | toString -}}
+{{- $linkName := .spec.linkName | toString -}}
+{{- $scope := .spec.scope | toString -}}
+{{- if and $address $linkName -}}
+{{- /* Filter 1: link must be configurable. */ -}}
+{{- if has $linkName $configurable -}}
+{{- /* Filter 2: scope must be set and not host/link/nowhere. */ -}}
+{{- if and (ne $scope "") (not (has $scope (list "host" "link" "nowhere"))) -}}
+{{- /* Filter 3: CIDR must contain the target. */ -}}
+{{- if cidrContains $address $target -}}
+{{- /* Filter 4: longest-prefix match. */ -}}
+{{- $parts := splitList "/" $address -}}
+{{- if eq (len $parts) 2 -}}
+{{- $prefixLen := atoi (index $parts 1) -}}
+{{- if gt $prefixLen (get $best "prefixLen") -}}
+{{- $_ := set $best "link" $linkName -}}
+{{- $_ := set $best "prefixLen" $prefixLen -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
-
-{{- /* Wrapper around the engine-registered cidrContains helper so the
-       caller above can use it inside an `eq` comparison via include.
-       The native `cidrContains` returns a bool, but `include` always
-       yields a string; emit "true" / "" so the caller can `eq ... "true"`
-       and short-circuit on the first match. */ -}}
-{{- define "talm.cidrContainsTarget" -}}
-{{- if cidrContains .cidr .ip -}}
-true
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- get $best "link" -}}
 {{- end -}}
 
 {{- /* Check if a link is a vlan interface */ -}}

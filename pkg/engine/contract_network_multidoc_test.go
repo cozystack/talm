@@ -468,6 +468,85 @@ func TestContract_NetworkMultidoc_HetznerTopology_IPv6VIPOnPrivateVLAN(t *testin
 	assertContains(t, out, "gateway: 88.99.210.1")
 }
 
+// Contract: a non-configurable link (CNI bridge, kernel-managed
+// virtual interface, Wireguard, etc.) cannot win VIP-link selection
+// even if its discovered address CIDR contains the floatingIP.
+// configurable_link_names is the gate — addresses on links outside
+// that set are skipped before CIDR membership is even checked. The
+// chart does not emit LinkConfig for non-configurable links, so a
+// VIP pinned to one would have no surrounding network document and
+// would race CNI's address management on apply.
+//
+// Fixture: pod-CIDR 10.244.0.0/16 on cni0 (kind=ether, no busPath,
+// not in configurable_link_names). floatingIP 10.244.0.5 is INSIDE
+// cni0's CIDR. The helper must skip cni0 and fall back to
+// $defaultLinkName (the IPv4-default-route physical NIC).
+func TestContract_NetworkMultidoc_VIPSkipsNonConfigurableLink(t *testing.T) {
+	out := renderCozystackWith(t, hetznerWithCNIBridgeLookup(), map[string]any{
+		"floatingIP":        "10.244.0.5",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.244.0.5"`)
+	// Falls back to the IPv4-default-route NIC because cni0 is not
+	// in configurable_link_names — even though its /16 contains the
+	// VIP.
+	assertContains(t, out, "link: enp0s31f6\n")
+	if strings.Contains(out, "link: cni0") {
+		t.Errorf("Layer2VIPConfig stole link=cni0 (non-configurable bridge); must skip non-configurable links:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: when two configurable links both carry addresses whose
+// CIDR contains the floatingIP, the link with the more specific
+// (longer) prefix wins. Mirrors the kernel's longest-prefix rule for
+// route decisions. Without this, iteration order silently picks the
+// "winning" link.
+//
+// Fixture: enp0s31f6 has 192.168.0.10/16 (broad) listed first,
+// enp0s31f6.4000 has 192.168.100.4/24 (narrow) listed second. Both
+// CIDRs contain floatingIP 192.168.100.10. The /24 must win.
+func TestContract_NetworkMultidoc_VIPLinkLongestPrefixMatch(t *testing.T) {
+	out := renderCozystackWith(t, overlappingSubnetsLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig picked the broader /16 instead of the more specific /24 — longest-prefix-match regressed:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: a malformed address entry in COSI's addresses table does
+// not crash the chart render. cidrContains is lenient on parse
+// failures (returns false), so the helper skips the bad entry and
+// continues iterating; the rest of the addresses table is processed
+// normally and the VIP-link still resolves correctly.
+//
+// Fixture: a "definitely-not-a-cidr" entry sandwiched between two
+// valid ones. The render must produce the same Layer2VIPConfig as
+// the well-formed Hetzner topology.
+func TestContract_NetworkMultidoc_VIPLinkSurvivesMalformedAddressEntry(t *testing.T) {
+	out := renderCozystackWith(t, malformedAddressEntryLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+}
+
 // Contract: when the floatingIP isn't on any discovered subnet (e.g.
 // an upstream-routable VIP that arrives via the default-route link,
 // or an operator typo), Layer2VIPConfig falls back to the

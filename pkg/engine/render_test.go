@@ -4533,6 +4533,336 @@ func hetznerPublicNICWithPrivateVLANLookup() func(string, string, string) (map[s
 	}
 }
 
+// hetznerWithCNIBridgeLookup mirrors hetznerPublicNICWithPrivateVLANLookup
+// but adds a CNI-style bridge interface (cni0) carrying the pod CIDR
+// 10.244.0.0/16. Pins that an address on a non-configurable link
+// (CNI bridges, kernel-managed virtual interfaces, Wireguard, etc.)
+// cannot win VIP-link selection — the multi-doc loop only emits
+// LinkConfig for links in talm.discovered.configurable_link_names,
+// so a VIP pinned to cni0 would have no surrounding LinkConfig and
+// would race CNI's address management on apply.
+//
+// Selection logic must filter on the configurable-link set BEFORE
+// running CIDR-membership; this fixture's floatingIP (10.244.0.5)
+// is inside cni0's pod CIDR but cni0 isn't configurable, so the
+// helper must skip cni0 entirely and fall back to the default-route
+// link (enp0s31f6).
+func hetznerWithCNIBridgeLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	// CNI bridge has no busPath (virtual), kind is bridge but the
+	// configurable-link filter today excludes interfaces with the
+	// "bridge" kind only when they're not also marked. The actual
+	// exclusion mechanism here is naming + busPath: the chart's
+	// configurable_link_names accepts kinds {bond, vlan, bridge}, so
+	// a bridge IS configurable today. Use a name pattern (cni0)
+	// that does not match the physical-NIC regex AND is "ether"
+	// kind so neither isPhysical nor isVirtual fires.
+	cniBridge := map[string]any{
+		"metadata": map[string]any{"id": "cni0"},
+		"spec": map[string]any{
+			"kind":  "ether",
+			"index": 3,
+			"mtu":   1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN, cniBridge},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+			// CNI bridge carrying pod CIDR. The floatingIP (10.244.0.5
+			// in the test) is inside this CIDR — but cni0 is not in
+			// configurable_link_names, so the helper must NOT pick it.
+			map[string]any{"spec": map[string]any{"linkName": "cni0", "address": "10.244.0.1/16", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "cni0":
+				return cniBridge, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// overlappingSubnetsLookup pins the longest-prefix-match contract.
+// Two configurable links carry overlapping subnets that both contain
+// the floatingIP: enp0s31f6 with a /16 (192.168.0.0/16) and
+// enp0s31f6.4000 with a /24 (192.168.100.0/24). The VIP must land on
+// the more specific subnet — otherwise iteration order silently
+// decides, which is whatever discovery happens to list first.
+func overlappingSubnetsLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.0.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			// Broad /16 listed FIRST — without longest-prefix logic
+			// the helper would return enp0s31f6 by iteration order.
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "192.168.0.10/16", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.0.10/16"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// malformedAddressEntryLookup is the IPv4 Hetzner fixture with one
+// extra "garbage" address entry — used to pin that a corrupt or
+// future-format CIDR in the addresses table does not crash the
+// entire chart render. cidrContains is lenient on parse failures
+// (returns false) so the helper skips the bad entry and continues
+// iterating.
+func malformedAddressEntryLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			// Garbage entry sandwiched between valid ones — corrupt
+			// COSI state or a future Talos version emitting a
+			// different format must not abort the whole render.
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "definitely-not-a-cidr", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // hetznerPublicNICWithPrivateIPv6VLANLookup is the IPv6-equivalent of
 // hetznerPublicNICWithPrivateVLANLookup. The same physical / VLAN
 // topology, but the private subnet is a /64 ULA and the VIP is an
