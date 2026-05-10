@@ -70,16 +70,28 @@ func TestEncodeYAMLNodeIndented_WrapsEncodeError(t *testing.T) {
 	}
 }
 
-// TestEncodeYAMLNodeIndented_HappyPath pins the success contract:
-// a small mapping node encodes to 2-space-indented YAML. Guards
-// against a refactor that swaps the indent or breaks the encode
-// pipeline.
+// TestEncodeYAMLNodeIndented_HappyPath pins the success contract
+// AND the 2-space indent the helper installs via SetIndent(2). A
+// nested mapping is used because indentation only manifests at
+// nesting depth ≥ 1: top-level keys never carry leading spaces
+// regardless of the indent setting, so a flat mapping cannot
+// distinguish 2-space from 4-space output. The nested shape pins
+// both the canonical "  inner: leaf" line and the absence of any
+// 4-space-indented variant — guarding against a refactor that
+// swaps SetIndent(2) for SetIndent(4) or drops the call entirely
+// (yaml.v3 default is 4).
 func TestEncodeYAMLNodeIndented_HappyPath(t *testing.T) {
 	node := &yaml.Node{
 		Kind: yaml.MappingNode,
 		Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Value: "key"},
-			{Kind: yaml.ScalarNode, Value: "value"},
+			{Kind: yaml.ScalarNode, Value: "outer"},
+			{
+				Kind: yaml.MappingNode,
+				Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Value: "inner"},
+					{Kind: yaml.ScalarNode, Value: "leaf"},
+				},
+			},
 		},
 	}
 
@@ -89,8 +101,21 @@ func TestEncodeYAMLNodeIndented_HappyPath(t *testing.T) {
 	}
 
 	got := buf.String()
-	if !strings.Contains(got, "key: value") {
-		t.Errorf("missing key: value in encoded output: %q", got)
+
+	// The nested key must appear with exactly two leading spaces.
+	// "\n  inner: leaf" — anchored on the preceding newline so a
+	// stray "    inner: leaf" (4-space indent) does not satisfy
+	// the substring match by accident.
+	const want2Space = "\n  inner: leaf"
+	if !strings.Contains(got, want2Space) {
+		t.Errorf("encoded output missing expected 2-space indented %q in:\n%s", want2Space, got)
+	}
+
+	// Reject a 4-space match outright. yaml.v3's default indent
+	// is 4, so this catches the regression that drops
+	// SetIndent(2).
+	if strings.Contains(got, "\n    inner: leaf") {
+		t.Errorf("encoded output uses 4-space indent (yaml.v3 default), want 2-space:\n%s", got)
 	}
 }
 
