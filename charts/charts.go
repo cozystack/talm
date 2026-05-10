@@ -76,7 +76,7 @@ func AvailablePresets() ([]string, error) {
 
 	entries, err := embeddedCharts.ReadDir(".")
 	if err != nil {
-		return nil, err //nolint:wrapcheck // wrapper around embedded FS ReadDir.
+		return nil, errors.Wrap(err, "reading embedded charts root")
 	}
 
 	for _, entry := range entries {
