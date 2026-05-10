@@ -187,7 +187,7 @@ func initConfig() {
 		cmd = cmd.Parent()
 	}
 
-	if strings.HasPrefix(cmd.Use, "init") {
+	if strings.HasPrefix(cmd.Use, initSubcommandName) {
 		if strings.HasPrefix(Version, "v") {
 			commands.Config.InitOptions.Version = strings.TrimPrefix(Version, `v`)
 		} else {
