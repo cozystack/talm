@@ -4533,6 +4533,114 @@ func hetznerPublicNICWithPrivateVLANLookup() func(string, string, string) (map[s
 	}
 }
 
+// hetznerWithLinkScopedAddressLookup pins that Filter 2 in
+// link_name_for_address (scope must be set and not host/link/nowhere)
+// actually fires. Without the filter, a link-scoped /16 covering the
+// floatingIP would win over the global-scope /24 by longest-prefix
+// match. Configurable VLAN child carries both:
+//   - 192.168.100.4/24 scope=global (the real cluster subnet)
+//   - 169.254.0.1/16   scope=link   (link-local, larger CIDR)
+//
+// floatingIP is 169.254.0.5 — inside the link-local /16, NOT inside
+// the global /24. With Filter 2 the helper skips the link-scoped
+// entry and the helper returns "" so the caller falls back to the
+// default-route link.
+func hetznerWithLinkScopedAddressLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+			// Link-local /16 on the same configurable VLAN. Filter 2
+			// must skip this entry; otherwise the longest-prefix
+			// comparator would pick it for a 169.254.0.x VIP.
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "169.254.0.1/16", "family": "inet4", "scope": "link"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // hetznerWithCNIBridgeLookup mirrors hetznerPublicNICWithPrivateVLANLookup
 // but adds a CNI-style bridge interface (cni0) carrying the pod CIDR
 // 10.244.0.0/16. Pins that an address on a non-configurable link
@@ -5869,6 +5977,36 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 		t.Fatalf("render: %v", err)
 	}
 	return out["cozystack/templates/controlplane.yaml"]
+}
+
+// renderCozystackExpectError mirrors renderCozystackWith but returns
+// the render error to the caller instead of t.Fatal'ing on it. Used
+// by tests that pin error-message contracts (fail-fast on malformed
+// floatingIP, etc.). On unexpected success the returned error is
+// nil and the caller is responsible for t.Fatal-ing.
+func renderCozystackExpectError(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) error {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+
+	return err //nolint:wrapcheck // surfacing the render error verbatim is the whole point of this helper
 }
 
 // renderGenericWith is the generic-preset counterpart of renderCozystackWith.

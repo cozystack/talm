@@ -345,14 +345,17 @@ true
 {{- if and (ne $scope "") (not (has $scope (list "host" "link" "nowhere"))) -}}
 {{- /* Filter 3: CIDR must contain the target. */ -}}
 {{- if cidrContains $address $target -}}
-{{- /* Filter 4: longest-prefix match. */ -}}
-{{- $parts := splitList "/" $address -}}
-{{- if eq (len $parts) 2 -}}
-{{- $prefixLen := atoi (index $parts 1) -}}
+{{- /* Filter 4: longest-prefix match. cidrPrefixLen is the
+       engine-registered helper that wraps net/netip.Prefix.Bits;
+       it returns -1 on parse failure, which loses to any valid
+       prefix length under `gt`. The prior shape split the CIDR on
+       "/" and atoi-d the second part — masked the failure mode
+       where a /0 default-route entry mixed into the address table
+       would tie at 0 and let iteration order pick the winner. */ -}}
+{{- $prefixLen := int (cidrPrefixLen $address) -}}
 {{- if gt $prefixLen (get $best "prefixLen") -}}
 {{- $_ := set $best "link" $linkName -}}
 {{- $_ := set $best "prefixLen" $prefixLen -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

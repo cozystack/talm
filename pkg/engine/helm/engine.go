@@ -120,6 +120,12 @@ const (
 	// helmKeyTalosVersion is the engine-injected template key
 	// for the Talos version of the cluster being rendered.
 	helmKeyTalosVersion = "TalosVersion"
+
+	// templateBoolTrue is the string ipIsValid (and similar
+	// predicates) emit on a true outcome, mirroring Helm's
+	// include-returns-string convention so callers can write
+	// `eq (ipIsValid x) "true"` directly.
+	templateBoolTrue = "true"
 )
 
 var warnRegex = regexp.MustCompile(warnStartDelim + `((?s).*)` + warnEndDelim)
@@ -262,6 +268,8 @@ func (e Engine) initFunMap(tmpl *template.Template) {
 
 	funcMap["cidrNetwork"] = cidrNetwork
 	funcMap["cidrContains"] = cidrContains
+	funcMap["cidrPrefixLen"] = cidrPrefixLen
+	funcMap["ipIsValid"] = ipIsValid
 
 	tmpl.Funcs(funcMap)
 }
@@ -278,6 +286,40 @@ func cidrNetwork(cidr string) (string, error) {
 	}
 
 	return prefix.Masked().String(), nil
+}
+
+// cidrPrefixLen returns the prefix length (in bits) of the given CIDR. -1
+// signals an unparseable input rather than an error so the chart-side
+// longest-prefix-match comparator can simply check `gt prefixLen bestSoFar`
+// without having to thread error handling through every iteration. Mirrors
+// the lenient parse behaviour of cidrContains for the same reason: a corrupt
+// or future-format entry in the COSI addresses table must not crash the
+// entire chart render.
+func cidrPrefixLen(cidr string) (int, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is deliberately a sentinel value, see docstring
+		return -1, nil
+	}
+
+	return prefix.Bits(), nil
+}
+
+// ipIsValid reports whether the given string parses as an IP address literal.
+// Returns the empty string for false and "true" for true so chart templates
+// can use it inside `eq ... "true"` directly, matching the include-returns-
+// string convention. Used by the multi-doc Layer2VIPConfig block to fail-fast
+// at render time when an operator-supplied floatingIP is malformed — a
+// render-time error with the exact bad value is much cheaper to debug than
+// an apply-time rejection from the Talos config controller.
+func ipIsValid(addrStr string) (string, error) {
+	_, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is the "false" outcome of this predicate
+		return "", nil
+	}
+
+	return templateBoolTrue, nil
 }
 
 // cidrContains reports whether the given IP literal falls inside the given

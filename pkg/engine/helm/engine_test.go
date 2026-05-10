@@ -1341,3 +1341,102 @@ func TestCidrContainsTemplateFunc(t *testing.T) {
 		})
 	}
 }
+
+// TestCidrPrefixLenTemplateFunc exercises the cidrPrefixLen helper
+// the chart template uses for longest-prefix-match comparison
+// inside the VIP-link selection loop. -1 on parse failure is a
+// load-bearing sentinel: it loses to any valid prefix length under
+// `gt`, so a corrupt entry in the addresses table cannot tie at 0
+// with a /0 default-route entry and let iteration order pick the
+// winner.
+func TestCidrPrefixLenTemplateFunc(t *testing.T) {
+	renderExpr := func(expr string) (string, error) {
+		chrt := &chart.Chart{
+			Metadata:  &chart.Metadata{Name: "cidrtest"},
+			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Values:    map[string]any{},
+		}
+		var eng Engine
+		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		if err != nil {
+			return "", err
+		}
+		return out["cidrtest/templates/out.yaml"], nil
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ipv4 /24", "192.168.100.0/24", "24"},
+		{"ipv4 /16", "10.0.0.0/16", "16"},
+		{"ipv4 /32 host", "10.0.0.1/32", "32"},
+		{"ipv4 /0 default", "0.0.0.0/0", "0"},
+		{"ipv6 /64", "2001:db8::/64", "64"},
+		{"ipv6 /128 host", "2001:db8::1/128", "128"},
+		{"malformed cidr returns -1", "not-a-cidr", "-1"},
+		{"missing prefix returns -1", "192.168.0.1", "-1"},
+		{"empty returns -1", "", "-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderExpr(fmt.Sprintf(`{{ cidrPrefixLen %q }}`, tt.input))
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("cidrPrefixLen(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIPIsValidTemplateFunc exercises the ipIsValid predicate the
+// multi-doc chart uses to fail-fast on a typoed floatingIP. Returns
+// "true" / "" so chart templates can compose it directly inside
+// `eq ... "true"`. The fail-fast at render time is much cheaper to
+// debug than a Talos apply-time rejection.
+func TestIPIsValidTemplateFunc(t *testing.T) {
+	renderExpr := func(expr string) (string, error) {
+		chrt := &chart.Chart{
+			Metadata:  &chart.Metadata{Name: "iptest"},
+			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Values:    map[string]any{},
+		}
+		var eng Engine
+		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		if err != nil {
+			return "", err
+		}
+		return out["iptest/templates/out.yaml"], nil
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ipv4 valid", "192.168.100.10", "true"},
+		{"ipv4 host CIDR not a bare ip", "192.168.100.10/24", ""},
+		{"ipv4 octet > 255", "10.0.0.300", ""},
+		{"ipv4 with junk suffix", "192.168.100.10x", ""},
+		{"ipv6 valid", "2001:db8::1", "true"},
+		{"ipv6 with zone", "fe80::1%eth0", "true"},
+		{"empty returns false", "", ""},
+		{"hostname not an ip", "controlplane.example.com", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderExpr(fmt.Sprintf(`{{ ipIsValid %q }}`, tt.input))
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("ipIsValid(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

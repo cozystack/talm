@@ -123,6 +123,16 @@ nameservers:
 {{- else }}
   []
 {{- end }}
+{{- /* Validate floatingIP before either VIP-emission branch
+       below depends on it. A typo here would otherwise silently
+       fall through cidrContains (lenient on parse failure) into
+       the default-link fallback, ship a Layer2VIPConfig with a
+       nonsense `name:` value, and surface only at apply time.
+       Render-time `fail` with the bad value is much cheaper to
+       debug. */}}
+{{- if and .Values.floatingIP (ne (ipIsValid .Values.floatingIP) "true") (eq .MachineType "controlplane") }}
+{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." (.Values.floatingIP | toString)) }}
+{{- end }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
        does not yet exist on the live system at first apply (typical
