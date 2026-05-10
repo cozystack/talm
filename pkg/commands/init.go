@@ -1215,16 +1215,26 @@ func writeGitignoreFile() error {
 	// after WriteFile would always succeed (the file exists post-write)
 	// and the message would be wrong on a fresh init — we'd report
 	// "Updated" for a file we just created.
+	//
+	// Branch on os.IsNotExist explicitly so that ambiguous stat
+	// failures (e.g. EACCES on the parent directory, ENOTDIR mid-path)
+	// fall into the same bucket as "exists" — the file may already be
+	// there, we just can't see it. Reporting "Created" for an
+	// inscrutable stat error would be a lie when the WriteFile
+	// succeeded only because the operator separately fixed the
+	// permission. The "Updated" wording is correct in the ambiguous
+	// case because it does not falsely promise the absence we never
+	// confirmed.
 	_, statErrBefore := os.Stat(gitignoreFile)
 
 	// .gitignore is checked into the repo and read by every developer
 	// who clones the project — 0o644 is the standard, not a leak.
 	err := os.WriteFile(gitignoreFile, []byte(existingStr), presetFileMode) //nolint:gosec // .gitignore is world-readable by design
 	if err == nil {
-		if statErrBefore == nil {
-			fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
-		} else {
+		if os.IsNotExist(statErrBefore) {
 			fmt.Fprintf(os.Stderr, "Created %s\n", gitignoreFile)
+		} else {
+			fmt.Fprintf(os.Stderr, "Updated %s\n", gitignoreFile)
 		}
 	}
 
