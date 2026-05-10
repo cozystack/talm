@@ -712,6 +712,43 @@ func TestContract_NetworkMultidoc_VIPEmitsWithMatchingSubnetEvenWithoutDefaultRo
 	}
 }
 
+// Contract: a numeric (non-string) floatingIP — typed without
+// quotes in values.yaml so YAML parses it as int — must produce
+// the friendly fail-fast error, NOT a Go-template
+// "wrong type for value; expected string; got int" panic.
+//
+// The ipIsValid template function is registered with a string
+// parameter; passing an int through Go text/template raises a
+// type-mismatch panic that surfaces as a stack trace at the line
+// of the `if` predicate, defeating the whole point of the
+// validation block. The chart guards against this by coercing
+// .Values.floatingIP through `toString` before the predicate.
+//
+// Pinning this here ensures a future refactor that drops the
+// toString coercion does not silently regress into the panic —
+// which is exactly the kind of latent failure mode the CLAUDE.md
+// "Helm/Go template numeric scalar" rule flags as a recurring
+// trap.
+func TestContract_NetworkMultidoc_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168, // int, not string
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if err == nil {
+		t.Fatal("expected render to fail on numeric floatingIP, got nil error")
+	}
+	if strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("got Go-template type-mismatch panic instead of friendly fail; the toString coercion must run before the predicate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "192168") {
+		t.Errorf("error must echo the bad value (stringified); got: %v", err)
+	}
+}
+
 // Contract: the malformed-floatingIP fail-fast block runs BEFORE
 // either VIP-emission branch, so even an operator who set vipLink
 // (which would normally suppress the discovery branch entirely)

@@ -205,9 +205,19 @@ nameservers:
        the default-link fallback, ship a Layer2VIPConfig with a
        nonsense `name:` value, and surface only at apply time.
        Render-time `fail` with the bad value is much cheaper to
-       debug. */}}
-{{- if and .Values.floatingIP (not (ipIsValid .Values.floatingIP)) (eq .MachineType "controlplane") }}
-{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." (.Values.floatingIP | toString)) }}
+       debug.
+
+       Coerce through `toString` BEFORE the predicate. An unquoted
+       numeric YAML scalar (`floatingIP: 192168`) parses as int,
+       and ipIsValid is a Go function with a string parameter —
+       passing an int would raise the Go-template
+       "wrong type for value; expected string; got int" panic
+       instead of the friendly fail message. The toString is also
+       the safety net for any future operator yaml shape we have
+       not yet thought of. */}}
+{{- $fipStr := .Values.floatingIP | toString }}
+{{- if and $fipStr (not (ipIsValid $fipStr)) (eq .MachineType "controlplane") }}
+{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) }}
 {{- end }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
