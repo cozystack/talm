@@ -233,20 +233,27 @@ func loadConfig(filename string) error {
 		commands.Config.TemplateOptions.KubernetesVersion = constants.DefaultKubernetesVersion
 	}
 
+	// Fill in the default-string path BEFORE parsing so both the
+	// "operator left timeout empty" and "operator supplied a value"
+	// branches end up with TimeoutDuration populated. The previous
+	// shape parsed only in the else branch, leaving TimeoutDuration
+	// at its zero value when the default kicked in — pre-existing
+	// on main since the original "fix loading defaults" landed in
+	// 2024.
 	if commands.Config.ApplyOptions.Timeout == "" {
 		commands.Config.ApplyOptions.Timeout = constants.ConfigTryTimeout.String()
-	} else {
-		var err error
-
-		commands.Config.ApplyOptions.TimeoutDuration, err = time.ParseDuration(commands.Config.ApplyOptions.Timeout)
-		if err != nil {
-			//nolint:wrapcheck // already wrapped via errors.Wrapf, WithHint adds operator-facing guidance
-			return errors.WithHint(
-				errors.Wrapf(err, "parsing applyOptions.timeout %q from %s", commands.Config.ApplyOptions.Timeout, filename),
-				"applyOptions.timeout in Chart.yaml must be a Go duration literal (e.g. \"30s\", \"2m\", \"1h\")",
-			)
-		}
 	}
+
+	parsed, err := time.ParseDuration(commands.Config.ApplyOptions.Timeout)
+	if err != nil {
+		//nolint:wrapcheck // already wrapped via errors.Wrapf, WithHint adds operator-facing guidance
+		return errors.WithHint(
+			errors.Wrapf(err, "parsing applyOptions.timeout %q from %s", commands.Config.ApplyOptions.Timeout, filename),
+			"applyOptions.timeout in Chart.yaml must be a Go duration literal (e.g. \"30s\", \"2m\", \"1h\")",
+		)
+	}
+
+	commands.Config.ApplyOptions.TimeoutDuration = parsed
 
 	return nil
 }
