@@ -266,7 +266,7 @@ func TestContract_NetworkMultidoc_BridgeConfigEmitted(t *testing.T) {
 // Fixture: bridgeWithClusterSubnetLookup has br0 carrying
 // 10.5.0.10/24 (global scope) and the IPv4 default route. floatingIP
 // 10.5.0.99 is inside that subnet, so link_name_for_address resolves
-// to br0; the discovery-derived Layer2VIPConfig pin'ит link=br0.
+// to br0; the discovery-derived Layer2VIPConfig pins link=br0.
 // Without BridgeConfig emission (the prior shape), this would have
 // been a "VIP on undocumented link" symptom; now BridgeConfig
 // documents the link explicitly and the chart also emits STP
@@ -771,6 +771,43 @@ func TestContract_NetworkMultidoc_VIPEmitsWithMatchingSubnetEvenWithoutDefaultRo
 	assertContains(t, out, "link: enp0s31f6.4000")
 	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
 		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: a nil / unset floatingIP on a controlplane node
+// renders without error and emits no Layer2VIPConfig. The
+// validation block must gate on the RAW .Values.floatingIP
+// truthiness before any toString coercion — Sprig's
+// `nil | toString` returns the literal string "<nil>", which is
+// truthy and not a valid IP, so a naive predicate on the
+// toString'd value would fail-fast on every controlplane render
+// where the operator left floatingIP unset (single-node
+// clusters, LB-fronted multi-node, anything Helm coalesces out
+// of the values table).
+func TestContract_NetworkMultidoc_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("Layer2VIPConfig must not emit when floatingIP is nil; got:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("rendered output leaks the Sprig <nil> literal — fail-fast misfired on nil floatingIP:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of the nil-safe contract above.
+func TestContract_NetworkMultidoc_Generic_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	out := renderGenericWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("generic chart: Layer2VIPConfig must not emit when floatingIP is nil; got:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("generic chart: rendered output leaks the Sprig <nil> literal:\n%s", out)
 	}
 }
 

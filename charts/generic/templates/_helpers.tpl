@@ -131,17 +131,28 @@ nameservers:
        Render-time `fail` with the bad value is much cheaper to
        debug.
 
-       Coerce through `toString` BEFORE the predicate. An unquoted
-       numeric YAML scalar (`floatingIP: 192168`) parses as int,
-       and ipIsValid is a Go function with a string parameter —
-       passing an int would raise the Go-template
+       Gate on the RAW .Values.floatingIP first: nil and missing
+       fields are falsy on the raw value but Sprig's `nil |
+       toString` returns the literal string "<nil>" — truthy and
+       not a valid IP, so feeding it to ipIsValid below would
+       fail-fast on every controlplane render where the operator
+       left floatingIP unset (single-node clusters, LB-fronted
+       multi-node, anything Helm coalesces out of the values
+       table).
+
+       Then coerce through toString INSIDE the gated body. An
+       unquoted numeric YAML scalar (floatingIP: 192168) parses
+       as int, and ipIsValid is a Go function with a string
+       parameter — passing an int would raise the Go-template
        "wrong type for value; expected string; got int" panic
-       instead of the friendly fail message. The toString is also
-       the safety net for any future operator yaml shape we have
-       not yet thought of. */}}
+       instead of the friendly fail message. The toString
+       coercion is also the safety net for any future operator
+       yaml shape we have not yet thought of. */}}
+{{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
 {{- $fipStr := .Values.floatingIP | toString }}
-{{- if and $fipStr (not (ipIsValid $fipStr)) (eq .MachineType "controlplane") }}
+{{- if not (ipIsValid $fipStr) }}
 {{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) }}
+{{- end }}
 {{- end }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
