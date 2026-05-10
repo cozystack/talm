@@ -16,6 +16,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -40,15 +41,15 @@ import (
 // Uses `git ls-files -z` to get the index-tracked file list. Returns
 // an error if the command fails (no git, not a git repo). Empty or
 // non-matching extensions yield an empty list, not an error.
-func committedTextFiles(root string, exts map[string]bool) ([]string, error) {
-	cmd := exec.Command("git", "ls-files", "-z")
+func committedTextFiles(ctx context.Context, root string, exts map[string]bool) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "-z")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, errors.Wrapf(err, "git ls-files in %s", root)
 	}
 	var files []string
-	for _, rel := range bytes.Split(out, []byte{0}) {
+	for rel := range bytes.SplitSeq(out, []byte{0}) {
 		if len(rel) == 0 {
 			continue
 		}
@@ -594,7 +595,7 @@ func TestCommittedTextFilesIgnoresUntrackedArtefacts(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.CommandContext(t.Context(), "git", args...)
 		cmd.Dir = repo
 		// Disable any user gitconfig that could interfere with the
 		// minimal test repo (commit signing, hooks, etc.).
@@ -622,7 +623,7 @@ func TestCommittedTextFilesIgnoresUntrackedArtefacts(t *testing.T) {
 		t.Fatalf("write untracked: %v", err)
 	}
 
-	files, err := committedTextFiles(repo, map[string]bool{".md": true})
+	files, err := committedTextFiles(t.Context(), repo, map[string]bool{".md": true})
 	if err != nil {
 		t.Fatalf("committedTextFiles: %v", err)
 	}
@@ -750,7 +751,7 @@ func TestNoWorkflowLeakageInRepoSource(t *testing.T) {
 		".yml":  true,
 		".md":   true,
 	}
-	files, err := committedTextFiles(moduleRoot, scanExt)
+	files, err := committedTextFiles(t.Context(), moduleRoot, scanExt)
 	if err != nil {
 		t.Fatalf("list committed files: %v", err)
 	}

@@ -17,10 +17,15 @@
 package secureperm
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/cockroachdb/errors"
 )
+
+// secretsFileMode is the permission bitmask for owner-only read/write,
+// used for files that hold cluster secrets (talosconfig, secrets.yaml).
+const secretsFileMode os.FileMode = 0o600
 
 // WriteFile writes data to path atomically with mode 0o600.
 //
@@ -46,26 +51,32 @@ import (
 // invoke talm under a consistent identity.
 func WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".secureperm-*")
+
+	tmpFile, err := os.CreateTemp(dir, ".secureperm-*")
 	if err != nil {
-		return fmt.Errorf("create tmp in %s: %w", dir, err)
+		return errors.Wrapf(err, "create tmp in %s", dir)
 	}
-	tmpPath := f.Name()
+
+	tmpPath := tmpFile.Name()
+
 	committed := false
 	defer func() {
 		if !committed {
-			_ = f.Close()
+			_ = tmpFile.Close()
 			_ = os.Remove(tmpPath)
 		}
 	}()
 
 	// os.CreateTemp already uses 0o600 but enforce explicitly so the
 	// contract survives any future stdlib change.
-	if err := f.Chmod(0o600); err != nil {
-		return fmt.Errorf("chmod tmp: %w", err)
+	err = tmpFile.Chmod(secretsFileMode)
+	if err != nil {
+		return errors.Wrap(err, "chmod tmp")
 	}
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write tmp: %w", err)
+
+	_, err = tmpFile.Write(data)
+	if err != nil {
+		return errors.Wrap(err, "write tmp")
 	}
 	// fsync the tmp file before rename so its contents are on stable
 	// storage; otherwise a crash/power-loss between rename and the
@@ -73,27 +84,40 @@ func WriteFile(path string, data []byte) error {
 	// zero-length or stale data on reboot — the canonical failure mode
 	// the atomic-rename pattern is meant to avoid. Secrets files are
 	// not reconstructible, so the full fsync is warranted.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync tmp: %w", err)
+	err = tmpFile.Sync()
+	if err != nil {
+		return errors.Wrap(err, "sync tmp")
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close tmp: %w", err)
+
+	err = tmpFile.Close()
+	if err != nil {
+		return errors.Wrap(err, "close tmp")
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename tmp -> %s: %w", path, err)
+
+	err = os.Rename(tmpPath, path)
+	if err != nil {
+		return errors.Wrapf(err, "rename tmp -> %s", path)
 	}
+
 	committed = true
 	// Best-effort fsync of the parent dir so the rename entry itself is
 	// durable. Ignored errors: dir fsync is unsupported on a few
 	// filesystems; the tmp fsync above already protects the payload.
-	if d, openErr := os.Open(dir); openErr == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	dirFile, openErr := os.Open(dir)
+	if openErr == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
 	}
+
 	return nil
 }
 
 // LockDown narrows an existing file's permissions to 0o600.
 func LockDown(path string) error {
-	return os.Chmod(path, 0o600)
+	err := os.Chmod(path, secretsFileMode)
+	if err != nil {
+		return errors.Wrapf(err, "chmod %s", path)
+	}
+
+	return nil
 }

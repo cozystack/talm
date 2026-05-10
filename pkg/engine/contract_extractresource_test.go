@@ -34,6 +34,7 @@ import (
 // so test bodies stay tight.
 func makeProtoResource(t *testing.T, namespace, kind, id, yamlSpec string) (*cosiproto.Resource, error) {
 	t.Helper()
+	//nolint:wrapcheck // protobuf.Unmarshal returns a typed error verified by the test's require.Error/NoError contract.
 	return cosiproto.Unmarshal(&cosiv1alpha1.Resource{
 		Metadata: &cosiv1alpha1.Metadata{
 			Namespace: namespace,

@@ -73,7 +73,7 @@ func TestContract_ResolveEngineTemplatePaths_AbsoluteInsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := resolveEngineTemplatePaths([]string{tmpl}, root)
-	if len(got) != 1 || got[0] != "templates/controlplane.yaml" {
+	if len(got) != 1 || got[0] != testTemplateControlplaneRel {
 		t.Errorf("got %v, want [templates/controlplane.yaml]", got)
 	}
 }
@@ -93,8 +93,8 @@ func TestContract_ResolveEngineTemplatePaths_RelativeFromCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
-	got := resolveEngineTemplatePaths([]string{"templates/worker.yaml"}, root)
-	if len(got) != 1 || got[0] != "templates/worker.yaml" {
+	got := resolveEngineTemplatePaths([]string{testTemplateWorker}, root)
+	if len(got) != 1 || got[0] != testTemplateWorker {
 		t.Errorf("got %v, want [templates/worker.yaml]", got)
 	}
 }
@@ -125,7 +125,7 @@ func TestContract_ResolveEngineTemplatePaths_OutsideRootFallbackToTemplatesBasen
 	t.Chdir(sibling)
 
 	got := resolveEngineTemplatePaths([]string{"../some/other/controlplane.yaml"}, root)
-	if len(got) != 1 || got[0] != "templates/controlplane.yaml" {
+	if len(got) != 1 || got[0] != testTemplateControlplaneRel {
 		t.Errorf("got %v, want [templates/controlplane.yaml] (fallback)", got)
 	}
 }
@@ -146,7 +146,7 @@ func TestContract_ResolveEngineTemplatePaths_OutsideRootNoFallback(t *testing.T)
 	}
 	// Must not have been silently rewritten to `templates/missing.yaml`
 	// (because that file does not exist).
-	if got[0] == "templates/missing.yaml" {
+	if got[0] == testTemplateMissing {
 		t.Errorf("did not expect templates/ fallback, got %q", got[0])
 	}
 }
@@ -198,10 +198,10 @@ func TestContract_GenerateOutput_ComposesModelineWarningAndRender(t *testing.T) 
 		templatesFromArgs bool
 	}{
 		offline:       true,
-		templateFiles: []string{"templates/config.yaml"},
+		templateFiles: []string{testTemplateConfig},
 	}
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
-	GlobalArgs.Endpoints = []string{"10.0.0.1"}
+	GlobalArgs.Nodes = []string{testNodeAddrA}
+	GlobalArgs.Endpoints = []string{testNodeAddrA}
 
 	got, err := generateOutput(context.Background(), nil, nil)
 	if err != nil {
@@ -218,7 +218,7 @@ func TestContract_GenerateOutput_ComposesModelineWarningAndRender(t *testing.T) 
 	if !strings.Contains(lines[0], `"10.0.0.1"`) {
 		t.Errorf("modeline missing nodes: %q", lines[0])
 	}
-	if !strings.Contains(lines[0], "templates/config.yaml") {
+	if !strings.Contains(lines[0], testTemplateConfig) {
 		t.Errorf("modeline missing template path: %q", lines[0])
 	}
 	// Line 2: warning banner.
@@ -242,7 +242,7 @@ func TestContract_GenerateOutput_MissingTemplateError(t *testing.T) {
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
 	templateCmdFlags.templateFiles = []string{"templates/does-not-exist.yaml"}
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
+	GlobalArgs.Nodes = []string{testNodeAddrA}
 
 	_, err := generateOutput(context.Background(), nil, nil)
 	if err == nil {
@@ -262,7 +262,7 @@ func TestContract_GenerateOutput_NoTemplatesError(t *testing.T) {
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
 	templateCmdFlags.templateFiles = nil
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
+	GlobalArgs.Nodes = []string{testNodeAddrA}
 
 	_, err := generateOutput(context.Background(), nil, nil)
 	if err == nil {
@@ -281,9 +281,9 @@ func TestContract_Template_PrintsToStdout(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
-	templateCmdFlags.templateFiles = []string{"templates/config.yaml"}
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
-	GlobalArgs.Endpoints = []string{"10.0.0.1"}
+	templateCmdFlags.templateFiles = []string{testTemplateConfig}
+	GlobalArgs.Nodes = []string{testNodeAddrA}
+	GlobalArgs.Endpoints = []string{testNodeAddrA}
 
 	out := captureStdout(t, func() {
 		if err := template(nil)(context.Background(), nil); err != nil {
@@ -309,8 +309,8 @@ func TestContract_Template_PropagatesError(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
-	templateCmdFlags.templateFiles = []string{"templates/missing.yaml"}
-	GlobalArgs.Nodes = []string{"10.0.0.1"}
+	templateCmdFlags.templateFiles = []string{testTemplateMissing}
+	GlobalArgs.Nodes = []string{testNodeAddrA}
 
 	err := template(nil)(context.Background(), nil)
 	if err == nil {
@@ -328,10 +328,12 @@ func TestContract_Template_PropagatesError(t *testing.T) {
 // laptop), so generating it inside every test would dominate the
 // suite runtime. The serialized bytes are reused as the
 // secrets.yaml fixture for every minimal chart.
+//
+//nolint:gochecknoglobals // sync.Once + cached PKI bundle, scoped to the test process; instantiating per-test would dominate runtime
 var (
-	sharedSecretsOnce  sync.Once
-	sharedSecretsYAML  []byte
-	sharedSecretsError error
+	sharedSecretsOnce sync.Once
+	sharedSecretsYAML []byte
+	errSharedSecrets  error
 )
 
 func loadSharedSecretsYAML(t *testing.T) []byte {
@@ -339,13 +341,13 @@ func loadSharedSecretsYAML(t *testing.T) []byte {
 	sharedSecretsOnce.Do(func() {
 		bundle, err := secrets.NewBundle(secrets.NewClock(), nil)
 		if err != nil {
-			sharedSecretsError = err
+			errSharedSecrets = err
 			return
 		}
-		sharedSecretsYAML, sharedSecretsError = yaml.Marshal(bundle)
+		sharedSecretsYAML, errSharedSecrets = yaml.Marshal(bundle)
 	})
-	if sharedSecretsError != nil {
-		t.Fatalf("generate shared secrets bundle: %v", sharedSecretsError)
+	if errSharedSecrets != nil {
+		t.Fatalf("generate shared secrets bundle: %v", errSharedSecrets)
 	}
 	return sharedSecretsYAML
 }

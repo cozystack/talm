@@ -40,6 +40,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// goosWindows is runtime.GOOS's value on Windows. Hoisted to a
+// constant because three Mode0600 contract tests skip themselves on
+// the platform (NTFS does not honour Unix permission bits) — and
+// goconst rightly notes the duplication.
+const goosWindows = "windows"
+
 // === GenerateKey + LoadKey ===
 
 // Contract: GenerateKey on an empty directory creates a fresh
@@ -131,7 +137,8 @@ func TestContract_Age_LoadKey_AcceptsPlainFormat(t *testing.T) {
 	}
 	plainSecret := id.String() + "\n"
 	// Overwrite with plain format (no comments).
-	if err := os.WriteFile(plainFile, []byte(plainSecret), 0o600); err != nil {
+	err = os.WriteFile(plainFile, []byte(plainSecret), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := age.LoadKey(dir)
@@ -150,10 +157,11 @@ func TestContract_Age_LoadKey_AcceptsPlainFormat(t *testing.T) {
 func TestContract_Age_LoadKey_RejectsMalformedKeyFile(t *testing.T) {
 	dir := t.TempDir()
 	malformed := filepath.Join(dir, "talm.key")
-	if err := os.WriteFile(malformed, []byte("# this is not a key\nrandom garbage\n"), 0o600); err != nil {
+	err := os.WriteFile(malformed, []byte("# this is not a key\nrandom garbage\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := age.LoadKey(dir)
+	_, err = age.LoadKey(dir)
 	if err == nil {
 		t.Fatal("expected error for malformed key file")
 	}
@@ -220,7 +228,8 @@ func TestContract_Age_GetPublicKeyFromFile_FallsBackToLoadKey(t *testing.T) {
 	}
 	// Strip the comment lines.
 	plain := id.String() + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "talm.key"), []byte(plain), 0o600); err != nil {
+	err = os.WriteFile(filepath.Join(dir, "talm.key"), []byte(plain), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := age.GetPublicKeyFromFile(dir)
@@ -247,17 +256,21 @@ nested:
     k2: deeply-nested-value
 `)
 	plainFile := filepath.Join(dir, "secrets.yaml")
-	if err := os.WriteFile(plainFile, plain, 0o600); err != nil {
+	err := os.WriteFile(plainFile, plain, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 	// Remove plaintext to prove decrypt restores from encrypted file.
-	if err := os.Remove(plainFile); err != nil {
+	err = os.Remove(plainFile)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.DecryptSecretsFile(dir); err != nil {
+	err = age.DecryptSecretsFile(dir)
+	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
 	got, err := os.ReadFile(plainFile)
@@ -266,10 +279,12 @@ nested:
 	}
 	// Compare semantically — YAML round-trip may reorder keys.
 	var origMap, gotMap map[string]any
-	if err := yaml.Unmarshal(plain, &origMap); err != nil {
+	err = yaml.Unmarshal(plain, &origMap)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.Unmarshal(got, &gotMap); err != nil {
+	err = yaml.Unmarshal(got, &gotMap)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !mapsEqual(origMap, gotMap) {
@@ -284,10 +299,12 @@ nested:
 func TestContract_Age_SecretsFile_EnvelopeFormat(t *testing.T) {
 	dir := t.TempDir()
 	plain := []byte("secret_value: hello-world\n")
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	encrypted, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
@@ -320,17 +337,20 @@ func TestContract_Age_SecretsFile_EnvelopeFormat(t *testing.T) {
 func TestContract_Age_SecretsFile_IncrementalReencryption(t *testing.T) {
 	dir := t.TempDir()
 	plain := []byte("a: alpha\nb: bravo\n")
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
@@ -349,10 +369,12 @@ func TestContract_Age_SecretsFile_IncrementalReencryption(t *testing.T) {
 // per-value encryption).
 func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("a: alpha\nb: bravo\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("a: alpha\nb: bravo\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
@@ -361,10 +383,12 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 	}
 
 	// Change b's value, leave a alone.
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("a: alpha\nb: charlie\n"), 0o600); err != nil {
+	err = os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("a: alpha\nb: charlie\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(filepath.Join(dir, "secrets.encrypted.yaml"))
@@ -398,10 +422,12 @@ func TestContract_Age_SecretsFile_ChangedValueLocalizedDiff(t *testing.T) {
 func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) {
 	dir := t.TempDir()
 	plain := []byte("secret: rotate-me\n")
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), plain, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	oldPub, err := age.GetPublicKeyFromFile(dir)
@@ -409,7 +435,8 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := age.RotateKeys(dir); err != nil {
+	err = age.RotateKeys(dir)
+	if err != nil {
 		t.Fatalf("RotateKeys: %v", err)
 	}
 
@@ -423,10 +450,12 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 	}
 
 	// Decrypt with whatever key is on disk now — plaintext must round-trip.
-	if err := os.Remove(filepath.Join(dir, "secrets.yaml")); err != nil {
+	err = os.Remove(filepath.Join(dir, "secrets.yaml"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.DecryptSecretsFile(dir); err != nil {
+	err = age.DecryptSecretsFile(dir)
+	if err != nil {
 		t.Fatalf("Decrypt after rotation: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "secrets.yaml"))
@@ -434,10 +463,12 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 		t.Fatal(err)
 	}
 	var orig, after map[string]any
-	if err := yaml.Unmarshal(plain, &orig); err != nil {
+	err = yaml.Unmarshal(plain, &orig)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.Unmarshal(got, &after); err != nil {
+	err = yaml.Unmarshal(got, &after)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !mapsEqual(orig, after) {
@@ -459,17 +490,20 @@ func TestContract_Age_RotateKeys_ReplacesKeyAndPreservesPlaintext(t *testing.T) 
 // that exercises the equivalent contract via the platform's
 // security descriptor APIs.
 func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.RotateKeys(dir); err != nil {
+	err = age.RotateKeys(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"talm.key", "secrets.encrypted.yaml"} {
@@ -489,14 +523,16 @@ func TestContract_Age_RotateKeys_BothFilesMode0600(t *testing.T) {
 // same defense-in-depth permission. Skipped on Windows for the
 // same NTFS reason as BothFilesMode0600.
 func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(dir, "secrets.encrypted.yaml"))
@@ -513,14 +549,16 @@ func TestContract_Age_EncryptSecretsFile_Mode0600(t *testing.T) {
 // EncryptSecretsFile — the function is the generic kubeconfig /
 // arbitrary-YAML variant of the secrets-encrypt path.
 func TestContract_Age_EncryptYAMLFile_Mode0600(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Unix permission bits are not honoured on NTFS; secureperm has a Windows-side DACL test that covers the equivalent contract")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "kubeconfig.yaml"), []byte("k: v\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "kubeconfig.yaml"), []byte("k: v\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptYAMLFile(dir, "kubeconfig.yaml", "kubeconfig.encrypted.yaml"); err != nil {
+	err = age.EncryptYAMLFile(dir, "kubeconfig.yaml", "kubeconfig.encrypted.yaml")
+	if err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(dir, "kubeconfig.encrypted.yaml"))
@@ -538,17 +576,21 @@ func TestContract_Age_EncryptYAMLFile_Mode0600(t *testing.T) {
 // would clutter the project and confuse subsequent runs.
 func TestContract_Age_RotateKeys_NoLeftoverBackups(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.RotateKeys(dir); err != nil {
+	err = age.RotateKeys(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"talm.key.rotation-backup", "secrets.encrypted.yaml.rotation-backup"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		_, statErr := os.Stat(filepath.Join(dir, name))
+		if statErr == nil {
 			t.Errorf("rotation left backup file %q on disk", name)
 		}
 	}
@@ -578,10 +620,12 @@ func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing
 		t.Skip("running as root — directory permissions and os.Remove behaviour differ")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -590,7 +634,8 @@ func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing
 	// nil error for directories) and refuses with the leftover
 	// message. The originals are not touched.
 	dirAtBackupPath := filepath.Join(dir, "talm.key.rotation-backup")
-	if err := os.MkdirAll(dirAtBackupPath, 0o755); err != nil {
+	err = os.MkdirAll(dirAtBackupPath, 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.RemoveAll(dirAtBackupPath) }()
@@ -604,7 +649,8 @@ func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing
 		t.Fatal(err)
 	}
 
-	if err := age.RotateKeys(dir); err == nil {
+	err = age.RotateKeys(dir)
+	if err == nil {
 		t.Fatal("expected RotateKeys to fail when a directory blocks the backup path")
 	}
 	gotKey, err := os.ReadFile(filepath.Join(dir, "talm.key"))
@@ -632,20 +678,23 @@ func TestContract_Age_RotateKeys_RefusesWhenDirectoryBlocksBackupPath(t *testing
 // from being silently overwritten by the second run.
 func TestContract_Age_RotateKeys_RefusesOnLeftoverBackup(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("secret: x\n"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptSecretsFile(dir); err != nil {
+	err = age.EncryptSecretsFile(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Simulate an interrupted previous rotation by creating a
 	// dangling `talm.key.rotation-backup`.
 	leftover := filepath.Join(dir, "talm.key.rotation-backup")
-	if err := os.WriteFile(leftover, []byte("orphaned"), 0o600); err != nil {
+	err = os.WriteFile(leftover, []byte("orphaned"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	err := age.RotateKeys(dir)
+	err = age.RotateKeys(dir)
 	if err == nil {
 		t.Fatal("expected RotateKeys to refuse with leftover backup present")
 	}
@@ -658,7 +707,8 @@ func TestContract_Age_RotateKeys_RefusesOnLeftoverBackup(t *testing.T) {
 		t.Errorf("error must mention both 'interrupted' and 'cleanup' as possible origins, got: %v", err)
 	}
 	// The leftover must still be on disk — refusal must not delete it.
-	if _, statErr := os.Stat(leftover); statErr != nil {
+	_, statErr := os.Stat(leftover)
+	if statErr != nil {
 		t.Errorf("leftover backup was removed despite refusal: %v", statErr)
 	}
 }
@@ -674,16 +724,20 @@ func TestContract_Age_GenericYAMLFile_RoundTrip(t *testing.T) {
 	plain := []byte("kubeconfig:\n  server: https://api.example.com:6443\n  token: abc123\n")
 	plainName := "kubeconfig.yaml"
 	encName := "kubeconfig.encrypted.yaml"
-	if err := os.WriteFile(filepath.Join(dir, plainName), plain, 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(dir, plainName), plain, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.EncryptYAMLFile(dir, plainName, encName); err != nil {
+	err = age.EncryptYAMLFile(dir, plainName, encName)
+	if err != nil {
 		t.Fatalf("EncryptYAMLFile: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, plainName)); err != nil {
+	err = os.Remove(filepath.Join(dir, plainName))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := age.DecryptYAMLFile(dir, encName, plainName); err != nil {
+	err = age.DecryptYAMLFile(dir, encName, plainName)
+	if err != nil {
 		t.Fatalf("DecryptYAMLFile: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, plainName))
@@ -691,10 +745,12 @@ func TestContract_Age_GenericYAMLFile_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var origMap, gotMap map[string]any
-	if err := yaml.Unmarshal(plain, &origMap); err != nil {
+	err = yaml.Unmarshal(plain, &origMap)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.Unmarshal(got, &gotMap); err != nil {
+	err = yaml.Unmarshal(got, &gotMap)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !mapsEqual(origMap, gotMap) {

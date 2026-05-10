@@ -28,6 +28,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// notImplementedSentinel is the placeholder string returned by the
+// include/tpl/required late-bound function stubs before the engine
+// rebinds them per render.
+const notImplementedSentinel = "not implemented"
+
 // funcMap returns a mapping of all of the functions that Engine has.
 //
 // Because some functions are late-bound (e.g. contain context-sensitive
@@ -42,36 +47,36 @@ import (
 // These are late-bound in Engine.Render().  The
 // version included in the FuncMap is a placeholder.
 func funcMap() template.FuncMap {
-	f := sprig.TxtFuncMap()
-	delete(f, "env")
-	delete(f, "expandenv")
+	funcs := sprig.TxtFuncMap()
+	delete(funcs, "env")
+	delete(funcs, "expandenv")
 
 	// Add some extra functionality
 	extra := template.FuncMap{
-		"toToml":        toTOML,
-		"toYaml":        toYAML,
-		"fromYaml":      fromYAML,
-		"fromYamlArray": fromYAMLArray,
-		"toJson":        toJSON,
-		"fromJson":      fromJSON,
-		"fromJsonArray": fromJSONArray,
+		helmFuncToToml:   toTOML,
+		helmFuncToYAML:   toYAML,
+		helmFuncFromYAML: fromYAML,
+		"fromYamlArray":  fromYAMLArray,
+		helmFuncToJSON:   toJSON,
+		"fromJson":       fromJSON,
+		"fromJsonArray":  fromJSONArray,
 
 		// This is a placeholder for the "include" function, which is
 		// late-bound to a template. By declaring it here, we preserve the
 		// integrity of the linter.
-		"include":  func(string, any) string { return "not implemented" },
-		"tpl":      func(string, any) any { return "not implemented" },
-		"required": func(string, any) (any, error) { return "not implemented", nil },
+		helmFuncInclude:  func(string, any) string { return notImplementedSentinel },
+		helmFuncTpl:      func(string, any) any { return notImplementedSentinel },
+		helmFuncRequired: func(string, any) (any, error) { return notImplementedSentinel, nil },
 		// Provide a placeholder for the "lookup" function, which requires a kubernetes
 		// connection.
-		"lookup": func(string, string, string, string) (map[string]any, error) {
+		helmFuncLookup: func(string, string, string, string) (map[string]any, error) {
 			return map[string]any{}, nil
 		},
 	}
 
-	maps.Copy(f, extra)
+	maps.Copy(funcs, extra)
 
-	return f
+	return funcs
 }
 
 // toYAML takes an interface, marshals it to yaml, and returns a string. It will
@@ -84,6 +89,7 @@ func toYAML(v any) string {
 		// Swallow errors inside of a template.
 		return ""
 	}
+
 	return strings.TrimSuffix(string(data), "\n")
 }
 
@@ -96,9 +102,11 @@ func toYAML(v any) string {
 func fromYAML(str string) map[string]any {
 	m := map[string]any{}
 
-	if err := yaml.Unmarshal([]byte(str), &m); err != nil {
+	err := yaml.Unmarshal([]byte(str), &m)
+	if err != nil {
 		m["Error"] = err.Error()
 	}
+
 	return m
 }
 
@@ -109,12 +117,14 @@ func fromYAML(str string) map[string]any {
 // it tolerates errors. It will insert the returned error message string as
 // the first and only item in the returned array.
 func fromYAMLArray(str string) []any {
-	a := []any{}
+	out := []any{}
 
-	if err := yaml.Unmarshal([]byte(str), &a); err != nil {
-		a = []any{err.Error()}
+	err := yaml.Unmarshal([]byte(str), &out)
+	if err != nil {
+		out = []any{err.Error()}
 	}
-	return a
+
+	return out
 }
 
 // toTOML takes an interface, marshals it to toml, and returns a string. It will
@@ -124,10 +134,12 @@ func fromYAMLArray(str string) []any {
 func toTOML(v any) string {
 	b := bytes.NewBuffer(nil)
 	e := toml.NewEncoder(b)
+
 	err := e.Encode(v)
 	if err != nil {
 		return err.Error()
 	}
+
 	return b.String()
 }
 
@@ -141,6 +153,7 @@ func toJSON(v any) string {
 		// Swallow errors inside of a template.
 		return ""
 	}
+
 	return string(data)
 }
 
@@ -153,9 +166,11 @@ func toJSON(v any) string {
 func fromJSON(str string) map[string]any {
 	m := make(map[string]any)
 
-	if err := json.Unmarshal([]byte(str), &m); err != nil {
+	err := json.Unmarshal([]byte(str), &m)
+	if err != nil {
 		m["Error"] = err.Error()
 	}
+
 	return m
 }
 
@@ -166,10 +181,12 @@ func fromJSON(str string) map[string]any {
 // it tolerates errors. It will insert the returned error message string as
 // the first and only item in the returned array.
 func fromJSONArray(str string) []any {
-	a := []any{}
+	out := []any{}
 
-	if err := json.Unmarshal([]byte(str), &a); err != nil {
-		a = []any{err.Error()}
+	err := json.Unmarshal([]byte(str), &out)
+	if err != nil {
+		out = []any{err.Error()}
 	}
-	return a
+
+	return out
 }

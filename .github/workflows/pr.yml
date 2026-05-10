@@ -22,6 +22,30 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+  lint:
+    # Run golangci-lint on the same OS matrix as test:. The Windows
+    # runner is essential — secureperm_windows.go is build-tagged
+    # (//go:build windows) and never gets evaluated on a Linux/macOS
+    # host. Without a Windows lint pass, build-tagged files diverge
+    # from the rest of the tree silently.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
   dco:
     runs-on: ubuntu-latest
     steps:

@@ -44,10 +44,10 @@ func TestContract_ParseModeline_RejectsWithoutPrefix(t *testing.T) {
 	cases := []string{
 		"",
 		"# nothing",
-		"# vim: set ft=yaml",     // editor modeline (Vim)
-		"# talm noprefix",        // missing colon
-		`#talm: nodes=["x"]`,     // missing space between # and talm
-		`# talm:nodes=["x"]`,     // missing space after colon
+		"# vim: set ft=yaml", // editor modeline (Vim)
+		"# talm noprefix",    // missing colon
+		`#talm: nodes=["x"]`, // missing space between # and talm
+		`# talm:nodes=["x"]`, // missing space after colon
 	}
 	for _, line := range cases {
 		t.Run(line, func(t *testing.T) {
@@ -68,7 +68,7 @@ func TestContract_ParseModeline_TrimsLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected indented modeline to parse, got: %v", err)
 	}
-	if !reflect.DeepEqual(got.Nodes, []string{"1.2.3.4"}) {
+	if !reflect.DeepEqual(got.Nodes, []string{testNodeIP1}) {
 		t.Errorf("expected Nodes=[1.2.3.4], got %v", got.Nodes)
 	}
 }
@@ -145,14 +145,15 @@ func TestContract_ReadAndParseModeline_FirstLineOnly(t *testing.T) {
 machine:
   type: worker
 `
-	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+	err := os.WriteFile(file, []byte(content), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadAndParseModeline(file)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !reflect.DeepEqual(got.Nodes, []string{"1.2.3.4"}) {
+	if !reflect.DeepEqual(got.Nodes, []string{testNodeIP1}) {
 		t.Errorf("expected first line only, got %+v", got)
 	}
 }
@@ -171,10 +172,11 @@ func TestContract_ReadAndParseModeline_MissingFile(t *testing.T) {
 func TestContract_ReadAndParseModeline_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "empty.yaml")
-	if err := os.WriteFile(file, []byte(""), 0o644); err != nil {
+	err := os.WriteFile(file, []byte(""), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadAndParseModeline(file)
+	_, err = ReadAndParseModeline(file)
 	if err == nil {
 		t.Fatal("expected error for empty file")
 	}
@@ -188,10 +190,11 @@ func TestContract_ReadAndParseModeline_EmptyFile(t *testing.T) {
 func TestContract_ReadAndParseModeline_NonModelineFirstLine(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "no-modeline.yaml")
-	if err := os.WriteFile(file, []byte("machine:\n"), 0o644); err != nil {
+	err := os.WriteFile(file, []byte("machine:\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadAndParseModeline(file)
+	_, err = ReadAndParseModeline(file)
 	if err == nil {
 		t.Fatal("expected error for first line without modeline")
 	}
@@ -210,18 +213,21 @@ func TestContract_GenerateModeline_RoundTrip(t *testing.T) {
 		endpoints []string
 		templates []string
 	}{
-		{"all populated",
-			[]string{"1.2.3.4", "5.6.7.8"},
-			[]string{"1.2.3.4"},
-			[]string{"templates/controlplane.yaml"},
+		{
+			"all populated",
+			[]string{testNodeIP1, "5.6.7.8"},
+			[]string{testNodeIP1},
+			[]string{testTemplateControlPln},
 		},
 		{"empty all", nil, nil, nil},
-		{"only nodes",
-			[]string{"1.2.3.4"},
+		{
+			"only nodes",
+			[]string{testNodeIP1},
 			nil,
 			nil,
 		},
-		{"special characters in path",
+		{
+			"special characters in path",
 			[]string{"node.example.com"},
 			[]string{"https://api.example.com:6443"},
 			[]string{"path/with spaces/template.yaml"},

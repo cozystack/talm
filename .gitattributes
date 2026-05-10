@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+# Go source must keep LF endings; gofmt rejects CRLF.
+*.go text eol=lf
+
+# Go module / sum / config files.
+go.mod text eol=lf
+go.sum text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary

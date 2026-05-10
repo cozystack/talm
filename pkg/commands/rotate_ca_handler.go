@@ -22,9 +22,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cockroachdb/errors"
+	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cozystack/talm/pkg/age"
 	"github.com/cozystack/talm/pkg/secureperm"
-	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/siderolabs/crypto/x509"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -38,7 +39,12 @@ import (
 	secretsres "github.com/siderolabs/talos/pkg/machinery/resources/secrets"
 )
 
+// cobraDefValueFalse is the cobra flag default-value rendering of false.
+const cobraDefValueFalse = "false"
+
 // wrapRotateCACommand adds talm-specific handling to the rotate-ca command.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen,nestif // cobra command wrapper with linear PreRunE+RunE branching over (single-node validation, auto-discover nodes, set --output, set --k8s-endpoint, post-rotate updates); each branch is short, splitting would lose the documented dispatch order.
 func wrapRotateCACommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Command, []string) error) {
 	// Update command description
 	wrappedCmd.Long = `Rotates Talos and/or Kubernetes root Certificate Authorities.
@@ -74,11 +80,12 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 	// Disable --with-docs and --with-examples by default
 	if f := wrappedCmd.Flags().Lookup("with-docs"); f != nil {
-		f.DefValue = "false"
+		f.DefValue = cobraDefValueFalse
 		_ = wrappedCmd.Flags().Set("with-docs", "false")
 	}
+
 	if f := wrappedCmd.Flags().Lookup("with-examples"); f != nil {
-		f.DefValue = "false"
+		f.DefValue = cobraDefValueFalse
 		_ = wrappedCmd.Flags().Set("with-examples", "false")
 	}
 
@@ -95,10 +102,17 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 		// Validate that only one endpoint/node is provided
 		if len(GlobalArgs.Endpoints) > 1 {
-			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d endpoints were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one endpoint using -e flag or a single config file", len(GlobalArgs.Endpoints))
+			return errors.WithHint(
+				errors.Newf("rotate-ca requires exactly one control-plane node, but %d endpoints were provided", len(GlobalArgs.Endpoints)),
+				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one endpoint via --endpoints or a single config file",
+			)
 		}
+
 		if len(GlobalArgs.Nodes) > 1 {
-			return fmt.Errorf("rotate-ca requires exactly one control-plane node, but %d nodes were provided\n\nThe rotate-ca command coordinates CA rotation across the entire cluster from a single\ncontrol-plane node. Please specify only one node using -n flag or a single config file", len(GlobalArgs.Nodes))
+			return errors.WithHint(
+				errors.Newf("rotate-ca requires exactly one control-plane node, but %d nodes were provided", len(GlobalArgs.Nodes)),
+				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one node via --nodes or a single config file",
+			)
 		}
 
 		return nil
@@ -124,18 +138,22 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 		if len(controlPlaneNodes) == 0 && len(workerNodes) == 0 {
 			fmt.Fprintf(os.Stderr, "> Auto-discovering cluster nodes...\n")
+
 			cpNodes, wNodes, err := discoverClusterNodes()
 			if err != nil {
-				return fmt.Errorf("failed to auto-discover nodes: %w", err)
+				return errors.Wrap(err, "failed to auto-discover nodes")
 			}
+
 			if err := cmd.Flags().Set("control-plane-nodes", strings.Join(cpNodes, ",")); err != nil {
-				return fmt.Errorf("failed to set control-plane-nodes: %w", err)
+				return errors.Wrap(err, "failed to set control-plane-nodes")
 			}
+
 			if len(wNodes) > 0 {
 				if err := cmd.Flags().Set("worker-nodes", strings.Join(wNodes, ",")); err != nil {
-					return fmt.Errorf("failed to set worker-nodes: %w", err)
+					return errors.Wrap(err, "failed to set worker-nodes")
 				}
 			}
+
 			fmt.Fprintf(os.Stderr, "  Control plane: %v\n", cpNodes)
 			fmt.Fprintf(os.Stderr, "  Workers: %v\n", wNodes)
 		}
@@ -146,8 +164,9 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 			if talosconfigPath == "" {
 				talosconfigPath = filepath.Join(Config.RootDir, "talosconfig")
 			}
+
 			if err := cmd.Flags().Set("output", talosconfigPath); err != nil {
-				return fmt.Errorf("failed to set output: %w", err)
+				return errors.Wrap(err, "failed to set output")
 			}
 		}
 
@@ -155,13 +174,15 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 		if !cmd.Flags().Changed("k8s-endpoint") && len(GlobalArgs.Endpoints) > 0 {
 			host := GlobalArgs.Endpoints[0]
 			host = strings.TrimPrefix(host, "https://")
+
 			host = strings.TrimPrefix(host, "http://")
 			if h, _, err := net.SplitHostPort(host); err == nil {
 				host = h
 			}
-			k8sEndpoint := fmt.Sprintf("https://%s:6443", host)
+
+			k8sEndpoint := "https://" + net.JoinHostPort(host, "6443")
 			if err := cmd.Flags().Set("k8s-endpoint", k8sEndpoint); err != nil {
-				return fmt.Errorf("failed to set k8s-endpoint: %w", err)
+				return errors.Wrap(err, "failed to set k8s-endpoint")
 			}
 		}
 
@@ -179,6 +200,7 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 		// Use control plane node for COSI requests (not the external endpoint)
 		cpNodes, _ := cmd.Flags().GetStringSlice("control-plane-nodes")
+
 		var targetNode string
 		if len(cpNodes) > 0 {
 			targetNode = cpNodes[0]
@@ -186,71 +208,79 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 
 		// Update secrets.yaml with new CA from cluster
 		if err := updateSecretsFromCluster(rotateTalos, rotateKubernetes, targetNode); err != nil {
-			return fmt.Errorf("failed to update secrets.yaml: %w", err)
+			return errors.Wrap(err, "failed to update secrets.yaml")
 		}
 
 		// Update talosconfig.encrypted if it exists (talosconfig already updated by upstream)
 		if rotateTalos {
 			if err := updateTalosconfigEncryption(); err != nil {
-				return fmt.Errorf("failed to update talosconfig.encrypted: %w", err)
+				return errors.Wrap(err, "failed to update talosconfig.encrypted")
 			}
 		}
 
 		// Update kubeconfig using talm kubeconfig
 		if rotateKubernetes {
 			fmt.Fprintf(os.Stderr, "> Updating kubeconfig...\n")
+
 			if err := runKubeconfigCmd(); err != nil {
-				return fmt.Errorf("failed to update kubeconfig: %w", err)
+				return errors.Wrap(err, "failed to update kubeconfig")
 			}
 		}
 
 		fmt.Fprintf(os.Stderr, "\n> CA rotation completed successfully!\n")
+
 		return nil
 	}
 }
 
 // discoverClusterNodes discovers control plane and worker nodes from the Kubernetes API.
-func discoverClusterNodes() (controlPlane []string, workers []string, err error) {
+//
+//nolint:nonamedreturns // named returns document semantics (control-plane vs workers); naked returns are not used so renaming would only lose the documentation.
+func discoverClusterNodes() (controlPlane, workers []string, err error) {
 	// Get kubeconfig from cluster via talos API
 	kubeconfigData, err := getKubeconfigFromTalos()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get kubeconfig: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to get kubeconfig")
 	}
 
 	// Update kubeconfig server endpoint to use our endpoint instead of VIP
 	if len(GlobalArgs.Endpoints) > 0 {
 		kubeconfigData, err = updateKubeconfigEndpoint(kubeconfigData, GlobalArgs.Endpoints[0])
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to update kubeconfig endpoint: %w", err)
+			return nil, nil, errors.Wrap(err, "failed to update kubeconfig endpoint")
 		}
 	}
 
 	// Create kubernetes client
 	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create kubernetes config: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to create kubernetes config")
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create kubernetes client: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to create kubernetes client")
 	}
 
 	// List nodes
 	nodes, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list nodes: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to list nodes")
 	}
 
+	//nolint:gocritic,varnamelen // 768-byte v1.Node copy is acceptable on rare CA rotation; loop variable name preserved for documentation.
 	for _, node := range nodes.Items {
 		// Get internal IP
 		var ip string
+
 		for _, addr := range node.Status.Addresses {
 			if addr.Type == v1.NodeInternalIP {
 				ip = addr.Address
+
 				break
 			}
 		}
+
 		if ip == "" {
 			continue
 		}
@@ -265,7 +295,7 @@ func discoverClusterNodes() (controlPlane []string, workers []string, err error)
 	}
 
 	if len(controlPlane) == 0 {
-		return nil, nil, fmt.Errorf("no control plane nodes found")
+		return nil, nil, errors.New("no control plane nodes found")
 	}
 
 	return controlPlane, workers, nil
@@ -277,13 +307,16 @@ func getKubeconfigFromTalos() ([]byte, error) {
 
 	err := GlobalArgs.WithClient(func(ctx context.Context, c *client.Client) error {
 		var err error
+
 		kubeconfigData, err = c.Kubeconfig(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get kubeconfig: %w", err)
+			return errors.Wrap(err, "failed to get kubeconfig")
 		}
+
 		return nil
 	})
 
+	//nolint:wrapcheck // forwarding talos/cobra error verbatim per the wrapper contract.
 	return kubeconfigData, err
 }
 
@@ -291,17 +324,19 @@ func getKubeconfigFromTalos() ([]byte, error) {
 func updateKubeconfigEndpoint(kubeconfigData []byte, endpoint string) ([]byte, error) {
 	config, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
+		return nil, errors.Wrap(err, "failed to parse kubeconfig")
 	}
 
 	// Normalize endpoint to https://host:6443
 	host := endpoint
 	host = strings.TrimPrefix(host, "https://")
+
 	host = strings.TrimPrefix(host, "http://")
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	k8sEndpoint := fmt.Sprintf("https://%s:6443", host)
+
+	k8sEndpoint := "https://" + net.JoinHostPort(host, "6443")
 
 	// Update server for all clusters
 	for _, cluster := range config.Clusters {
@@ -309,30 +344,36 @@ func updateKubeconfigEndpoint(kubeconfigData []byte, endpoint string) ([]byte, e
 	}
 
 	// Marshal back to bytes
+	//nolint:wrapcheck // forwarding talos/cobra error verbatim per the wrapper contract.
 	return clientcmd.Write(*config)
 }
 
 // updateSecretsFromCluster fetches new CA certificates from cluster and updates secrets.yaml.
-// targetNode specifies which node to query for COSI resources (required for non-proxy connections).
-func updateSecretsFromCluster(updateTalos, updateKubernetes bool, targetNode string) error {
+// The third parameter (target node) is reserved for the future per-node
+// mode but unused today (the call goes through WithClientNoNodes to
+// avoid the multi-node proxying COSI does not support).
+//
+//nolint:funlen // single linear secrets.yaml regeneration (load bundle, fetch CA via WithClient, encode, write) — extracting helpers would split the error-context wrapping across files.
+func updateSecretsFromCluster(updateTalos, updateKubernetes bool, _ string) error {
 	secretsPath := ResolveSecretsPath(Config.TemplateOptions.WithSecrets)
 
 	// Load existing secrets
 	bundle, err := secrets.LoadBundle(secretsPath)
 	if err != nil {
-		return fmt.Errorf("failed to load secrets bundle: %w", err)
+		return errors.Wrap(err, "failed to load secrets bundle")
 	}
 
 	// Use WithClientNoNodes to avoid automatic node setting - COSI doesn't support multi-node proxying
 	err = WithClientNoNodes(func(ctx context.Context, c *client.Client) error {
-
 		// Fetch Talos CA if needed
 		if updateTalos {
 			fmt.Fprintf(os.Stderr, "  Fetching Talos CA from cluster...\n")
+
 			osRoot, err := safe.StateGetByID[*secretsres.OSRoot](ctx, c.COSI, secretsres.OSRootID)
 			if err != nil {
-				return fmt.Errorf("failed to get OSRoot: %w", err)
+				return errors.Wrap(err, "failed to get OSRoot")
 			}
+
 			bundle.Certs.OS = &x509.PEMEncodedCertificateAndKey{
 				Crt: osRoot.TypedSpec().IssuingCA.Crt,
 				Key: osRoot.TypedSpec().IssuingCA.Key,
@@ -342,10 +383,12 @@ func updateSecretsFromCluster(updateTalos, updateKubernetes bool, targetNode str
 		// Fetch Kubernetes CA if needed
 		if updateKubernetes {
 			fmt.Fprintf(os.Stderr, "  Fetching Kubernetes CA from cluster...\n")
+
 			k8sRoot, err := safe.StateGetByID[*secretsres.KubernetesRoot](ctx, c.COSI, secretsres.KubernetesRootID)
 			if err != nil {
-				return fmt.Errorf("failed to get KubernetesRoot: %w", err)
+				return errors.Wrap(err, "failed to get KubernetesRoot")
 			}
+
 			bundle.Certs.K8s = &x509.PEMEncodedCertificateAndKey{
 				Crt: k8sRoot.TypedSpec().IssuingCA.Crt,
 				Key: k8sRoot.TypedSpec().IssuingCA.Key,
@@ -361,21 +404,24 @@ func updateSecretsFromCluster(updateTalos, updateKubernetes bool, targetNode str
 	// Save secrets.yaml
 	data, err := yaml.Marshal(bundle)
 	if err != nil {
-		return fmt.Errorf("failed to marshal secrets: %w", err)
+		return errors.Wrap(err, "failed to marshal secrets")
 	}
 
 	if err := secureperm.WriteFile(secretsPath, data); err != nil {
-		return fmt.Errorf("failed to write secrets.yaml: %w", err)
+		return errors.Wrap(err, "failed to write secrets.yaml")
 	}
+
 	fmt.Fprintf(os.Stderr, "  Updated secrets.yaml\n")
 
 	// Update secrets.encrypted.yaml if it exists
 	encryptedPath := filepath.Join(Config.RootDir, "secrets.encrypted.yaml")
+
 	keyFile := filepath.Join(Config.RootDir, "talm.key")
 	if fileExists(encryptedPath) && fileExists(keyFile) {
 		if err := age.EncryptSecretsFile(Config.RootDir); err != nil {
-			return fmt.Errorf("failed to encrypt secrets.yaml: %w", err)
+			return errors.Wrap(err, "failed to encrypt secrets.yaml")
 		}
+
 		fmt.Fprintf(os.Stderr, "  Updated secrets.encrypted.yaml\n")
 	}
 
@@ -392,8 +438,9 @@ func updateTalosconfigEncryption() error {
 	}
 
 	fmt.Fprintf(os.Stderr, "  Updating talosconfig.encrypted...\n")
+
 	if err := age.EncryptYAMLFile(Config.RootDir, "talosconfig", "talosconfig.encrypted"); err != nil {
-		return fmt.Errorf("failed to encrypt talosconfig: %w", err)
+		return errors.Wrap(err, "failed to encrypt talosconfig")
 	}
 
 	return nil
@@ -402,15 +449,18 @@ func updateTalosconfigEncryption() error {
 // runKubeconfigCmd runs the wrapped talosctl kubeconfig command.
 func runKubeconfigCmd() error {
 	for _, cmd := range Commands {
-		if cmd.Name() == "kubeconfig" {
+		if cmd.Name() == defaultKubeconfigName {
 			// Set --force to avoid interactive prompt
 			if cmd.Flags().Lookup("force") != nil {
 				if err := cmd.Flags().Set("force", "true"); err != nil {
-					return fmt.Errorf("failed to set force flag: %w", err)
+					return errors.Wrap(err, "failed to set force flag")
 				}
 			}
+
+			//nolint:wrapcheck // forwarding talos/cobra error verbatim per the wrapper contract.
 			return cmd.RunE(cmd, []string{})
 		}
 	}
-	return fmt.Errorf("kubeconfig command not found")
+
+	return errors.New("kubeconfig command not found")
 }

@@ -16,11 +16,11 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/engine"
 	"github.com/cozystack/talm/pkg/modeline"
 	"github.com/cozystack/talm/pkg/secureperm"
@@ -30,6 +30,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
+//nolint:gochecknoglobals // cobra command flag struct, idiomatic for cobra-based CLIs
 var templateCmdFlags struct {
 	insecure          bool
 	configFiles       []string // -f/--files
@@ -52,42 +53,50 @@ var templateCmdFlags struct {
 	templatesFromArgs bool
 }
 
+//nolint:gochecknoglobals // cobra command, idiomatic for cobra-based CLIs
 var templateCmd = &cobra.Command{
 	Use:   "template",
 	Short: "Render templates locally and display the output",
 	Long:  ``,
 	Args:  cobra.NoArgs,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
 		templateCmdFlags.valueFiles = append(Config.TemplateOptions.ValueFiles, templateCmdFlags.valueFiles...)
 		templateCmdFlags.values = append(Config.TemplateOptions.Values, templateCmdFlags.values...)
 		templateCmdFlags.stringValues = append(Config.TemplateOptions.StringValues, templateCmdFlags.stringValues...)
 		templateCmdFlags.fileValues = append(Config.TemplateOptions.FileValues, templateCmdFlags.fileValues...)
 		templateCmdFlags.jsonValues = append(Config.TemplateOptions.JsonValues, templateCmdFlags.jsonValues...)
+
 		templateCmdFlags.literalValues = append(Config.TemplateOptions.LiteralValues, templateCmdFlags.literalValues...)
 		if !cmd.Flags().Changed("talos-version") {
 			templateCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
 		}
+
 		if !cmd.Flags().Changed("with-secrets") {
 			templateCmdFlags.withSecrets = Config.TemplateOptions.WithSecrets
 		}
+
 		if !cmd.Flags().Changed("kubernetes-version") {
 			templateCmdFlags.kubernetesVersion = Config.TemplateOptions.KubernetesVersion
 		}
+
 		if !cmd.Flags().Changed("full") {
 			templateCmdFlags.full = Config.TemplateOptions.Full
 		}
+
 		if !cmd.Flags().Changed("debug") {
 			templateCmdFlags.debug = Config.TemplateOptions.Debug
 		}
+
 		if !cmd.Flags().Changed("offline") {
 			templateCmdFlags.offline = Config.TemplateOptions.Offline
 		}
+
 		templateCmdFlags.templatesFromArgs = len(templateCmdFlags.templateFiles) > 0
 		templateCmdFlags.nodesFromArgs = len(GlobalArgs.Nodes) > 0
 		templateCmdFlags.endpointsFromArgs = len(GlobalArgs.Endpoints) > 0
 		// Set dummy endpoint to avoid errors on building clinet
 		if len(GlobalArgs.Endpoints) == 0 {
-			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, "127.0.0.1")
+			GlobalArgs.Endpoints = append(GlobalArgs.Endpoints, defaultLocalEndpoint)
 		}
 
 		return nil
@@ -99,11 +108,13 @@ var templateCmd = &cobra.Command{
 		}
 
 		if templateCmdFlags.offline {
-			return templateFunc(args)(context.Background(), nil)
+			return templateFunc(args)(cmd.Context(), nil)
 		}
+
 		if templateCmdFlags.insecure {
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
+
 		if GlobalArgs.SkipVerify {
 			return WithClientSkipVerify(templateFunc(args))
 		}
@@ -119,13 +130,15 @@ func template(args []string) func(ctx context.Context, c *client.Client) error {
 			return err
 		}
 
+		//nolint:forbidigo // CLI command output is the user-facing rendered config
 		fmt.Println(output)
+
 		return nil
 	}
 }
 
 func templateWithFiles(args []string) func(ctx context.Context, c *client.Client) error {
-	return func(ctx context.Context, c *client.Client) error {
+	return func(ctx context.Context, _ *client.Client) error {
 		// Expand directories to YAML files
 		expandedFiles, err := ExpandFilePaths(templateCmdFlags.configFiles)
 		if err != nil {
@@ -133,90 +146,142 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 		}
 
 		// Detect root from files if specified, otherwise fallback to cwd
-		if err := DetectAndSetRootFromFiles(expandedFiles); err != nil {
+		err = DetectAndSetRootFromFiles(expandedFiles)
+		if err != nil {
 			return err
 		}
 
 		firstFileProcessed := false
+
 		for _, configFile := range expandedFiles {
-			modelineConfig, err := modeline.ReadAndParseModeline(configFile)
-			if err != nil {
-				return fmt.Errorf("modeline parsing failed: %w", err)
-			}
-			if !templateCmdFlags.templatesFromArgs {
-				if len(modelineConfig.Templates) == 0 {
-					return fmt.Errorf("modeline does not contain templates information")
-				} else {
-					templateCmdFlags.templateFiles = modelineConfig.Templates
-				}
-			}
-			if !templateCmdFlags.nodesFromArgs {
-				GlobalArgs.Nodes = modelineConfig.Nodes
-			}
-			if !templateCmdFlags.endpointsFromArgs {
-				GlobalArgs.Endpoints = modelineConfig.Endpoints
-			}
-			fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s, templates=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
-
-			if len(GlobalArgs.Nodes) < 1 {
-				return errors.New("nodes are not set for the command: please use `--nodes` flag or configuration file to set the nodes to run the command against")
-			}
-			if len(templateCmdFlags.configFiles) != 0 && len(templateCmdFlags.templateFiles) < 1 {
-				return errors.New("templates are not set for the command: please use `--template` flag to set the templates to render manifest from")
-			}
-
-			template := func(args []string) func(ctx context.Context, c *client.Client) error {
-				return func(ctx context.Context, c *client.Client) error {
-					output, err := generateOutput(ctx, c, args)
-					if err != nil {
-						return err
-					}
-
-					if templateCmdFlags.inplace {
-						if err := writeInplaceRendered(configFile, output); err != nil {
-							return err
-						}
-					} else {
-						if firstFileProcessed {
-							fmt.Println("---")
-						}
-						fmt.Printf("%s", output)
-					}
-
-					return nil
-				}
-			}
-
-			if templateCmdFlags.offline {
-				err = template(args)(context.Background(), nil)
-			} else if templateCmdFlags.insecure {
-				err = WithClientMaintenance(nil, template(args))
-			} else if GlobalArgs.SkipVerify {
-				err = WithClientSkipVerify(template(args))
-			} else {
-				err = WithClient(template(args))
-			}
+			err = templateOneFile(ctx, args, configFile, &firstFileProcessed)
 			if err != nil {
 				return err
 			}
 
 			// Reset args
 			firstFileProcessed = true
+
 			if !templateCmdFlags.templatesFromArgs {
 				templateCmdFlags.templateFiles = []string{}
 			}
+
 			if !templateCmdFlags.nodesFromArgs {
 				GlobalArgs.Nodes = []string{}
 			}
+
 			if !templateCmdFlags.endpointsFromArgs {
 				GlobalArgs.Endpoints = []string{}
 			}
 		}
+
 		return nil
 	}
 }
 
-func generateOutput(ctx context.Context, c *client.Client, args []string) (string, error) {
+// templateOneFile renders one config file: parses its modeline,
+// updates the package-level state for nodes/endpoints/templates,
+// then dispatches the per-file render through the appropriate client
+// mode. Splitting the per-file work out of templateWithFiles keeps
+// the outer function's cognitive complexity within the linter's gate.
+func templateOneFile(ctx context.Context, args []string, configFile string, firstFileProcessed *bool) error {
+	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
+	if err != nil {
+		return errors.Wrap(err, "modeline parsing failed")
+	}
+
+	if !templateCmdFlags.templatesFromArgs {
+		if len(modelineConfig.Templates) == 0 {
+			//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
+			return errors.WithHint(
+				errors.New("modeline does not contain templates information"),
+				"add a `# talm: templates=[...]` modeline at the top of the node file or pass --template explicitly",
+			)
+		}
+
+		templateCmdFlags.templateFiles = modelineConfig.Templates
+	}
+
+	if !templateCmdFlags.nodesFromArgs {
+		GlobalArgs.Nodes = modelineConfig.Nodes
+	}
+
+	if !templateCmdFlags.endpointsFromArgs && len(modelineConfig.Endpoints) > 0 {
+		// Only overwrite the PreRunE-seeded defaultLocalEndpoint when the
+		// modeline actually provides endpoints. An empty modelineConfig.Endpoints
+		// would otherwise wipe the fallback and leave client construction
+		// without any endpoint at all.
+		GlobalArgs.Endpoints = modelineConfig.Endpoints
+	}
+
+	//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
+	fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s, templates=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
+
+	if len(GlobalArgs.Nodes) < 1 {
+		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
+		return errors.WithHint(
+			errors.New("nodes are not set for the command"),
+			"set the targets via --nodes, a `# talm: nodes=[...]` modeline at the top of the node file, or the talosconfig context",
+		)
+	}
+
+	if len(templateCmdFlags.configFiles) != 0 && len(templateCmdFlags.templateFiles) < 1 {
+		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
+		return errors.WithHint(
+			errors.New("templates are not set for the command"),
+			"set the templates via --template or a `# talm: templates=[...]` modeline at the top of the node file",
+		)
+	}
+
+	tmpl := buildTemplateRunner(args, configFile, firstFileProcessed)
+
+	return runTemplate(ctx, tmpl)
+}
+
+// buildTemplateRunner returns the per-file render-and-emit closure.
+// Extracted so both templateOneFile and the dispatcher in runTemplate
+// can stay flat.
+func buildTemplateRunner(args []string, configFile string, firstFileProcessed *bool) func(ctx context.Context, c *client.Client) error {
+	return func(ctx context.Context, c *client.Client) error {
+		output, err := generateOutput(ctx, c, args)
+		if err != nil {
+			return err
+		}
+
+		if templateCmdFlags.inplace {
+			return writeInplaceRendered(configFile, output)
+		}
+
+		if *firstFileProcessed {
+			//nolint:forbidigo // multi-document YAML separator is part of the user-facing output stream
+			fmt.Println("---")
+		}
+
+		//nolint:forbidigo // CLI command output is the user-facing rendered config
+		fmt.Printf("%s", output)
+
+		return nil
+	}
+}
+
+// runTemplate dispatches the per-file template runner across the four
+// possible client modes (offline, insecure maintenance, skip-verify,
+// authenticated). The dispatch is a switch over package-level flag
+// state; the per-file logic sits in tmpl.
+func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.Client) error) error {
+	switch {
+	case templateCmdFlags.offline:
+		return tmpl(ctx, nil)
+	case templateCmdFlags.insecure:
+		return WithClientMaintenance(nil, tmpl)
+	case GlobalArgs.SkipVerify:
+		return WithClientSkipVerify(tmpl)
+	default:
+		return WithClient(tmpl)
+	}
+}
+
+func generateOutput(ctx context.Context, c *client.Client, _ []string) (string, error) {
 	// Resolve secrets.yaml path relative to project root if not absolute
 	withSecretsPath := ResolveSecretsPath(templateCmdFlags.withSecrets)
 
@@ -243,106 +308,148 @@ func generateOutput(ctx context.Context, c *client.Client, args []string) (strin
 
 	result, err := engine.Render(ctx, c, opts)
 	if err != nil {
-		return "", fmt.Errorf("failed to render templates: %w", err)
+		return "", errors.Wrap(err, "failed to render templates")
 	}
 
-	// Convert template paths to relative paths from project root for modeline
-	templatePathsForModeline := make([]string, len(templateCmdFlags.templateFiles))
-	absRootDirModeline, err := filepath.Abs(Config.RootDir)
+	templatePathsForModeline := buildModelineTemplatePaths(templateCmdFlags.templateFiles, Config.RootDir)
+
+	mline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templatePathsForModeline)
 	if err != nil {
-		// If we can't get absolute root, normalize original paths for modeline
-		for i, p := range templateCmdFlags.templateFiles {
-			templatePathsForModeline[i] = engine.NormalizeTemplatePath(p)
-		}
-	} else {
-		for i, templatePath := range templateCmdFlags.templateFiles {
-			var absTemplatePath string
-			if filepath.IsAbs(templatePath) {
-				// Already absolute, use as is
-				absTemplatePath = templatePath
-			} else {
-				// Resolve relative path from current working directory
-				absTemplatePath, err = filepath.Abs(templatePath)
-				if err != nil {
-					// If we can't get absolute path, use original (normalized)
-					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
-					continue
-				}
-			}
-			// Check if the resolved path is inside root project
-			relPath, err := filepath.Rel(absRootDirModeline, absTemplatePath)
-			if err != nil {
-				// If we can't get relative path, use original (normalized)
-				templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
-				continue
-			}
-			// Normalize the path (remove .. and .)
-			relPath = filepath.Clean(relPath)
-			// Check if path goes outside root
-			if isOutsideRoot(relPath) {
-				// Path goes outside root, try to find file in templates/ relative to root
-				// This handles cases like "../templates/controlplane.yaml" when file is actually in root/templates/
-				templateName := filepath.Base(templatePath)
-				// Try common template locations
-				possiblePaths := []string{
-					filepath.Join("templates", templateName),
-					templateName,
-				}
-				found := false
-				for _, possiblePath := range possiblePaths {
-					fullPath := filepath.Join(absRootDirModeline, possiblePath)
-					if _, err := os.Stat(fullPath); err == nil {
-						relPath = possiblePath
-						found = true
-						break
-					}
-				}
-				if !found {
-					// Can't resolve, use original (normalized)
-					templatePathsForModeline[i] = engine.NormalizeTemplatePath(templatePath)
-					continue
-				}
-			} else {
-				// Path is inside root, but check if file actually exists
-				// If not, try to find it in templates/ relative to root
-				if _, errModeline := os.Stat(absTemplatePath); errModeline != nil {
-					templateName := filepath.Base(templatePath)
-					possiblePath := filepath.Join("templates", templateName)
-					fullPath := filepath.Join(absRootDirModeline, possiblePath)
-					if _, errModeline := os.Stat(fullPath); errModeline == nil {
-						relPath = possiblePath
-					}
-				} else {
-					// File exists, but check if there's a shorter/canonical path
-					// For example, if we have "nodes/templates/controlplane.yaml" but file is actually in "templates/controlplane.yaml"
-					templateName := filepath.Base(templatePath)
-					canonicalPath := filepath.Join("templates", templateName)
-					canonicalFullPath := filepath.Join(absRootDirModeline, canonicalPath)
-					// Check if canonical path exists and points to the same file
-					if canonicalInfo, errModeline := os.Stat(canonicalFullPath); errModeline == nil {
-						if originalInfo, errModeline := os.Stat(absTemplatePath); errModeline == nil {
-							// Check if they point to the same file (same inode on Unix)
-							if os.SameFile(originalInfo, canonicalInfo) {
-								// Use canonical path (shorter, cleaner)
-								relPath = canonicalPath
-							}
-						}
-					}
-				}
-			}
-			// Normalize path separators for cross-platform compatibility
-			templatePathsForModeline[i] = engine.NormalizeTemplatePath(relPath)
-		}
+		return "", errors.Wrap(err, "failed to generate modeline")
 	}
 
-	modeline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templatePathsForModeline)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate modeline: %w", err)
-	}
 	warn := "# THIS FILE IS AUTOGENERATED. PREFER TEMPLATE EDITS OVER MANUAL ONES."
 
-	output := fmt.Sprintf("%s\n%s\n%s\n", modeline, warn, string(result))
+	output := fmt.Sprintf("%s\n%s\n%s\n", mline, warn, string(result))
+
 	return output, nil
+}
+
+// buildModelineTemplatePaths converts each template path into the
+// forward-slash, root-relative form to be embedded in the generated
+// modeline. Splits the per-path branching out of generateOutput so
+// the outer function's cognitive complexity stays within the
+// linter's gate.
+func buildModelineTemplatePaths(templateFiles []string, rootDir string) []string {
+	out := make([]string, len(templateFiles))
+
+	absRootDir, err := filepath.Abs(rootDir)
+	if err != nil {
+		// If we can't get absolute root, normalize original paths for modeline
+		for i, p := range templateFiles {
+			out[i] = engine.NormalizeTemplatePath(p)
+		}
+
+		return out
+	}
+
+	for i, templatePath := range templateFiles {
+		out[i] = engine.NormalizeTemplatePath(modelinePathFor(templatePath, absRootDir))
+	}
+
+	return out
+}
+
+// modelinePathFor returns the path that should be embedded in the
+// modeline for a single template entry. Resolves the path relative
+// to rootDir, handles outside-root inputs by falling back to a
+// canonical templates/<basename>, and prefers a canonical
+// templates/<basename> when an inside-root absolute path resolves to
+// the same file. Returns the original path on any unrecoverable
+// error.
+func modelinePathFor(templatePath, absRootDir string) string {
+	absTemplatePath, ok := absTemplatePathFor(templatePath)
+	if !ok {
+		return templatePath
+	}
+
+	relPath, err := filepath.Rel(absRootDir, absTemplatePath)
+	if err != nil {
+		return templatePath
+	}
+
+	relPath = filepath.Clean(relPath)
+	if isOutsideRoot(relPath) {
+		fallback, found := findOutsideRootFallback(templatePath, absRootDir)
+		if !found {
+			return templatePath
+		}
+
+		return fallback
+	}
+
+	return canonicalizeInsideRootPath(templatePath, absTemplatePath, absRootDir, relPath)
+}
+
+// absTemplatePathFor resolves templatePath to an absolute filesystem
+// path. Returns ok=false if the input is relative and cannot be
+// promoted to absolute.
+func absTemplatePathFor(templatePath string) (string, bool) {
+	if filepath.IsAbs(templatePath) {
+		return templatePath, true
+	}
+
+	abs, err := filepath.Abs(templatePath)
+	if err != nil {
+		return "", false
+	}
+
+	return abs, true
+}
+
+// findOutsideRootFallback handles the case where templatePath
+// resolves outside absRootDir. It looks for a file with the same
+// basename under <root>/templates/ or <root>/, returning the
+// matching relative path if found.
+func findOutsideRootFallback(templatePath, absRootDir string) (string, bool) {
+	templateName := filepath.Base(templatePath)
+	for _, possiblePath := range []string{filepath.Join("templates", templateName), templateName} {
+		_, err := os.Stat(filepath.Join(absRootDir, possiblePath))
+		if err == nil {
+			return possiblePath, true
+		}
+	}
+
+	return "", false
+}
+
+// canonicalizeInsideRootPath, given an inside-root templatePath,
+// picks the cleanest path to embed in the modeline. If templatePath
+// does not exist on disk but a sibling under
+// <root>/templates/<basename> does, the latter is used. If both
+// exist and point to the same file (e.g.
+// nodes/templates/controlplane.yaml symlinked to
+// templates/controlplane.yaml), the shorter canonical form wins.
+func canonicalizeInsideRootPath(templatePath, absTemplatePath, absRootDir, relPath string) string {
+	templateName := filepath.Base(templatePath)
+	canonicalPath := filepath.Join("templates", templateName)
+	canonicalFullPath := filepath.Join(absRootDir, canonicalPath)
+
+	_, err := os.Stat(absTemplatePath)
+	if err != nil {
+		_, statErr := os.Stat(canonicalFullPath)
+		if statErr == nil {
+			return canonicalPath
+		}
+
+		return relPath
+	}
+
+	canonicalInfo, err := os.Stat(canonicalFullPath)
+	if err != nil {
+		return relPath
+	}
+
+	originalInfo, err := os.Stat(absTemplatePath)
+	if err != nil {
+		return relPath
+	}
+
+	if os.SameFile(originalInfo, canonicalInfo) {
+		return canonicalPath
+	}
+
+	return relPath
 }
 
 func init() {
@@ -371,11 +478,13 @@ func init() {
 // machine config embeds certs, PKI keys, and cluster join tokens —
 // exactly the material that must not end up readable by other users
 // on Windows (inherited DACL) or Unix (0o644).
-func writeInplaceRendered(configFile string, output string) error {
+func writeInplaceRendered(configFile, output string) error {
 	if err := secureperm.WriteFile(configFile, []byte(output)); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", configFile, err)
+		return errors.Wrapf(err, "failed to write file %s", configFile)
 	}
+
 	_, _ = fmt.Fprintf(os.Stderr, "Updated.\n")
+
 	return nil
 }
 
@@ -395,43 +504,68 @@ func writeInplaceRendered(configFile string, output string) error {
 // observable at integration time.
 func resolveEngineTemplatePaths(templateFiles []string, rootDir string) []string {
 	resolved := make([]string, len(templateFiles))
+
 	absRootDir, rootErr := filepath.Abs(rootDir)
 	if rootErr != nil {
 		for i, p := range templateFiles {
 			resolved[i] = engine.NormalizeTemplatePath(p)
 		}
+
 		return resolved
 	}
+
 	for i, templatePath := range templateFiles {
 		var absTemplatePath string
 		if filepath.IsAbs(templatePath) {
 			absTemplatePath = templatePath
 		} else {
 			var absErr error
+
 			absTemplatePath, absErr = filepath.Abs(templatePath)
 			if absErr != nil {
 				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 				continue
 			}
 		}
+
 		relPath, relErr := filepath.Rel(absRootDir, absTemplatePath)
 		if relErr != nil {
 			resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 			continue
 		}
+
 		relPath = filepath.Clean(relPath)
 		if isOutsideRoot(relPath) {
+			// findOutsideRootFallback (the modeline-side path generator)
+			// emits either templates/<basename> or root-level <basename>.
+			// The resolver must accept both shapes for round-trip parity:
+			// a modeline written from a root-level fallback would otherwise
+			// be unreachable on the next read.
 			templateName := filepath.Base(templatePath)
-			possiblePath := filepath.Join("templates", templateName)
-			fullPath := filepath.Join(absRootDir, possiblePath)
-			if _, statErr := os.Stat(fullPath); statErr == nil {
-				relPath = possiblePath
-			} else {
+
+			var found bool
+
+			for _, possiblePath := range []string{filepath.Join("templates", templateName), templateName} {
+				fullPath := filepath.Join(absRootDir, possiblePath)
+				if _, statErr := os.Stat(fullPath); statErr == nil {
+					relPath = possiblePath
+					found = true
+
+					break
+				}
+			}
+
+			if !found {
 				resolved[i] = engine.NormalizeTemplatePath(templatePath)
+
 				continue
 			}
 		}
+
 		resolved[i] = engine.NormalizeTemplatePath(relPath)
 	}
+
 	return resolved
 }

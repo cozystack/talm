@@ -48,7 +48,7 @@ import (
 // localhost, localhost.localdomain). Operators who set a meaningful
 // hostname on the host get it surfaced in the rendered config.
 func TestContract_NetworkMultidoc_HostnameUsesDiscoveredName(t *testing.T) {
-	lookup := func(resource, namespace, id string) (map[string]any, error) {
+	lookup := func(resource, _, id string) (map[string]any, error) {
 		if resource == "hostname" && id == "hostname" {
 			return map[string]any{
 				"spec": map[string]any{"hostname": "node-prod-1"},
@@ -72,7 +72,7 @@ func TestContract_NetworkMultidoc_HostnameUsesDiscoveredName(t *testing.T) {
 // survives changes to the hashed input.
 func TestContract_NetworkMultidoc_HostnameFallbackToSynthesized(t *testing.T) {
 	cases := []struct {
-		name             string
+		name               string
 		discoveredHostname string
 	}{
 		{"placeholder/talos", "talos"},
@@ -82,7 +82,7 @@ func TestContract_NetworkMultidoc_HostnameFallbackToSynthesized(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			lookup := func(resource, namespace, id string) (map[string]any, error) {
+			lookup := func(resource, _, id string) (map[string]any, error) {
 				if resource == "hostname" && id == "hostname" && tc.discoveredHostname != "" {
 					return map[string]any{
 						"spec": map[string]any{"hostname": tc.discoveredHostname},
@@ -107,7 +107,7 @@ func TestContract_NetworkMultidoc_HostnameFallbackToSynthesized(t *testing.T) {
 // resolvers are unknown. The empty fallback keeps the document
 // well-formed; Talos accepts empty nameservers (DHCP-supplied).
 func TestContract_NetworkMultidoc_ResolverConfigPopulated(t *testing.T) {
-	lookup := func(resource, namespace, id string) (map[string]any, error) {
+	lookup := func(resource, _, id string) (map[string]any, error) {
 		if resource == "resolvers" && id == "resolvers" {
 			return map[string]any{
 				"spec": map[string]any{

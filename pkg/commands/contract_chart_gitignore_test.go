@@ -23,6 +23,8 @@
 package commands
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +66,7 @@ dependencies:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "cozystack" {
+	if got != presetCozystack {
 		t.Errorf("expected preset 'cozystack', got %q", got)
 	}
 }
@@ -304,5 +306,66 @@ kubeconfig
 	}
 	if strings.Count(string(data), "talosconfig") != 1 {
 		t.Errorf("annotated 'talosconfig' duplicated:\n%s", data)
+	}
+}
+
+// Contract: writeGitignoreFile prints "Created <path>" the first
+// time it actually writes the file and "Updated <path>" on every
+// later write. Pinning this guards against a regression where the
+// existence-check happened AFTER WriteFile (when the file always
+// exists), so a fresh init reported "Updated" for a file it just
+// created. The second pass forces a write by changing the required
+// kubeconfig basename — writeGitignoreFile early-returns when no
+// new entries are needed.
+func TestContract_WriteGitignoreFile_CreatedVsUpdatedReporting(t *testing.T) {
+	dir := t.TempDir()
+	setRoot(t, dir)
+	originalKube := Config.GlobalOptions.Kubeconfig
+	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
+
+	captureStderr := func(t *testing.T, fn func()) string {
+		t.Helper()
+		origStderr := os.Stderr
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		os.Stderr = w
+		t.Cleanup(func() { os.Stderr = origStderr })
+		fn()
+		_ = w.Close()
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		return buf.String()
+	}
+
+	// First call: fresh tempdir, no .gitignore exists.
+	Config.GlobalOptions.Kubeconfig = ""
+	first := captureStderr(t, func() {
+		if err := writeGitignoreFile(); err != nil {
+			t.Fatalf("first writeGitignoreFile: %v", err)
+		}
+	})
+	if !strings.Contains(first, "Created ") {
+		t.Errorf("first invocation must print 'Created ...', got:\n%s", first)
+	}
+	if strings.Contains(first, "Updated ") {
+		t.Errorf("first invocation must NOT print 'Updated ...', got:\n%s", first)
+	}
+
+	// Second call: change kubeconfig basename so a NEW required entry
+	// is added (otherwise writeGitignoreFile returns early without
+	// printing anything).
+	Config.GlobalOptions.Kubeconfig = "/etc/kubernetes/admin.kubeconfig"
+	second := captureStderr(t, func() {
+		if err := writeGitignoreFile(); err != nil {
+			t.Fatalf("second writeGitignoreFile: %v", err)
+		}
+	})
+	if !strings.Contains(second, "Updated ") {
+		t.Errorf("second invocation must print 'Updated ...', got:\n%s", second)
+	}
+	if strings.Contains(second, "Created ") {
+		t.Errorf("second invocation must NOT print 'Created ...', got:\n%s", second)
 	}
 }

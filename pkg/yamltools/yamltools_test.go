@@ -8,6 +8,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Shared YAML/comment fixture literals. Hoisted to keep goconst quiet.
+const (
+	yamlKeyValue   = `key: value`
+	yamlKeyValue2  = `key: value2`
+	tokenNew       = "new"
+	commentNewText = "new comment"
+	commentOldText = "old comment"
+)
+
 func TestCopyComments(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -69,19 +78,19 @@ func TestApplyComments(t *testing.T) {
 			name: "copies and applies head comment",
 			src: `# Source comment
 key: value1`,
-			dst:            `key: value2`,
+			dst:            yamlKeyValue2,
 			expectComments: true,
 		},
 		{
 			name:           "copies and applies line comment",
 			src:            `key: value1 # inline`,
-			dst:            `key: value2`,
+			dst:            yamlKeyValue2,
 			expectComments: true,
 		},
 		{
 			name:           "no comments to copy",
 			src:            `key: value1`,
-			dst:            `key: value2`,
+			dst:            yamlKeyValue2,
 			expectComments: false,
 		},
 	}
@@ -115,8 +124,8 @@ func TestDiffYAMLs(t *testing.T) {
 	}{
 		{
 			name:     "no diff for identical documents",
-			original: `key: value`,
-			modified: `key: value`,
+			original: yamlKeyValue,
+			modified: yamlKeyValue,
 			wantDiff: false,
 		},
 		{
@@ -124,7 +133,7 @@ func TestDiffYAMLs(t *testing.T) {
 			original: `key: old`,
 			modified: `key: new`,
 			wantDiff: true,
-			contains: []string{"key:", "new"},
+			contains: []string{"key:", tokenNew},
 		},
 		{
 			name:     "detects added key",
@@ -190,20 +199,20 @@ func TestMergeComments(t *testing.T) {
 		{
 			name:     "returns new when old is empty",
 			old:      "",
-			new:      "new comment",
-			expected: "new comment",
+			new:      commentNewText,
+			expected: commentNewText,
 		},
 		{
 			name:     "returns old when new is empty",
-			old:      "old comment",
+			old:      commentOldText,
 			new:      "",
-			expected: "old comment",
+			expected: commentOldText,
 		},
 		{
 			name:     "merges both comments",
-			old:      "old comment",
-			new:      "new comment",
-			expected: "old comment\n\nnew comment",
+			old:      commentOldText,
+			new:      commentNewText,
+			expected: commentOldText + "\n\n" + commentNewText,
 		},
 	}
 
@@ -214,4 +223,3 @@ func TestMergeComments(t *testing.T) {
 		})
 	}
 }
-

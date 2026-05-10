@@ -27,6 +27,7 @@ package secureperm_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,8 @@ func TestContract_WriteFile_BytesIntegrity(t *testing.T) {
 	// material like age private keys or certificate DER.
 	want := []byte("AGE-SECRET-KEY-1\x00\x80\xffend\nline2\n")
 
-	if err := secureperm.WriteFile(path, want); err != nil {
+	err := secureperm.WriteFile(path, want)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -64,7 +66,8 @@ func TestContract_WriteFile_BytesIntegrity(t *testing.T) {
 func TestContract_WriteFile_EmptyPayload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty")
-	if err := secureperm.WriteFile(path, nil); err != nil {
+	err := secureperm.WriteFile(path, nil)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	info, err := os.Stat(path)
@@ -87,7 +90,8 @@ func TestContract_WriteFile_EmptyPayload(t *testing.T) {
 func TestContract_WriteFile_NoTmpLeftoverOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out")
-	if err := secureperm.WriteFile(path, []byte("data")); err != nil {
+	err := secureperm.WriteFile(path, []byte("data"))
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -145,7 +149,8 @@ func TestContract_WriteFile_Idempotent(t *testing.T) {
 	payload := []byte("payload-v1")
 
 	for i := range 3 {
-		if err := secureperm.WriteFile(path, payload); err != nil {
+		err := secureperm.WriteFile(path, payload)
+		if err != nil {
 			t.Fatalf("WriteFile iteration %d: %v", i, err)
 		}
 	}
@@ -173,18 +178,18 @@ func TestContract_WriteFile_Idempotent(t *testing.T) {
 	}
 }
 
-// Contract: LockDown on a non-existent file surfaces an os.PathError
-// — callers wrap with their own context. No silent success is
-// allowed: silently skipping the chmod would let secret material
-// remain world-readable if the path was never created.
+// Contract: LockDown on a non-existent file surfaces a
+// not-exist-class error detectable via errors.Is(err, os.ErrNotExist).
+// No silent success is allowed: silently skipping the chmod would let
+// secret material remain world-readable if the path was never created.
 func TestContract_LockDown_MissingFileErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent")
 	err := secureperm.LockDown(missing)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
-	if !os.IsNotExist(err) {
-		t.Errorf("expected os.IsNotExist, got: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected errors.Is(err, os.ErrNotExist), got: %v", err)
 	}
 }
 
@@ -194,10 +199,12 @@ func TestContract_LockDown_MissingFileErrors(t *testing.T) {
 func TestContract_LockDown_AlreadyTightIsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "already")
-	if err := os.WriteFile(path, []byte("ok"), 0o600); err != nil {
+	err := os.WriteFile(path, []byte("ok"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := secureperm.LockDown(path); err != nil {
+	err = secureperm.LockDown(path)
+	if err != nil {
 		t.Fatalf("LockDown on tight file: %v", err)
 	}
 	info, err := os.Stat(path)

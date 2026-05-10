@@ -43,7 +43,7 @@ func renderLegacyCozystackControlplane(t *testing.T, lookup func(string, string,
 // (quoted) and nameservers (JSON array). hostname uses the same
 // discovery / placeholder fallback as the multi-doc path.
 func TestContract_NetworkLegacy_HostnameAndNameserversAlwaysEmitted(t *testing.T) {
-	lookup := func(resource, namespace, id string) (map[string]any, error) {
+	lookup := func(resource, _, id string) (map[string]any, error) {
 		switch {
 		case resource == "hostname" && id == "hostname":
 			return map[string]any{"spec": map[string]any{"hostname": "node-prod-1"}}, nil

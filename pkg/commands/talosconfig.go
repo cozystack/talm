@@ -19,8 +19,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/secureperm"
-
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/mgmt/gen"
 	"github.com/siderolabs/talos/pkg/machinery/client/config"
 	machineconfig "github.com/siderolabs/talos/pkg/machinery/config"
@@ -31,8 +31,10 @@ import (
 )
 
 // talosconfigCmd represents the `talosconfig` command.
+//
+//nolint:gochecknoglobals // cobra command, idiomatic for cobra-based CLIs.
 var talosconfigCmd = &cobra.Command{
-	Use:   "talosconfig",
+	Use:   talosconfigName,
 	Short: "Regenerate talosconfig with new client certificates",
 	Long: `Regenerate talosconfig from secrets.yaml with fresh client certificates.
 
@@ -44,7 +46,7 @@ This command:
 
 Use this command when your client certificate has expired.`,
 	Args: cobra.NoArgs,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(_ *cobra.Command, _ []string) error {
 		// Ensure project root is detected
 		if !Config.RootDirExplicit {
 			detectedRoot, err := detectRootFromCWD()
@@ -52,9 +54,10 @@ Use this command when your client certificate has expired.`,
 				Config.RootDir = detectedRoot
 			}
 		}
+
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		// First, decrypt talosconfig if encrypted version exists
 		if _, err := handleTalosconfigEncryption(false); err != nil {
 			// If decryption fails, continue - we may be able to regenerate
@@ -87,26 +90,36 @@ func init() {
 
 // regenerateTalosconfig regenerates the talosconfig file from secrets.yaml,
 // preserving endpoints and nodes from the existing config.
+//
+//nolint:funlen // talosconfig regeneration is one linear pipeline (load, validate, generate, write); extracting helpers would scatter the operator-facing error wrapping across files without simplifying.
 func regenerateTalosconfig() error {
-	talosconfigFile := filepath.Join(Config.RootDir, "talosconfig")
+	talosconfigFile := filepath.Join(Config.RootDir, talosconfigName)
 
 	// Load existing talosconfig to preserve endpoints and nodes
-	var oldConfig *config.Config
-	var clusterName string
+	var (
+		oldConfig   *config.Config
+		clusterName string
+	)
 
 	if fileExists(talosconfigFile) {
 		var err error
+
 		oldConfig, err = config.Open(talosconfigFile)
 		if err != nil {
 			return fmt.Errorf("failed to read existing talosconfig: %w", err)
 		}
+
 		clusterName = oldConfig.Context
 	}
 
 	// Resolve secrets path
 	secretsPath := ResolveSecretsPath(Config.TemplateOptions.WithSecrets)
 	if !fileExists(secretsPath) {
-		return fmt.Errorf("secrets.yaml not found at %s. Run 'talm init' or restore secrets.yaml", secretsPath)
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("secrets.yaml not found at %s", secretsPath),
+			"run 'talm init' or restore secrets.yaml",
+		)
 	}
 
 	// Load secrets bundle
@@ -117,6 +130,7 @@ func regenerateTalosconfig() error {
 
 	// Build generate options
 	var genOptions []generate.Option
+
 	genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 
 	// Add version contract if configured
@@ -125,6 +139,7 @@ func regenerateTalosconfig() error {
 		if err != nil {
 			return fmt.Errorf("invalid talos-version: %w", err)
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
@@ -174,7 +189,7 @@ func regenerateTalosconfig() error {
 		fmt.Fprintf(os.Stderr, "Preserved endpoints and nodes from existing config\n")
 	} else {
 		// No old config, set default endpoint
-		newConfig.Contexts[clusterName].Endpoints = []string{"127.0.0.1"}
+		newConfig.Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
 	}
 
 	// Marshal and write the new talosconfig
@@ -190,7 +205,7 @@ func regenerateTalosconfig() error {
 	return nil
 }
 
-// getClusterNameFromChart reads the cluster name from values.yaml or Chart.yaml
+// getClusterNameFromChart reads the cluster name from values.yaml or Chart.yaml.
 func getClusterNameFromChart() string {
 	valuesYamlPath := filepath.Join(Config.RootDir, "values.yaml")
 	if data, err := os.ReadFile(valuesYamlPath); err == nil {
@@ -203,7 +218,8 @@ func getClusterNameFromChart() string {
 		}
 	}
 
-	chartYamlPath := filepath.Join(Config.RootDir, "Chart.yaml")
+	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
+
 	data, err := os.ReadFile(chartYamlPath)
 	if err != nil {
 		return ""

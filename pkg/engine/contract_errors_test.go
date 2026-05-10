@@ -70,6 +70,7 @@ func renderExpectingError(t *testing.T, chartPath, talosVersion string, lookup f
 		"Values":       merged,
 		"TalosVersion": talosVersion,
 	})
+	//nolint:wrapcheck // helm.Engine.Render returns a typed error; tests assert via require.Error/NoError.
 	return err
 }
 
@@ -160,7 +161,7 @@ func legacyInterfacesLookup() func(string, string, string) (map[string]any, erro
 			},
 		},
 	}
-	return func(resource, namespace, id string) (map[string]any, error) {
+	return func(resource, _, id string) (map[string]any, error) {
 		if resource == "machineconfig" && id == "v1alpha1" {
 			return machineconfig, nil
 		}
@@ -253,7 +254,7 @@ func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error
 			},
 		},
 	}
-	return func(resource, namespace, id string) (map[string]any, error) {
+	return func(resource, _, id string) (map[string]any, error) {
 		switch resource {
 		case "links":
 			if id == "br0" {
@@ -342,7 +343,7 @@ func vlanMissingParentLookup() func(string, string, string) (map[string]any, err
 			},
 		},
 	}
-	return func(resource, namespace, id string) (map[string]any, error) {
+	return func(resource, _, id string) (map[string]any, error) {
 		switch resource {
 		case "links":
 			if id == "vlan100" {
@@ -410,7 +411,7 @@ func vlanMissingVlanIDLookup() func(string, string, string) (map[string]any, err
 			"kind":      "vlan",
 			"index":     20,
 			"linkIndex": 1, // points at parent eth0
-			"vlan": map[string]any{
+			"vlan":      map[string]any{
 				// vlanID intentionally absent
 			},
 		},
@@ -435,7 +436,7 @@ func vlanMissingVlanIDLookup() func(string, string, string) (map[string]any, err
 			},
 		},
 	}
-	return func(resource, namespace, id string) (map[string]any, error) {
+	return func(resource, _, id string) (map[string]any, error) {
 		switch resource {
 		case "links":
 			if id == "eth0" {

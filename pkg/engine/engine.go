@@ -46,7 +46,7 @@ type Options struct {
 	StringValues      []string
 	Values            []string
 	FileValues        []string
-	JsonValues        []string
+	JsonValues        []string `yaml:"jsonValues"` //nolint:revive // public field name kept for backwards compatibility with existing consumers in pkg/commands/template.go and Chart.yaml
 	LiteralValues     []string
 	TalosVersion      string
 	WithSecrets       string
@@ -72,18 +72,22 @@ func NormalizeTemplatePath(p string) string {
 
 // debugPhase is a unified debug function that prints debug information based on the given stage and context,
 // then exits the program.
+//
+//nolint:gocritic // hugeParam: Options carries flag-aggregated config and is consumed read-only along the debug path; converting to a pointer here would require changing every public signature in this file (Render, InitializeConfigBundle, FullConfigProcess) without runtime benefit, since debugPhase exits the process.
 func debugPhase(opts Options, patches []string, clusterName string, clusterEndpoint string, mType machine.Type) {
 	phase := 2
+
 	if clusterName == "" {
 		clusterName = "dummy"
 		phase = 1
 	}
+
 	if clusterEndpoint == "" {
 		clusterEndpoint = "clusterEndpoint"
 		phase = 1
 	}
 
-	fmt.Printf(
+	fmt.Fprintf(os.Stdout,
 		"# DEBUG(phase %d): talosctl gen config %s %s -t %s --with-secrets=%s --talos-version=%s --kubernetes-version=%s -o -",
 		phase, clusterName, clusterEndpoint, mType,
 		opts.WithSecrets, opts.TalosVersion, opts.KubernetesVersion,
@@ -102,12 +106,12 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 		if patch == "" {
 			continue
 		}
+
 		if patch[0] == '@' {
 			// Apply patch is always one
-			fmt.Printf(" %s=%s\n", patchOption, patch)
+			fmt.Fprintf(os.Stdout, " %s=%s\n", patchOption, patch)
 		} else {
-			fmt.Printf("\n---")
-			fmt.Printf("\n# DEBUG(phase %d): %s=\n%s", phase, patchOption, patch)
+			fmt.Fprintf(os.Stdout, "\n---\n# DEBUG(phase %d): %s=\n%s", phase, patchOption, patch)
 		}
 	}
 
@@ -115,10 +119,12 @@ func debugPhase(opts Options, patches []string, clusterName string, clusterEndpo
 }
 
 // FullConfigProcess handles the full process of creating and updating the Bundle.
-func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
+//
+//nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
+func FullConfigProcess(_ context.Context, opts Options, patches []string) (*bundle.Bundle, machine.Type, error) {
 	configBundle, err := InitializeConfigBundle(opts)
 	if err != nil {
-		return nil, machine.TypeUnknown, fmt.Errorf("initial config bundle error: %w", err)
+		return nil, machine.TypeUnknown, errors.Wrap(err, "initial config bundle error")
 	}
 
 	loadedPatches, err := configpatcher.LoadPatches(patches)
@@ -126,7 +132,8 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
-		return nil, machine.TypeUnknown, err
+
+		return nil, machine.TypeUnknown, errors.Wrap(err, "loading patches")
 	}
 
 	err = configBundle.ApplyPatches(loadedPatches, true, false)
@@ -134,7 +141,8 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		if opts.Debug {
 			debugPhase(opts, patches, "", "", machine.TypeUnknown)
 		}
-		return nil, machine.TypeUnknown, fmt.Errorf("apply initial patches error: %w", err)
+
+		return nil, machine.TypeUnknown, errors.Wrap(err, "apply initial patches error")
 	}
 
 	// Updating parameters after applying patches
@@ -158,37 +166,42 @@ func FullConfigProcess(ctx context.Context, opts Options, patches []string) (*bu
 		ClusterName:       clusterName,
 		Endpoint:          clusterEndpoint.String(),
 	}
+
 	configBundle, err = InitializeConfigBundle(updatedOpts)
 	if err != nil {
-		return nil, machineType, fmt.Errorf("reinit config bundle error: %w", err)
+		return nil, machineType, errors.Wrap(err, "reinit config bundle error")
 	}
 
 	// Applying updated patches
 	err = configBundle.ApplyPatches(loadedPatches, (machineType == machine.TypeControlPlane), (machineType == machine.TypeWorker))
 	if err != nil {
-		return nil, machineType, fmt.Errorf("apply updated patches error: %w", err)
+		return nil, machineType, errors.Wrap(err, "apply updated patches error")
 	}
 
 	return configBundle, machineType, nil
 }
 
-// Function to initialize configuration settings
+// InitializeConfigBundle initializes a Talos configuration bundle from opts.
+//
+//nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
 func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 	genOptions := []generate.Option{}
 
 	if opts.TalosVersion != "" {
 		versionContract, err := config.ParseContractFromVersion(opts.TalosVersion)
 		if err != nil {
-			return nil, fmt.Errorf("invalid talos-version: %w", err)
+			return nil, errors.Wrap(err, "invalid talos-version")
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
 	if opts.WithSecrets != "" {
 		secretsBundle, err := secrets.LoadBundle(opts.WithSecrets)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load secrets bundle: %w", err)
+			return nil, errors.Wrap(err, "failed to load secrets bundle")
 		}
+
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 	}
 
@@ -204,12 +217,22 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 		bundle.WithVerbose(false),
 	}
 
-	return bundle.NewBundle(configBundleOpts...)
+	configBundle, err := bundle.NewBundle(configBundleOpts...)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating config bundle")
+	}
+
+	return configBundle, nil
 }
 
-// Function for serializing the configuration
+// SerializeConfiguration serializes the configuration bundle for machineType.
 func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Type) ([]byte, error) {
-	return configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	out, err := configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	if err != nil {
+		return nil, errors.Wrap(err, "serializing config bundle")
+	}
+
+	return out, nil
 }
 
 // MergeFileAsPatch overlays the YAML body of patchFile onto rendered using
@@ -230,73 +253,81 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 // ApplyConfiguration) but unsuitable for human-facing output such as
 // `talm template` — which is why the template subcommand does not call
 // this helper.
+//
+//nolint:funlen // 73 lines: each step (read, hint, strip three classes of patch directives, prune identities, apply, decode, encode) is a single linear pipeline; extracting helpers would scatter the contextual error wrapping across files without simplifying the algorithm.
 func MergeFileAsPatch(rendered []byte, patchFile string) ([]byte, error) {
 	patchBytes, err := os.ReadFile(patchFile)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrapf(err, "reading patch %q", patchFile),
-			"verify the path is correct and the file is readable by the user running talm",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "verify the path is correct and the file is readable by the user running talm"),
+			"reading patch %q", patchFile,
 		)
 	}
+
 	if isEffectivelyEmptyYAML(patchBytes) {
 		return rendered, nil
 	}
+
 	cleanedRendered, renderedDirectivePaths, err := stripAllPatchDeleteDirectives(rendered)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrap(err, "stripping $patch:delete directives from rendered"),
-			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		return nil, errors.Wrap(
+			errors.WithHint(err, "the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue"),
+			"stripping $patch:delete directives from rendered",
 		)
 	}
+
 	cleanedPatch, err := stripPatchDeleteDirectivesAtPaths(patchBytes, renderedDirectivePaths)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "stripping redundant $patch:delete directives from %q", patchFile),
-			"the node body did not parse as YAML; verify %q is well-formed",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the node body did not parse as YAML; verify %q is well-formed", patchFile),
+			"stripping redundant $patch:delete directives from %q", patchFile,
 		)
 	}
+
 	cleanedPatch, err = stripPatchDeleteDirectivesAbsentInTarget(cleanedPatch, cleanedRendered)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "stripping no-op $patch:delete directives from %q", patchFile),
-			"the node body did not parse as YAML; verify %q is well-formed",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the node body did not parse as YAML; verify %q is well-formed", patchFile),
+			"stripping no-op $patch:delete directives from %q", patchFile,
 		)
 	}
+
 	prunedBytes, allPruned, err := pruneBodyIdentitiesAgainstRendered(cleanedPatch, cleanedRendered)
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "pruning identity overlap in %q", patchFile),
-			"the prune walk failed; the input is likely malformed YAML or has an unexpected document shape; inspect %q",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the prune walk failed; the input is likely malformed YAML or has an unexpected document shape; inspect %q", patchFile),
+			"pruning identity overlap in %q", patchFile,
 		)
 	}
+
 	if allPruned {
 		return cleanedRendered, nil
 	}
+
 	patch, err := configpatcher.LoadPatch(prunedBytes)
 	if err != nil {
-		return nil, errors.WithHint(
-			errors.Wrapf(err, "loading patch from %q", patchFile),
-			"the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "the node body must be a Talos config (full or partial), a JSON Patch list, or a YAML patch list — see https://www.talos.dev/latest/talos-guides/configuration/patching/"),
+			"loading patch from %q", patchFile,
 		)
 	}
+
 	out, err := configpatcher.Apply(configpatcher.WithBytes(cleanedRendered), []configpatcher.Patch{patch})
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "applying patch from %q", patchFile),
-			"the patch references a path the rendered template does not contain; check the output of: talm template -f %q",
-			patchFile,
+		return nil, errors.Wrapf(
+			errors.WithHintf(err, "the patch references a path the rendered template does not contain; check the output of: talm template -f %q", patchFile),
+			"applying patch from %q", patchFile,
 		)
 	}
+
 	merged, err := out.Bytes()
 	if err != nil {
-		return nil, errors.WithHintf(
-			errors.Wrapf(err, "encoding merged config from %q", patchFile),
-			"configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible",
+		return nil, errors.Wrapf(
+			errors.WithHint(err, "configpatcher.Apply succeeded but the result could not be serialised back to YAML; this is internal — file an issue if reproducible"),
+			"encoding merged config from %q", patchFile,
 		)
 	}
+
 	return merged, nil
 }
 
@@ -337,20 +368,25 @@ func stripAllPatchDeleteDirectives(data []byte) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if len(docs) == 0 {
 		return data, nil, nil
 	}
+
 	var stripped []string
 	for _, doc := range docs {
 		stripped = append(stripped, removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), nil)...)
 	}
+
 	if len(stripped) == 0 {
 		return data, nil, nil
 	}
+
 	out, err := encodeAllYAMLDocuments(docs)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return out, stripped, nil
 }
 
@@ -376,24 +412,30 @@ func stripPatchDeleteDirectivesAtPaths(data []byte, paths []string) ([]byte, err
 	if len(paths) == 0 {
 		return data, nil
 	}
+
 	docs, err := decodeAllYAMLDocuments(data)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(docs) == 0 {
 		return data, nil
 	}
+
 	pruneSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		pruneSet[p] = struct{}{}
 	}
+
 	stripped := 0
 	for _, doc := range docs {
 		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
 	}
+
 	if stripped == 0 {
 		return data, nil
 	}
+
 	return encodeAllYAMLDocuments(docs)
 }
 
@@ -425,20 +467,26 @@ func stripPatchDeleteDirectivesAbsentInTarget(data, target []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+
 	if len(bodyDocs) == 0 {
 		return data, nil
 	}
+
 	targetDocs, err := decodeAllYAMLDocuments(target)
 	if err != nil {
 		return nil, err
 	}
+
 	targetByID := make(map[string]*yaml.Node, len(targetDocs))
 	for _, doc := range targetDocs {
 		targetByID[documentIdentityFromNode(doc)] = doc
 	}
+
 	pruneSet := make(map[string]struct{})
+
 	for _, bdoc := range bodyDocs {
 		id := documentIdentityFromNode(bdoc)
+
 		targetDoc := targetByID[id]
 		for _, rel := range collectDeleteDirectivePaths(bdoc, "") {
 			if !pathExistsInDoc(targetDoc, rel) {
@@ -446,16 +494,20 @@ func stripPatchDeleteDirectivesAbsentInTarget(data, target []byte) ([]byte, erro
 			}
 		}
 	}
+
 	if len(pruneSet) == 0 {
 		return data, nil
 	}
+
 	stripped := 0
 	for _, doc := range bodyDocs {
 		stripped += len(removePatchDeleteFromNode(doc, "/"+documentIdentityFromNode(doc), pruneSet))
 	}
+
 	if stripped == 0 {
 		return data, nil
 	}
+
 	return encodeAllYAMLDocuments(bodyDocs)
 }
 
@@ -468,7 +520,9 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 	if node == nil {
 		return nil
 	}
+
 	var found []string
+
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
@@ -478,19 +532,27 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			keyNode := node.Content[i]
 			valueNode := node.Content[i+1]
+
 			if keyNode.Kind != yaml.ScalarNode {
 				continue
 			}
+
 			childRel := joinYAMLPath(parentRel, jsonPointerEscape(keyNode.Value))
 			if isPatchDeleteDirective(valueNode) {
 				found = append(found, childRel)
+
 				continue
 			}
+
 			if valueNode.Kind == yaml.MappingNode {
 				found = append(found, collectDeleteDirectivePaths(valueNode, childRel)...)
 			}
 		}
+	case yaml.SequenceNode, yaml.ScalarNode, yaml.AliasNode:
+		// Directives live only inside mappings (as values of named keys).
+		// Sequences carry no key, scalars/aliases carry no children to walk.
 	}
+
 	return found
 }
 
@@ -507,37 +569,47 @@ func collectDeleteDirectivePaths(node *yaml.Node, parentRel string) []string {
 // segment regardless of the target's kind below it. This helper
 // reproduces the same predicate so a path declared no-op here is
 // guaranteed to be the same path the apply RPC would have erred on.
-func pathExistsInDoc(doc *yaml.Node, path string) bool {
+func pathExistsInDoc(doc *yaml.Node, pathStr string) bool {
 	if doc == nil {
 		return false
 	}
+
 	cur := doc
 	if cur.Kind == yaml.DocumentNode && len(cur.Content) > 0 {
 		cur = cur.Content[0]
 	}
+
 	if cur == nil || cur.Kind != yaml.MappingNode {
 		return false
 	}
-	if path == "" {
+
+	if pathStr == "" {
 		return true
 	}
-	for _, escaped := range strings.Split(path, "/") {
+
+	for escaped := range strings.SplitSeq(pathStr, "/") {
 		seg := jsonPointerUnescape(escaped)
+
 		if cur.Kind != yaml.MappingNode {
 			return false
 		}
+
 		found := false
+
 		for i := 0; i+1 < len(cur.Content); i += 2 {
 			if cur.Content[i].Value == seg {
 				cur = cur.Content[i+1]
 				found = true
+
 				break
 			}
 		}
+
 		if !found {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -547,47 +619,60 @@ func pathExistsInDoc(doc *yaml.Node, path string) bool {
 func jsonPointerUnescape(s string) string {
 	s = strings.ReplaceAll(s, "~1", "/")
 	s = strings.ReplaceAll(s, "~0", "~")
+
 	return s
 }
 
 func decodeAllYAMLDocuments(data []byte) ([]*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
+
 	var docs []*yaml.Node
+
 	for {
 		var doc yaml.Node
+
 		err := dec.Decode(&doc)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, errors.WithHint(
-				errors.Wrap(err, "decoding YAML before stripping $patch:delete directives"),
-				"the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body",
+
+			return nil, errors.Wrap(
+				errors.WithHint(err, "the input is malformed YAML; check for unbalanced quotes or stray indentation in the rendered template or node body"),
+				"decoding YAML before stripping $patch:delete directives",
 			)
 		}
+
 		docs = append(docs, &doc)
 	}
+
 	return docs, nil
 }
 
 func encodeAllYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 	var buf bytes.Buffer
+
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
+
 	for _, doc := range docs {
-		if err := enc.Encode(doc); err != nil {
-			return nil, errors.WithHint(
-				errors.Wrap(err, "re-encoding YAML after stripping $patch:delete directives"),
-				"the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it",
+		err := enc.Encode(doc)
+		if err != nil {
+			return nil, errors.Wrap(
+				errors.WithHint(err, "the YAML.v3 encoder rejected the post-strip tree; file an issue with the rendered+body that triggered it"),
+				"re-encoding YAML after stripping $patch:delete directives",
 			)
 		}
 	}
-	if err := enc.Close(); err != nil {
-		return nil, errors.WithHint(
-			errors.Wrap(err, "closing YAML encoder after stripping $patch:delete directives"),
-			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+
+	err := enc.Close()
+	if err != nil {
+		return nil, errors.Wrap(
+			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
+			"closing YAML encoder after stripping $patch:delete directives",
 		)
 	}
+
 	return buf.Bytes(), nil
 }
 
@@ -602,7 +687,9 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 	if node == nil {
 		return nil
 	}
+
 	var removed []string
+
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
@@ -614,25 +701,35 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 			keyNode := node.Content[i]
 			valueNode := node.Content[i+1]
 			childPath := parentPath + "/" + jsonPointerEscape(keyNode.Value)
+
 			if isPatchDeleteDirective(valueNode) {
 				if prunePaths == nil {
 					removed = append(removed, childPath)
+
 					continue
 				}
+
 				if _, prune := prunePaths[childPath]; prune {
 					removed = append(removed, childPath)
+
 					continue
 				}
 			}
+
 			removed = append(removed, removePatchDeleteFromNode(valueNode, childPath, prunePaths)...)
 			kept = append(kept, keyNode, valueNode)
 		}
+
 		node.Content = kept
 	case yaml.SequenceNode:
 		for i, child := range node.Content {
 			removed = append(removed, removePatchDeleteFromNode(child, fmt.Sprintf("%s/%d", parentPath, i), prunePaths)...)
 		}
+	case yaml.ScalarNode, yaml.AliasNode:
+		// Scalars and aliases have no children, so they cannot host a
+		// $patch:delete directive — nothing to remove.
 	}
+
 	return removed
 }
 
@@ -644,6 +741,7 @@ func removePatchDeleteFromNode(node *yaml.Node, parentPath string, prunePaths ma
 func jsonPointerEscape(s string) string {
 	s = strings.ReplaceAll(s, "~", "~0")
 	s = strings.ReplaceAll(s, "/", "~1")
+
 	return s
 }
 
@@ -654,10 +752,13 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return false
 	}
+
 	if len(n.Content) != 2 {
 		return false
 	}
+
 	k, v := n.Content[0], n.Content[1]
+
 	return k.Kind == yaml.ScalarNode && k.Value == "$patch" &&
 		v.Kind == yaml.ScalarNode && v.Value == "delete"
 }
@@ -686,14 +787,17 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 // modeline) — configpatcher.LoadPatch reads structure, not comments, so
 // this is fine for the apply path; do not feed the output back into a
 // human-facing rendering surface.
+//
+//nolint:funlen // 72 lines: per-doc identity match + recursive prune + emit-only-non-empty pipeline; the steps share the same identity bookkeeping (renderedByIdentity, renderedConsumed, allPruned) so extracting helpers would either pass that state through every signature or hoist it to package level.
 func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, error) {
 	bodyDocs, bodyAllMaps, err := decodeAsMaps(body)
 	if err != nil {
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "parsing body"),
-			"the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation",
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the node body did not parse as YAML; check the file referenced by the modeline for unbalanced quotes or stray indentation"),
+			"parsing body",
 		)
 	}
+
 	if !bodyAllMaps {
 		// JSON Patch / YAML patch-list bodies: top-level is a sequence,
 		// not a mapping, so the identity-prune step has no map keys to
@@ -701,6 +805,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 		// route it through the JSON Patch path (load.go: jsonpatch.DecodePatch).
 		return body, false, nil
 	}
+
 	renderedDocs, _, err := decodeAsMaps(rendered)
 	if err != nil {
 		// Rendered should always parse — engine.Render produced it from
@@ -708,11 +813,12 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 		// directly: continuing on to LoadPatch with the original body
 		// would mask the real failure as a downstream configpatcher
 		// error against malformed bytes.
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "parsing rendered template for identity prune"),
-			"the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue",
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the rendered template did not parse as YAML; this points at a chart-helper bug, not a user input issue"),
+			"parsing rendered template for identity prune",
 		)
 	}
+
 	if len(bodyDocs) == 0 {
 		return nil, true, nil
 	}
@@ -724,8 +830,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 
 	keptDocs := make([]map[string]any, 0, len(bodyDocs))
 	for _, bdoc := range bodyDocs {
-		id := documentIdentity(bdoc)
-		if rdoc, ok := renderedByID[id]; ok {
+		docID := documentIdentity(bdoc)
+		if rdoc, ok := renderedByID[docID]; ok {
 			pruneIdenticalKeys(bdoc, rdoc)
 			// Typed multi-doc bodies use apiVersion/kind/name as the
 			// identity tuple configpatcher.LoadPatch routes on. Those
@@ -739,35 +845,43 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 			// version field, which is at the same nesting level as the
 			// machine/cluster blocks), so this only fires for the typed
 			// multi-doc shape.
-			if id != legacyRootIdentity && len(bdoc) > 0 {
+			if docID != legacyRootIdentity && len(bdoc) > 0 {
 				reattachIdentityKeys(bdoc, rdoc)
 			}
 		}
+
 		if len(bdoc) > 0 {
 			keptDocs = append(keptDocs, bdoc)
 		}
 	}
+
 	if len(keptDocs) == 0 {
 		return nil, true, nil
 	}
 
 	var buf bytes.Buffer
+
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
+
 	for _, doc := range keptDocs {
-		if err := enc.Encode(doc); err != nil {
-			return nil, false, errors.WithHint(
-				errors.Wrap(err, "re-encoding pruned body"),
-				"the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it",
+		err := enc.Encode(doc)
+		if err != nil {
+			return nil, false, errors.Wrap(
+				errors.WithHint(err, "the YAML.v3 encoder rejected the post-prune body; file an issue with the rendered+body that triggered it"),
+				"re-encoding pruned body",
 			)
 		}
 	}
-	if err := enc.Close(); err != nil {
-		return nil, false, errors.WithHint(
-			errors.Wrap(err, "closing encoder for pruned body"),
-			"the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it",
+
+	err = enc.Close()
+	if err != nil {
+		return nil, false, errors.Wrap(
+			errors.WithHint(err, "the YAML.v3 encoder failed to flush; file an issue with the rendered+body that triggered it"),
+			"closing encoder for pruned body",
 		)
 	}
+
 	return buf.Bytes(), false, nil
 }
 
@@ -808,6 +922,8 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // the body key reduces body to the zero value at that path, and the
 // upstream replace then leaves rendered untouched. Skipping kicks in
 // only on the partial-edit branches below the deep-equal check.
+//
+//nolint:gochecknoglobals,goconst // immutable lookup table consulted by pruneIdenticalKeysAt; init-time literal, never mutated. The second occurrence of each path string is in the docstring above (where it documents the v1alpha1 merge behaviour); making it a const just to satisfy goconst would split documentation from data without runtime benefit.
 var replaceSemanticPaths = map[string]struct{}{
 	"cluster/network/podSubnets":     {},
 	"cluster/network/serviceSubnets": {},
@@ -869,6 +985,8 @@ var replaceSemanticPaths = map[string]struct{}{
 // Routes (machine.network.interfaces[].routes) sit in this same fallback
 // bucket: the schema declares no single primary key for a route, so the
 // only "same item" semantic available is byte-equality across all fields.
+//
+//nolint:gochecknoglobals,goconst // immutable lookup table consulted by matchObjectArrayItem; init-time literal mirroring Talos's strategic-merge keys. The second occurrence of each path / field name is in the docstring above; making them consts to satisfy goconst would split documentation from data without runtime benefit.
 var objectArrayMergeKeys = map[string][]string{
 	"machine/network/interfaces":         {"interface", "deviceSelector"},
 	"machine/network/interfaces/vlans":   {"vlanId"},
@@ -913,23 +1031,29 @@ func pruneIdenticalKeys(body, rendered map[string]any) {
 //
 // The parameter is named yamlPath rather than path to avoid shadowing
 // the stdlib path package imported elsewhere in this file.
+//
+//nolint:gocognit,nestif // dispatch over (missing-key | replace-semantic | object-array | nested-map | primitive-slice) inside one walk; extracting any branch into a helper would need to thread the per-pair (body, rendered, parent, key) state, growing the surface without simplifying.
 func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
-	for k, bodyV := range body {
-		renderedV, exists := rendered[k]
+	for key, bodyV := range body {
+		renderedV, exists := rendered[key]
 		if !exists {
 			continue
 		}
+
 		if reflect.DeepEqual(bodyV, renderedV) {
-			delete(body, k)
+			delete(body, key)
+
 			continue
 		}
-		childPath := joinYAMLPath(yamlPath, k)
+
+		childPath := joinYAMLPath(yamlPath, key)
 		if _, replace := replaceSemanticPaths[childPath]; replace {
 			// Upstream `merge:"replace"` overwrites rendered with body
 			// verbatim. Any prune at this path leaks rendered-side
 			// entries out of the final config — see replaceSemanticPaths.
 			continue
 		}
+
 		if bodySub, ok := bodyV.(map[string]any); ok {
 			if renderedSub, ok2 := renderedV.(map[string]any); ok2 {
 				// Only delete when the recursive prune actually
@@ -940,28 +1064,33 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 				// rendered's populated value wins.
 				before := len(bodySub)
 				pruneIdenticalKeysAt(bodySub, renderedSub, childPath)
+
 				if before > 0 && len(bodySub) == 0 {
-					delete(body, k)
+					delete(body, key)
 				}
+
 				continue
 			}
 		}
+
 		if bodySlice, ok := bodyV.([]any); ok {
 			if renderedSlice, ok2 := renderedV.([]any); ok2 {
 				if isPrimitiveSlice(bodySlice) && isPrimitiveSlice(renderedSlice) {
 					diff := primitiveSliceDifference(bodySlice, renderedSlice)
 					if len(diff) == 0 {
-						delete(body, k)
+						delete(body, key)
 					} else {
-						body[k] = diff
+						body[key] = diff
 					}
+
 					continue
 				}
+
 				pruned := pruneObjectArrayItems(bodySlice, renderedSlice, childPath)
 				if len(pruned) == 0 {
-					delete(body, k)
+					delete(body, key)
 				} else {
-					body[k] = pruned
+					body[key] = pruned
 				}
 			}
 		}
@@ -985,33 +1114,43 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 // rendered counterpart are user-adds and are kept verbatim.
 func pruneObjectArrayItems(body, rendered []any, yamlPath string) []any {
 	keys := objectArrayMergeKeys[yamlPath]
+
 	out := make([]any, 0, len(body))
 	for _, bElem := range body {
 		bMap, ok := bElem.(map[string]any)
 		if !ok {
 			out = append(out, bElem)
+
 			continue
 		}
+
 		rMap := matchObjectArrayItem(bMap, rendered, keys)
 		if rMap == nil {
 			out = append(out, bElem)
+
 			continue
 		}
+
 		before := len(bMap)
 		pruneIdenticalKeysAt(bMap, rMap, yamlPath)
+
 		if before > 0 && len(bMap) == 0 {
 			continue
 		}
+
 		for _, idKey := range keys {
 			if _, hasInBody := bMap[idKey]; hasInBody {
 				continue
 			}
+
 			if v, ok := rMap[idKey]; ok {
 				bMap[idKey] = v
 			}
 		}
+
 		out = append(out, bMap)
 	}
+
 	return out
 }
 
@@ -1042,33 +1181,42 @@ func matchObjectArrayItem(body map[string]any, rendered []any, keys []string) ma
 			chosenKey string
 			chosenVal any
 		)
+
 		for _, k := range keys {
 			if v, ok := body[k]; ok && hasIdentityValue(v) {
 				chosenKey = k
 				chosenVal = v
+
 				break
 			}
 		}
+
 		if chosenKey == "" {
 			return nil
 		}
+
 		for _, rElem := range rendered {
 			rMap, ok := rElem.(map[string]any)
 			if !ok {
 				continue
 			}
+
 			if rv, hasR := rMap[chosenKey]; hasR && reflect.DeepEqual(rv, chosenVal) {
 				return rMap
 			}
 		}
+
 		return nil
 	}
+
 	for _, rElem := range rendered {
 		if reflect.DeepEqual(rElem, body) {
 			rMap, _ := rElem.(map[string]any)
+
 			return rMap
 		}
 	}
+
 	return nil
 }
 
@@ -1083,13 +1231,14 @@ func hasIdentityValue(v any) bool {
 	if v == nil {
 		return false
 	}
-	switch x := v.(type) {
+
+	switch typed := v.(type) {
 	case string:
-		return x != ""
+		return typed != ""
 	case map[string]any:
-		return len(x) > 0
+		return len(typed) > 0
 	case []any:
-		return len(x) > 0
+		return len(typed) > 0
 	default:
 		return true
 	}
@@ -1103,6 +1252,7 @@ func joinYAMLPath(parent, key string) string {
 	if parent == "" {
 		return key
 	}
+
 	return parent + "/" + key
 }
 
@@ -1126,6 +1276,7 @@ func isPrimitiveSlice(s []any) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -1141,8 +1292,9 @@ func isPrimitiveSlice(s []any) bool {
 // and rendered's `[a, b]` order survives untouched. Strategic-merge's
 // own primitive-array semantics already cannot replace, only append,
 // so a body cannot impose a new order on a rendered list anyway —
-// even without this prune, the merge result would have been
-// `[a, b, b, a]` (rendered prepended, body appended in body order).
+// even without this prune, the merge result would have been the
+// concatenation `[a, b]` ++ `[b, a]` (rendered prepended, body appended
+// in body order).
 // The dedup makes the silent-undo more visible because it now reaches
 // the partial-edit case, but the underlying constraint is upstream.
 // Callers that need ordered overrides have to model the field as a
@@ -1153,16 +1305,20 @@ func primitiveSliceDifference(body, rendered []any) []any {
 	out := make([]any, 0, len(body))
 	for _, b := range body {
 		found := false
+
 		for _, r := range rendered {
 			if reflect.DeepEqual(b, r) {
 				found = true
+
 				break
 			}
 		}
+
 		if !found {
 			out = append(out, b)
 		}
 	}
+
 	return out
 }
 
@@ -1181,27 +1337,39 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 	if len(data) == 0 {
 		return nil, true, nil
 	}
+
 	dec := yaml.NewDecoder(bytes.NewReader(data))
+
 	var docs []map[string]any
+
 	allMaps := true
+
 	for {
 		var doc any
-		if err := dec.Decode(&doc); err != nil {
+
+		err := dec.Decode(&doc)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, false, err
+
+			return nil, false, errors.Wrap(err, "decoding YAML document")
 		}
+
 		if doc == nil {
 			continue
 		}
+
 		asMap, ok := doc.(map[string]any)
 		if !ok {
 			allMaps = false
+
 			continue
 		}
+
 		docs = append(docs, asMap)
 	}
+
 	return docs, allMaps, nil
 }
 
@@ -1212,7 +1380,44 @@ func decodeAsMaps(data []byte) ([]map[string]any, bool, error) {
 // with — its only top-level identifier is `version`, which is at the
 // same nesting level as the machine/cluster blocks rather than peer
 // to a routable apiVersion/kind/name.
-const legacyRootIdentity = "__legacy_root__"
+const (
+	legacyRootIdentity = "__legacy_root__"
+
+	// yamlDocSep is the YAML document separator at column 0.
+	yamlDocSep = "---"
+	// helmKeyValues is the chart-rendering top-level Values context key.
+	helmKeyValues = "Values"
+	// helmKeyTalosVer is the chart-rendering top-level TalosVersion context key.
+	helmKeyTalosVer = "TalosVersion"
+	// cosiKindList is the COSI Kind value emitted when newLookupFunction
+	// wraps multi-item lookups into a List envelope for template iteration.
+	cosiKindList = "List"
+	// k8sKeyAPIVersion is the standard Kubernetes/COSI document key
+	// used as part of the (apiVersion, kind, name) identity tuple.
+	k8sKeyAPIVersion = "apiVersion"
+	// cmdNameTalm is the binary name used for FailIfMultiNodes
+	// error wording when Options.CommandName is empty.
+	cmdNameTalm = "talm"
+	// k8sKeyKind is the standard Kubernetes/COSI document key
+	// used as part of the (apiVersion, kind, name) identity tuple.
+	k8sKeyKind = "kind"
+	// k8sAPIVersionV1 is the value of apiVersion for the synthetic
+	// List envelope newLookupFunction emits when wrapping multi-item
+	// COSI lookup results.
+	k8sAPIVersionV1 = "v1"
+	// k8sKeyItems is the field name for the synthetic List envelope's
+	// items slice in newLookupFunction's response.
+	k8sKeyItems = "items"
+	// cosiMetaKeyNamespace / Type / ID / Version / Phase / Owner are
+	// the COSI metadata field names exposed in the rendered template
+	// context's metadata map.
+	cosiMetaKeyNamespace = "namespace"
+	cosiMetaKeyType      = "type"
+	cosiMetaKeyID        = "id"
+	cosiMetaKeyVersion   = "version"
+	cosiMetaKeyPhase     = "phase"
+	cosiMetaKeyOwner     = "owner"
+)
 
 // documentIdentity returns a stable string identifying a Talos config
 // document. The legacy v1alpha1 root config (a single document with
@@ -1230,15 +1435,18 @@ const legacyRootIdentity = "__legacy_root__"
 // without a `name` field collides with itself across body and rendered
 // streams instead of with every other unnamed doc of the same kind.
 func documentIdentity(doc map[string]any) string {
-	apiVersion, _ := doc["apiVersion"].(string)
-	kind, _ := doc["kind"].(string)
+	apiVersion, _ := doc[k8sKeyAPIVersion].(string)
+
+	kind, _ := doc[k8sKeyKind].(string)
 	if apiVersion == "" && kind == "" {
 		return legacyRootIdentity
 	}
+
 	id := apiVersion + "/" + kind
 	if name, _ := doc["name"].(string); name != "" {
 		id += "/" + name
 	}
+
 	return id
 }
 
@@ -1254,33 +1462,41 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 	if root != nil && root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
 		root = root.Content[0]
 	}
+
 	if root == nil || root.Kind != yaml.MappingNode {
 		return legacyRootIdentity
 	}
+
 	var apiVersion, kind, name string
+
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		k := root.Content[i]
-		v := root.Content[i+1]
-		if k.Kind != yaml.ScalarNode || v.Kind != yaml.ScalarNode {
+		key := root.Content[i]
+
+		val := root.Content[i+1]
+		if key.Kind != yaml.ScalarNode || val.Kind != yaml.ScalarNode {
 			continue
 		}
-		switch k.Value {
-		case "apiVersion":
-			apiVersion = v.Value
-		case "kind":
-			kind = v.Value
+
+		switch key.Value {
+		case k8sKeyAPIVersion:
+			apiVersion = val.Value
+		case k8sKeyKind:
+			kind = val.Value
 		case "name":
-			name = v.Value
+			name = val.Value
 		}
 	}
+
 	if apiVersion == "" && kind == "" {
 		return legacyRootIdentity
 	}
-	id := apiVersion + "/" + kind
+
+	docID := apiVersion + "/" + kind
 	if name != "" {
-		id += "/" + name
+		docID += "/" + name
 	}
-	return id
+
+	return docID
 }
 
 // reattachIdentityKeys copies apiVersion / kind / name from rendered
@@ -1291,12 +1507,13 @@ func documentIdentityFromNode(doc *yaml.Node) string {
 // operator pinning a different name on a Layer2VIPConfig) keeps its
 // override.
 func reattachIdentityKeys(body, rendered map[string]any) {
-	for _, k := range []string{"apiVersion", "kind", "name"} {
-		if _, has := body[k]; has {
+	for _, key := range []string{k8sKeyAPIVersion, k8sKeyKind, "name"} {
+		if _, has := body[key]; has {
 			continue
 		}
-		if v, ok := rendered[k]; ok {
-			body[k] = v
+
+		if val, ok := rendered[key]; ok {
+			body[key] = val
 		}
 	}
 }
@@ -1308,8 +1525,9 @@ func reattachIdentityKeys(body, rendered map[string]any) {
 func NodeFileHasOverlay(patchFile string) (bool, error) {
 	data, err := os.ReadFile(patchFile)
 	if err != nil {
-		return false, fmt.Errorf("reading node file %s: %w", patchFile, err)
+		return false, errors.Wrapf(err, "reading node file %s", patchFile)
 	}
+
 	return !isEffectivelyEmptyYAML(data), nil
 }
 
@@ -1323,32 +1541,38 @@ func NodeFileHasOverlay(patchFile string) (bool, error) {
 // separator, so the comparison is against the line minus only trailing
 // whitespace rather than against the fully trimmed form.
 func isEffectivelyEmptyYAML(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
 			continue
 		}
+
 		if trimmed[0] == '#' {
 			continue
 		}
+
 		untrailed := string(bytes.TrimRight(line, " \t\r"))
-		if untrailed == "---" || untrailed == "..." {
+		if untrailed == yamlDocSep || untrailed == "..." {
 			continue
 		}
+
 		return false
 	}
+
 	return true
 }
 
 // Render executes the rendering of templates based on the provided options.
+//
+//nolint:funlen,gocritic // funlen: 75-line linear dispatch over (Full ? FullConfigProcess : ApplyPatches) with per-branch cluster-meta hydration and per-mode serialisation; splitting either branch would scatter the shared FailIfMultiNodes/loadValues/SerializeConfiguration steps across helpers without simplifying control flow. hugeParam: Options is the package's public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error) {
-
 	// Validate TalosVersion early so malformed values surface a user-friendly
 	// error instead of an opaque "semverCompare: invalid semantic version" from
 	// inside template rendering.
 	if opts.TalosVersion != "" {
-		if _, err := config.ParseContractFromVersion(opts.TalosVersion); err != nil {
-			return nil, fmt.Errorf("invalid talos-version: %w", err)
+		_, err := config.ParseContractFromVersion(opts.TalosVersion)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid talos-version")
 		}
 	}
 
@@ -1356,25 +1580,29 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	if !opts.Offline {
 		cmdName := opts.CommandName
 		if cmdName == "" {
-			cmdName = "talm"
+			cmdName = cmdNameTalm
 		}
-		if err := helpers.FailIfMultiNodes(ctx, cmdName); err != nil {
-			return nil, err
+
+		err := helpers.FailIfMultiNodes(ctx, cmdName)
+		if err != nil {
+			return nil, errors.Wrap(err, "checking node selector")
 		}
+
 		helmEngine.LookupFunc = newLookupFunction(ctx, c)
 	}
 
 	chartPath, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "resolving working directory")
 	}
+
 	if opts.Root != "" {
 		chartPath = opts.Root
 	}
 
 	chrt, err := loader.LoadDir(chartPath)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "loading chart from %q", chartPath)
 	}
 
 	values, err := loadValues(opts)
@@ -1383,34 +1611,38 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	}
 
 	rootValues := map[string]any{
-		"Values":       mergeMaps(chrt.Values, values),
-		"TalosVersion": opts.TalosVersion,
+		helmKeyValues:   mergeMaps(chrt.Values, values),
+		helmKeyTalosVer: opts.TalosVersion,
 	}
 
 	eng := helmEngine.Engine{}
+
 	out, err := eng.Render(chrt, rootValues)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "rendering chart")
 	}
 
 	if len(opts.TemplateFiles) == 0 {
-		return nil, fmt.Errorf("templates are not set for the command: please use `--file` or `--template` flag")
+		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
 	}
 
 	configPatches := []string{}
+
 	for _, templateFile := range opts.TemplateFiles {
 		// Use path.Join (not filepath.Join) because helm engine keys always use forward slashes
 		requestedTemplate := path.Join(chrt.Name(), NormalizeTemplatePath(templateFile))
+
 		configPatch, ok := out[requestedTemplate]
 		if !ok {
-			return nil, fmt.Errorf("template %s not found", templateFile)
+			//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
+			return nil, errors.Newf("template %s not found", templateFile)
 		}
+
 		configPatches = append(configPatches, configPatch)
 	}
 
 	finalConfig, err := applyPatchesAndRenderConfig(opts, configPatches)
 	if err != nil {
-		// TODO
 		return nil, err
 	}
 
@@ -1419,6 +1651,8 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 
 // Imported from Helm
 // https://github.com/helm/helm/blob/c6beb169d26751efd8131a5d65abe75c81a334fb/pkg/cli/values/options.go#L44
+//
+//nolint:funlen,gocritic // funlen: linear dispatch over six independent value-source kinds (files, --set-json, --set, --set-string, --set-file, --set-literal); each branch is a 4-line guarded call and extracting any subset would only fragment the logic. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func loadValues(opts Options) (map[string]any, error) {
 	// Base map to hold the merged values
 	base := make(map[string]any)
@@ -1426,36 +1660,45 @@ func loadValues(opts Options) (map[string]any, error) {
 	// Load values from files specified with -f or --values
 	for _, filePath := range opts.ValueFiles {
 		currentMap := make(map[string]any)
-		bytes, err := os.ReadFile(filePath)
+
+		buf, err := os.ReadFile(filePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read values file %s: %w", filePath, err)
+			return nil, errors.Wrapf(err, "failed to read values file %s", filePath)
 		}
-		if err := yaml.Unmarshal(bytes, &currentMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal values from file %s: %w", filePath, err)
+
+		err = yaml.Unmarshal(buf, &currentMap)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to unmarshal values from file %s", filePath)
 		}
+
 		base = mergeMaps(base, currentMap)
 	}
 
 	// Parse and merge values from --set-json
 	for _, value := range opts.JsonValues {
 		currentMap := make(map[string]any)
-		if err := json.Unmarshal([]byte(value), &currentMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal JSON value '%s': %w", value, err)
+
+		err := json.Unmarshal([]byte(value), &currentMap)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to unmarshal JSON value '%s'", value)
 		}
+
 		base = mergeMaps(base, currentMap)
 	}
 
 	// Parse and merge values from --set
 	for _, value := range opts.Values {
-		if err := strvals.ParseInto(value, base); err != nil {
-			return nil, fmt.Errorf("failed to parse set value '%s': %w", value, err)
+		err := strvals.ParseInto(value, base)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse set value '%s'", value)
 		}
 	}
 
 	// Parse and merge values from --set-string
 	for _, value := range opts.StringValues {
-		if err := strvals.ParseIntoString(value, base); err != nil {
-			return nil, fmt.Errorf("failed to parse set-string value '%s': %w", value, err)
+		err := strvals.ParseIntoString(value, base)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse set-string value '%s'", value)
 		}
 	}
 
@@ -1463,17 +1706,20 @@ func loadValues(opts Options) (map[string]any, error) {
 	for _, value := range opts.FileValues {
 		content, err := os.ReadFile(value)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read file for set-file value '%s': %w", value, err)
+			return nil, errors.Wrapf(err, "failed to read file for set-file value '%s'", value)
 		}
-		if err := strvals.ParseInto(fmt.Sprintf("%s=%s", value, content), base); err != nil {
-			return nil, fmt.Errorf("failed to parse set-file value '%s': %w", value, err)
+
+		err = strvals.ParseInto(fmt.Sprintf("%s=%s", value, content), base)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse set-file value '%s'", value)
 		}
 	}
 
 	// Parse and merge values from --set-literal
 	for _, value := range opts.LiteralValues {
-		if err := strvals.ParseInto(value, base); err != nil {
-			return nil, fmt.Errorf("failed to parse set-literal value '%s': %w", value, err)
+		err := strvals.ParseInto(value, base)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse set-literal value '%s'", value)
 		}
 	}
 
@@ -1485,17 +1731,21 @@ func loadValues(opts Options) (map[string]any, error) {
 func mergeMaps(a, b map[string]any) map[string]any {
 	out := make(map[string]any, len(a))
 	maps.Copy(out, a)
-	for k, v := range b {
-		if vm, ok := v.(map[string]any); ok {
-			if bv, ok := out[k]; ok {
+
+	for key, val := range b {
+		if vm, ok := val.(map[string]any); ok {
+			if bv, ok := out[key]; ok {
 				if bvm, ok := bv.(map[string]any); ok {
-					out[k] = mergeMaps(bvm, vm)
+					out[key] = mergeMaps(bvm, vm)
+
 					continue
 				}
 			}
 		}
-		out[k] = v
+
+		out[key] = val
 	}
+
 	return out
 }
 
@@ -1503,11 +1753,15 @@ func mergeMaps(a, b map[string]any) map[string]any {
 // Returns (isTalosPatch, parseError) - parseError is non-nil if YAML is invalid.
 func isTalosConfigPatch(doc string) (bool, error) {
 	var parsed map[string]any
-	if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
-		return false, err
+
+	err := yaml.Unmarshal([]byte(doc), &parsed)
+	if err != nil {
+		return false, errors.Wrap(err, "unmarshaling YAML document")
 	}
+
 	_, hasMachine := parsed["machine"]
 	_, hasCluster := parsed["cluster"]
+
 	return hasMachine || hasCluster, nil
 }
 
@@ -1517,7 +1771,9 @@ var yamlDocSeparator = regexp.MustCompile(`(?m)^---[ \t]*$`)
 
 // extractExtraDocuments separates Talos config patches from other YAML documents.
 // Returns the Talos patches to be processed, extra documents to be appended to output, and any error.
-func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs []string, err error) {
+func extractExtraDocuments(patches []string) ([]string, []string, error) {
+	var talosPatches, extraDocs []string
+
 	for _, patch := range patches {
 		// Normalize CRLF to LF for consistent splitting
 		patch = strings.ReplaceAll(patch, "\r\n", "\n")
@@ -1528,10 +1784,12 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 			if doc == "" {
 				continue
 			}
+
 			isTalos, parseErr := isTalosConfigPatch(doc)
 			if parseErr != nil {
-				return nil, nil, fmt.Errorf("invalid YAML in template output: %w\n\nTemplate output:\n%s", parseErr, doc)
+				return nil, nil, errors.Wrapf(parseErr, "invalid YAML in template output\n\nTemplate output:\n%s", doc)
 			}
+
 			if isTalos {
 				talosPatches = append(talosPatches, doc)
 			} else {
@@ -1539,9 +1797,16 @@ func extractExtraDocuments(patches []string) (talosPatches []string, extraDocs [
 			}
 		}
 	}
+
 	return talosPatches, extraDocs, nil
 }
 
+// applyPatchesAndRenderConfig assembles the final Talos config bytes
+// for the non-Full template path: split out extra documents, run two
+// bundle-rebuild passes (TypeUnknown then resolved machine type),
+// apply patches in dependency order, serialise.
+//
+//nolint:funlen,gocognit,gocyclo,cyclop,nestif,gocritic // single linear pipeline (extract -> hydrate cluster meta -> reinit bundle for the resolved machine type -> serialise -> reattach extra docs); each branch error path wraps with its own context. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
@@ -1555,16 +1820,18 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	if opts.TalosVersion != "" {
 		versionContract, err := config.ParseContractFromVersion(opts.TalosVersion)
 		if err != nil {
-			return nil, fmt.Errorf("invalid talos-version: %w", err)
+			return nil, errors.Wrap(err, "invalid talos-version")
 		}
+
 		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 	}
 
 	if opts.WithSecrets != "" {
 		secretsBundle, err := secrets.LoadBundle(opts.WithSecrets)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load secrets bundle: %w", err)
+			return nil, errors.Wrap(err, "failed to load secrets bundle")
 		}
+
 		genOptions = append(genOptions, generate.WithSecretsBundle(secretsBundle))
 	}
 
@@ -1581,7 +1848,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	// Load and apply patches to discover the machine type
 	configBundle, err := bundle.NewBundle(configBundleOpts...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "creating initial config bundle")
 	}
 
 	patches, err := configpatcher.LoadPatches(talosPatches)
@@ -1589,7 +1856,8 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
-		return nil, err
+
+		return nil, errors.Wrap(err, "loading patches")
 	}
 
 	err = configBundle.ApplyPatches(patches, true, false)
@@ -1597,11 +1865,14 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
 		}
-		return nil, err
+
+		return nil, errors.Wrap(err, "applying initial patches")
 	}
+
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
 	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
 	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
 	}
@@ -1622,49 +1893,57 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		),
 		bundle.WithVerbose(false),
 	}
+
 	configBundle, err = bundle.NewBundle(configBundleOpts...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "creating reloaded config bundle")
 	}
 
 	var configOrigin, configFull []byte
 	if !opts.Full {
 		configOrigin, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "serializing original config bundle")
 		}
 
 		// Overwrite some fields to preserve them for diff
-		var config map[string]any
-		if err := yaml.Unmarshal(configOrigin, &config); err != nil {
-			return nil, err
+		var cfg map[string]any
+
+		err = yaml.Unmarshal(configOrigin, &cfg)
+		if err != nil {
+			return nil, errors.Wrap(err, "unmarshaling original config")
 		}
-		if machine, ok := config["machine"].(map[string]any); ok {
-			machine["type"] = "unknown"
+
+		if mtype, ok := cfg["machine"].(map[string]any); ok {
+			mtype[cosiMetaKeyType] = "unknown"
 		}
-		if cluster, ok := config["cluster"].(map[string]any); ok {
+
+		if cluster, ok := cfg["cluster"].(map[string]any); ok {
 			cluster["clusterName"] = ""
+
 			controlPlane, ok := cluster["controlPlane"].(map[string]any)
 			if !ok {
 				controlPlane = map[string]any{}
 				cluster["controlPlane"] = controlPlane
 			}
+
 			controlPlane["endpoint"] = ""
 		}
-		configOrigin, err = yaml.Marshal(&config)
+
+		configOrigin, err = yaml.Marshal(&cfg)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "marshaling original config")
 		}
 	}
 
 	err = configBundle.ApplyPatches(patches, (machineType == machine.TypeControlPlane), (machineType == machine.TypeWorker))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "applying patches to reloaded bundle")
 	}
 
 	configFull, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "serializing patched config bundle")
 	}
 
 	var target []byte
@@ -1673,33 +1952,41 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	} else {
 		target, err = yamltools.DiffYAMLs(configOrigin, configFull)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "diffing original and patched configs")
 		}
 	}
 
 	var targetNode yaml.Node
-	if err := yaml.Unmarshal(target, &targetNode); err != nil {
-		return nil, err
+
+	err = yaml.Unmarshal(target, &targetNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshaling target config")
 	}
 
 	// Copy comments from source configuration to the final output
 	for _, configPatch := range talosPatches {
 		var sourceNode yaml.Node
-		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
-			return nil, err
+
+		err = yaml.Unmarshal([]byte(configPatch), &sourceNode)
+		if err != nil {
+			return nil, errors.Wrap(err, "unmarshaling source patch for comment propagation")
 		}
+
 		dstPaths := make(map[string]*yaml.Node)
 		yamltools.CopyComments(&sourceNode, &targetNode, "", dstPaths)
 		yamltools.ApplyComments(&targetNode, "", dstPaths)
 	}
 
 	buf := &bytes.Buffer{}
-	encoder := yaml.NewEncoder(buf)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(&targetNode); err != nil {
-		return nil, err
+	enc := yaml.NewEncoder(buf)
+	enc.SetIndent(2)
+
+	err = enc.Encode(&targetNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "encoding target config")
 	}
-	_ = encoder.Close()
+
+	_ = enc.Close()
 
 	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
 	for _, extraDoc := range extraDocs {
@@ -1715,19 +2002,19 @@ func readUnexportedField(field reflect.Value) any {
 	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
 }
 
-// builds resource with metadata, spec and stringSpec fields
+// extractResourceData builds resource with metadata, spec and stringSpec fields.
 func extractResourceData(r resource.Resource) (map[string]any, error) {
 	res := make(map[string]any)
 
 	// Extract metadata directly from resource methods
-	md := r.Metadata()
+	rmd := r.Metadata()
 	metadata := map[string]any{
-		"namespace": string(md.Namespace()),
-		"type":      string(md.Type()),
-		"id":        string(md.ID()),
-		"version":   md.Version().String(),
-		"phase":     md.Phase().String(),
-		"owner":     string(md.Owner()),
+		cosiMetaKeyNamespace: rmd.Namespace(),
+		cosiMetaKeyType:      rmd.Type(),
+		cosiMetaKeyID:        rmd.ID(),
+		cosiMetaKeyVersion:   rmd.Version().String(),
+		cosiMetaKeyPhase:     rmd.Phase().String(),
+		cosiMetaKeyOwner:     rmd.Owner(),
 	}
 
 	res["metadata"] = metadata
@@ -1738,65 +2025,92 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 		val = val.Elem()
 	}
 
-	if val.Kind() == reflect.Struct {
-		if yamlField := val.FieldByName("yaml"); yamlField.IsValid() {
-			yamlValue := readUnexportedField(yamlField)
-			var unmarshalledData any
-			if err := yaml.Unmarshal([]byte(yamlValue.(string)), &unmarshalledData); err != nil {
-				return res, fmt.Errorf("error unmarshaling yaml: %w", err)
-			}
-			res["spec"] = unmarshalledData
-		} else {
-			return res, fmt.Errorf("field 'yaml' not found")
-		}
+	if val.Kind() != reflect.Struct {
+		return res, nil
 	}
+
+	yamlField := val.FieldByName("yaml")
+	if !yamlField.IsValid() {
+		return res, errors.New("field 'yaml' not found")
+	}
+
+	yamlValue := readUnexportedField(yamlField)
+
+	yamlString, ok := yamlValue.(string)
+	if !ok {
+		//nolint:wrapcheck // cockroachdb/errors.Newf produces a stable typed error; wrapcheck's default ignore-sigs cover .New() but not .Newf().
+		return res, errors.Newf("field 'yaml' is not a string (got %T)", yamlValue)
+	}
+
+	var unmarshalledData any
+
+	err := yaml.Unmarshal([]byte(yamlString), &unmarshalledData)
+	if err != nil {
+		return res, errors.Wrap(err, "unmarshaling yaml")
+	}
+
+	res["spec"] = unmarshalledData
 
 	return res, nil
 }
 
+// newLookupFunction returns the implementation of the chart `lookup`
+// template function, dispatching across COSI resource kinds and emitting
+// a deterministic error envelope on miss.
+//
+//nolint:funlen // 62 lines: closure over ctx/c with a single linear dispatch over resource kinds; extracting helpers would either thread (ctx, c) through every signature or hoist the closure body to package level.
 func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]any, error) {
-	return func(kind string, namespace string, id string) (map[string]any, error) {
+	return func(kind string, namespace string, docID string) (map[string]any, error) {
 		var multiErr *multierror.Error
 
 		var resources []map[string]any
 
-		callbackResource := func(parentCtx context.Context, hostname string, r resource.Resource, callError error) error {
+		callbackResource := func(_ context.Context, _ string, r resource.Resource, callError error) error {
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
 				errCode := status.Code(callError)
+
 				errStr := callError.Error()
 				if errCode == codes.NotFound || errCode == codes.PermissionDenied ||
 					strings.Contains(errStr, "code = NotFound") || strings.Contains(errStr, "code = PermissionDenied") {
 					return nil
 				}
+
 				multiErr = multierror.Append(multiErr, callError)
+
 				return nil
 			}
 
 			res, err := extractResourceData(r)
 			if err != nil {
-				multiErr = multierror.Append(multiErr, fmt.Errorf("resource %s/%s: %w", r.Metadata().Type(), r.Metadata().ID(), err))
+				multiErr = multierror.Append(multiErr, errors.Wrapf(err, "resource %s/%s", r.Metadata().Type(), r.Metadata().ID()))
+
 				return nil
 			}
 
 			resources = append(resources, res)
+
 			return nil
 		}
-		callbackRD := func(definition *meta.ResourceDefinition) error {
+		callbackRD := func(_ *meta.ResourceDefinition) error {
 			return nil
 		}
 
-		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, id)
+		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID)
 		if helperErr != nil {
-			return map[string]any{}, helperErr
+			return map[string]any{}, errors.Wrap(helperErr, "iterating resources")
 		}
-		if err := multiErr.ErrorOrNil(); err != nil {
-			return map[string]any{}, err
+
+		err := multiErr.ErrorOrNil()
+		if err != nil {
+			return map[string]any{}, errors.Wrap(err, "collecting resource lookup errors")
 		}
+
 		if len(resources) == 0 {
 			return map[string]any{}, nil
 		}
-		if id != "" && len(resources) == 1 {
+
+		if docID != "" && len(resources) == 1 {
 			return resources[0], nil
 		}
 		// Return items as a slice for proper range iteration in templates
@@ -1804,10 +2118,11 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 		for i, res := range resources {
 			items[i] = res
 		}
+
 		return map[string]any{
-			"apiVersion": "v1",
-			"kind":       "List",
-			"items":      items,
+			k8sKeyAPIVersion: k8sAPIVersionV1,
+			k8sKeyKind:       cosiKindList,
+			k8sKeyItems:      items,
 		}, nil
 	}
 }
