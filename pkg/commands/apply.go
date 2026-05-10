@@ -109,12 +109,12 @@ var applyCmd = &cobra.Command{
 
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		return apply(cmd.Context())
+	RunE: func(_ *cobra.Command, _ []string) error {
+		return apply()
 	},
 }
 
-func apply(ctx context.Context) error {
+func apply() error {
 	// Expand directories to YAML files
 	expandedFiles, err := ExpandFilePaths(applyCmdFlags.configFiles)
 	if err != nil {
@@ -128,22 +128,47 @@ func apply(ctx context.Context) error {
 	}
 
 	for _, configFile := range expandedFiles {
-		err = applyOneFile(ctx, configFile)
+		err = applyOneFile(configFile)
 		if err != nil {
 			return err
 		}
 
-		// Reset args
-		if !applyCmdFlags.nodesFromArgs {
-			GlobalArgs.Nodes = []string{}
-		}
-
-		if !applyCmdFlags.endpointsFromArgs {
-			GlobalArgs.Endpoints = []string{}
-		}
+		resetGlobalArgsBetweenFiles(applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs)
 	}
 
 	return nil
+}
+
+// resetGlobalArgsBetweenFiles wipes the per-file GlobalArgs.Nodes /
+// GlobalArgs.Endpoints state between iterations of a multi-file apply
+// or template command. Each iteration's modeline rewrites these
+// values in-place via processModelineAndUpdateGlobals; without a
+// reset between files, the previous file's modeline-supplied values
+// would leak into a subsequent file whose modeline omits them.
+//
+// The empty-slice reset on Endpoints is deliberate. The talos client
+// (cmd/talosctl/pkg/talos/global/client.go) registers
+// client.WithConfig(cfg) first and then layers client.WithEndpoints
+// on top only when len(c.Endpoints) > 0. An empty GlobalArgs.Endpoints
+// therefore falls back to the talosconfig context endpoints — the
+// behavior an operator expects when their `talosconfig` already names
+// the cluster. Re-seeding defaultLocalEndpoint here would override
+// the talosconfig context with loopback on every file past the first
+// whose modeline omits endpoints, silently mis-routing applies to
+// 127.0.0.1.
+//
+// PreRunE seeds defaultLocalEndpoint once before the loop runs as a
+// belt-and-braces guard against zero-endpoint client construction on
+// the very first file. From the second file onward the talosconfig
+// fallback is the intended behavior.
+func resetGlobalArgsBetweenFiles(nodesFromArgs, endpointsFromArgs bool) {
+	if !nodesFromArgs {
+		GlobalArgs.Nodes = []string{}
+	}
+
+	if !endpointsFromArgs {
+		GlobalArgs.Endpoints = []string{}
+	}
 }
 
 // applyOneFile dispatches a single config file through either the
@@ -151,7 +176,7 @@ func apply(ctx context.Context) error {
 // or the direct-patch path (otherwise). Splitting the per-file work
 // out of the outer apply loop keeps the cognitive complexity of
 // either half within the linter's gate.
-func applyOneFile(ctx context.Context, configFile string) error {
+func applyOneFile(configFile string) error {
 	modelineTemplates, err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true)
 	if err != nil {
 		return err
@@ -163,7 +188,7 @@ func applyOneFile(ctx context.Context, configFile string) error {
 		return applyOneFileTemplateMode(configFile, modelineTemplates, withSecretsPath)
 	}
 
-	return applyOneFileDirectPatchMode(ctx, configFile, withSecretsPath)
+	return applyOneFileDirectPatchMode(configFile, withSecretsPath)
 }
 
 // applyOneFileTemplateMode runs the template-rendering apply path for
@@ -257,11 +282,11 @@ func buildApplyClosure() applyFunc {
 // slice length — see cosiPreflightContext for the auth path's
 // workaround that has to scope ctx back to "node" before calling the
 // same COSI preflight).
-func applyOneFileDirectPatchMode(ctx context.Context, configFile, withSecretsPath string) error {
+func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 	opts := buildApplyPatchOptions(withSecretsPath)
 	patches := []string{"@" + configFile}
 
-	configBundle, machineType, err := engine.FullConfigProcess(ctx, opts, patches)
+	configBundle, machineType, err := engine.FullConfigProcess(opts, patches)
 	if err != nil {
 		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
 		return errors.WithHint(

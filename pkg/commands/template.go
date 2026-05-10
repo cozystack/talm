@@ -166,13 +166,7 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 				templateCmdFlags.templateFiles = []string{}
 			}
 
-			if !templateCmdFlags.nodesFromArgs {
-				GlobalArgs.Nodes = []string{}
-			}
-
-			if !templateCmdFlags.endpointsFromArgs {
-				GlobalArgs.Endpoints = []string{}
-			}
+			resetGlobalArgsBetweenFiles(templateCmdFlags.nodesFromArgs, templateCmdFlags.endpointsFromArgs)
 		}
 
 		return nil

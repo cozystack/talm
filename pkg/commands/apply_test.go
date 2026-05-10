@@ -843,6 +843,88 @@ machine:
 	// regression that would wire MergeFileAsPatch into generateOutput.
 }
 
+// TestResetGlobalArgsBetweenFiles_ClearsModelineSuppliedEndpoints pins
+// the post-iteration reset semantics for the multi-file apply/template
+// loop. After a file's modeline supplies endpoints, the next iteration
+// must start with an EMPTY GlobalArgs.Endpoints slice — not a re-seeded
+// `[defaultLocalEndpoint]` placeholder. The empty slice triggers the
+// talos client's intended fallback to talosconfig context endpoints
+// (cmd/talosctl/pkg/talos/global/client.go: client.WithConfig is
+// registered first, then client.WithEndpoints only when len > 0).
+// Re-seeding loopback would silently override the talosconfig context
+// for any subsequent file whose modeline omits endpoints. The
+// matching nodes branch zeroes out Nodes for the same reason.
+func TestResetGlobalArgsBetweenFiles_ClearsModelineSuppliedEndpoints(t *testing.T) {
+	savedNodes := append([]string(nil), GlobalArgs.Nodes...)
+	savedEndpoints := append([]string(nil), GlobalArgs.Endpoints...)
+	defer func() {
+		GlobalArgs.Nodes = savedNodes
+		GlobalArgs.Endpoints = savedEndpoints
+	}()
+
+	GlobalArgs.Nodes = []string{testNodeAddrA, testNodeAddrB}
+	GlobalArgs.Endpoints = []string{testNodeAddrA}
+
+	resetGlobalArgsBetweenFiles(false, false)
+
+	if len(GlobalArgs.Nodes) != 0 {
+		t.Errorf("GlobalArgs.Nodes = %v, want empty (modeline-supplied nodes must not leak across files)", GlobalArgs.Nodes)
+	}
+	if len(GlobalArgs.Endpoints) != 0 {
+		t.Errorf("GlobalArgs.Endpoints = %v, want empty (re-seeding defaultLocalEndpoint here would override talosconfig context fallback for the next file)", GlobalArgs.Endpoints)
+	}
+}
+
+// TestResetGlobalArgsBetweenFiles_PreservesCLIFlagState pins the
+// other half of the contract: when the operator supplied --nodes or
+// --endpoints on the CLI (nodesFromArgs / endpointsFromArgs == true),
+// the reset must NOT clobber those values. Otherwise the second and
+// later files would silently lose the operator's explicit targeting.
+func TestResetGlobalArgsBetweenFiles_PreservesCLIFlagState(t *testing.T) {
+	savedNodes := append([]string(nil), GlobalArgs.Nodes...)
+	savedEndpoints := append([]string(nil), GlobalArgs.Endpoints...)
+	defer func() {
+		GlobalArgs.Nodes = savedNodes
+		GlobalArgs.Endpoints = savedEndpoints
+	}()
+
+	GlobalArgs.Nodes = []string{testNodeAddrA, testNodeAddrB}
+	GlobalArgs.Endpoints = []string{testNodeAddrC}
+
+	resetGlobalArgsBetweenFiles(true, true)
+
+	if !slices.Equal(GlobalArgs.Nodes, []string{testNodeAddrA, testNodeAddrB}) {
+		t.Errorf("GlobalArgs.Nodes = %v, want [a,b] (CLI --nodes must not be reset between files)", GlobalArgs.Nodes)
+	}
+	if !slices.Equal(GlobalArgs.Endpoints, []string{testNodeAddrC}) {
+		t.Errorf("GlobalArgs.Endpoints = %v, want [c] (CLI --endpoints must not be reset between files)", GlobalArgs.Endpoints)
+	}
+}
+
+// TestResetGlobalArgsBetweenFiles_DoesNotReseedLoopback pins the
+// regression that prompted the contract above. A previous iteration
+// of the strict-lint PR re-seeded `[defaultLocalEndpoint]` in this
+// reset, hoping to "preserve the PreRunE fallback" across files. That
+// broke the talosconfig fallback path: `client.WithEndpoints` is
+// applied unconditionally when `len(c.Endpoints) > 0`, so the
+// re-seeded loopback overrode the talosconfig context's real
+// endpoints for every file past the first. Pin the empty-slice reset
+// explicitly so a future "fix" doesn't reintroduce the override.
+func TestResetGlobalArgsBetweenFiles_DoesNotReseedLoopback(t *testing.T) {
+	savedEndpoints := append([]string(nil), GlobalArgs.Endpoints...)
+	defer func() { GlobalArgs.Endpoints = savedEndpoints }()
+
+	GlobalArgs.Endpoints = []string{"10.0.0.1"}
+
+	resetGlobalArgsBetweenFiles(false, false)
+
+	for _, got := range GlobalArgs.Endpoints {
+		if got == defaultLocalEndpoint {
+			t.Errorf("GlobalArgs.Endpoints contains defaultLocalEndpoint (%q) after reset; this would override talosconfig context fallback on the next iteration", got)
+		}
+	}
+}
+
 // TestIsOutsideRoot pins the contract that distinguishes a path that
 // truly escapes the project root (".." or a first element of "..")
 // from a path whose first element merely *starts* with ".." but is
