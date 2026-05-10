@@ -317,38 +317,42 @@ kubeconfig
 // created. The second pass forces a write by changing the required
 // kubeconfig basename — writeGitignoreFile early-returns when no
 // new entries are needed.
+// captureStderr is a self-contained test helper: redirect os.Stderr
+// to a pipe for the duration of fn, then restore os.Stderr and
+// return whatever fn wrote. The "self-contained" part is
+// load-bearing — restoration happens via a per-call defer rather
+// than t.Cleanup, so back-to-back invocations from the same test do
+// not leak a closed writer into the next call's origStderr capture.
+// See TestCaptureStderr_RestoresOsStderrPerCall for the regression
+// guard.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+
+	defer func() {
+		os.Stderr = origStderr
+		_ = r.Close()
+	}()
+
+	fn()
+	_ = w.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+
+	return buf.String()
+}
+
 func TestContract_WriteGitignoreFile_CreatedVsUpdatedReporting(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
 	originalKube := Config.GlobalOptions.Kubeconfig
 	t.Cleanup(func() { Config.GlobalOptions.Kubeconfig = originalKube })
-
-	captureStderr := func(t *testing.T, fn func()) string {
-		t.Helper()
-		// Restore os.Stderr at the END of THIS call, not at the end
-		// of the surrounding test. The helper is invoked twice
-		// sequentially below; using t.Cleanup would defer restore
-		// past the second call, leaving the second invocation's
-		// origStderr pointing at the first call's already-closed
-		// writer.
-		origStderr := os.Stderr
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatalf("pipe: %v", err)
-		}
-		os.Stderr = w
-
-		defer func() {
-			os.Stderr = origStderr
-			_ = r.Close()
-		}()
-
-		fn()
-		_ = w.Close()
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		return buf.String()
-	}
 
 	// First call: fresh tempdir, no .gitignore exists.
 	Config.GlobalOptions.Kubeconfig = ""
@@ -411,5 +415,55 @@ func TestGitignoreReportVerb_BranchesOnIsNotExist(t *testing.T) {
 				t.Errorf("gitignoreReportVerb(%v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCaptureStderr_RestoresOsStderrPerCall pins the helper's
+// per-call restore semantics. The previous t.Cleanup-based version
+// passed test assertions only because os.Pipe's buffer absorbed the
+// writes — but between sequential captureStderr calls os.Stderr
+// pointed at the first call's already-closed writer, so the second
+// call's origStderr capture preserved a closed fd, and the surrounding
+// test's t.Cleanup eventually restored that closed fd as the
+// "original" os.Stderr. A test that wrote to os.Stderr after
+// captureStderr returned would have crashed if the buffer had
+// overflowed.
+//
+// The fix replaced t.Cleanup with a per-call defer. This test pins
+// that contract directly: after each captureStderr call, os.Stderr
+// must point at exactly the file it pointed to before the call,
+// not at any pipe writer.
+func TestCaptureStderr_RestoresOsStderrPerCall(t *testing.T) {
+	original := os.Stderr
+
+	first := captureStderr(t, func() {
+		_, _ = os.Stderr.WriteString("first\n")
+	})
+
+	if os.Stderr != original {
+		t.Errorf("after first captureStderr call, os.Stderr is %p, want original %p", os.Stderr, original)
+	}
+	if !strings.Contains(first, "first") {
+		t.Errorf("first capture missing payload; got %q", first)
+	}
+
+	// The critical case: a second call. The buggy t.Cleanup-based
+	// version captured a closed pipe writer here as origStderr.
+	second := captureStderr(t, func() {
+		_, _ = os.Stderr.WriteString("second\n")
+	})
+
+	if os.Stderr != original {
+		t.Errorf("after second captureStderr call, os.Stderr is %p, want original %p", os.Stderr, original)
+	}
+	if !strings.Contains(second, "second") {
+		t.Errorf("second capture missing payload; got %q", second)
+	}
+
+	// Last guard: writing to os.Stderr after the helper returns
+	// must not blow up — proves the restore landed on the real
+	// stderr, not a closed pipe writer.
+	if _, err := os.Stderr.WriteString(""); err != nil {
+		t.Errorf("os.Stderr is no longer usable after captureStderr returned: %v", err)
 	}
 }
