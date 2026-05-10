@@ -333,10 +333,10 @@ func ipIsValid(addrStr string) (string, error) {
 // undefined IP is not in any defined set. The chart-side helper that drives
 // the membership search runs over every entry in the addresses COSI
 // resource, so a single corrupt or future-format entry must not crash the
-// entire render. An operator-typoed floatingIP likewise falls through to the
-// default-route fallback link rather than failing the render — Talos itself
-// rejects malformed IP literals with a clear error on apply, so the chart
-// layer does not need to duplicate that check.
+// entire render. The operator-typoed floatingIP case is handled separately
+// by the chart layer: cozystack and generic call ipIsValid up-front and
+// fail the render with a clear hint that names the bad value, so a typoed
+// floatingIP never reaches cidrContains.
 func cidrContains(cidr, addrStr string) (bool, error) {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
