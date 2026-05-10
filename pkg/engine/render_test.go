@@ -1882,18 +1882,18 @@ func TestMultiDocBondSlavesNotEmittedAsLinkConfig(t *testing.T) {
 	}
 }
 
-// TestMultiDocBridgeSkipsLinkConfigBranch pins that a discovered
-// bridge link does NOT fall through to the LinkConfig branch. The
-// chart does not yet emit BridgeConfig, so the bridge must be
-// skipped (rather than rendered as a wrong-kind LinkConfig that
-// Talos would attach to the wrong interface semantics). Once a
-// future change adds a BridgeConfig branch, the test gets updated
-// to assert the new emission.
-func TestMultiDocBridgeSkipsLinkConfigBranch(t *testing.T) {
+// TestMultiDocBridgeDoesNotFallThroughToLinkConfig pins that a
+// discovered bridge link is NOT rendered through the LinkConfig
+// fallback branch. Bridges now have their own BridgeConfig
+// emission path, so a bridge must surface as BridgeConfig (not
+// LinkConfig). Catching a wrong-kind LinkConfig here prevents a
+// future refactor that drops the dedicated bridge branch and
+// silently routes bridges through LinkConfig.
+func TestMultiDocBridgeDoesNotFallThroughToLinkConfig(t *testing.T) {
 	output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", bridgeLookup(), "v1.12")
 
 	if strings.Contains(output, "kind: LinkConfig\nname: br0") {
-		t.Errorf("bridge br0 emitted as a LinkConfig — wrong document kind. Should be skipped until BridgeConfig support lands:\n%s", output)
+		t.Errorf("bridge br0 emitted as a LinkConfig — wrong document kind for a bridge:\n%s", output)
 	}
 	// Routed physical NIC (eth0) still emits its own LinkConfig.
 	if !strings.Contains(output, "name: eth0") {
@@ -4759,7 +4759,8 @@ func bridgeWithClusterSubnetLookup() func(string, string, string) (map[string]an
 			"kind":  "bridge",
 			"index": 2,
 			"bridgeMaster": map[string]any{
-				"stp": map[string]any{"enabled": true},
+				"stp":  map[string]any{"enabled": true},
+				"vlan": map[string]any{"filteringEnabled": true},
 			},
 		},
 	}
@@ -5688,10 +5689,12 @@ func bondWithoutBondMasterLookup() func(string, string, string) (map[string]any,
 }
 
 // bridgeLookup returns a lookup fixture for a node with a routed
-// physical NIC eth0 plus a bridge br0. The renderer must emit
-// LinkConfig for eth0 and SKIP the bridge entirely (until
-// BridgeConfig support lands) rather than emit a wrong-kind
-// LinkConfig name: br0.
+// physical NIC eth0 plus a bridge br0 that carries no addresses
+// of its own. The renderer must emit LinkConfig for eth0 and a
+// minimal BridgeConfig for br0 (no addresses, no routes, no STP
+// / vlan blocks since spec.bridgeMaster is unset on this
+// fixture). The wrong-kind regression to guard against is a
+// LinkConfig named br0.
 func bridgeLookup() func(string, string, string) (map[string]any, error) {
 	eth0 := map[string]any{
 		"metadata": map[string]any{"id": "eth0"},
@@ -5859,9 +5862,9 @@ func vipActiveOnLinkLookup() func(string, string, string) (map[string]any, error
 // bridgeWithGatewayLookup returns a lookup fixture where a discovered
 // bridge br0 carries the IPv4 default route (typical shape: VMs sit
 // behind br0, the bridge gets the host's address). The renderer
-// cannot emit BridgeConfig today, so it must surface a fail rather
-// than silently drop every network document for the gateway-bearing
-// link.
+// emits a typed BridgeConfig document with the gateway entry — the
+// bridge branch handles the gateway-bearing case the same way the
+// non-gateway path does, just with routes.gateway populated.
 func bridgeWithGatewayLookup() func(string, string, string) (map[string]any, error) {
 	br0 := map[string]any{
 		"metadata": map[string]any{"id": "br0"},

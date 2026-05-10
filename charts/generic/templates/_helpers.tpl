@@ -209,10 +209,17 @@ stp:
   enabled: {{ $bridgeMaster.stp.enabled }}
 {{- end }}
 {{- end }}
+{{- /* COSI's BridgeVLANSpec serialises FilteringEnabled as
+       yaml:"filteringEnabled" (verified against
+       siderolabs/talos pkg/machinery/resources/network/link.go).
+       The output-side BridgeConfig schema uses the shorter
+       yaml:"filtering,omitempty" key — so we read the long form
+       from discovery and emit the short form into the rendered
+       document. */ -}}
 {{- if $bridgeMaster.vlan }}
-{{- if hasKey $bridgeMaster.vlan "filtering" }}
+{{- if hasKey $bridgeMaster.vlan "filteringEnabled" }}
 vlan:
-  filtering: {{ $bridgeMaster.vlan.filtering }}
+  filtering: {{ $bridgeMaster.vlan.filteringEnabled }}
 {{- end }}
 {{- end }}
 {{- end }}

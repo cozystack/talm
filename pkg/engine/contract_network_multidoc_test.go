@@ -286,6 +286,11 @@ func TestContract_NetworkMultidoc_VIPOnBridge(t *testing.T) {
 	// STP setting from spec.bridgeMaster.stp.enabled must surface.
 	assertContains(t, out, "stp:")
 	assertContains(t, out, "enabled: true")
+	// VLAN filtering from spec.bridgeMaster.vlan.filteringEnabled
+	// must surface as the shorter yaml key (filtering) the
+	// BridgeConfig output schema uses.
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
 	// Bridge port discovered via spec.slaveKind=="bridge" must be
 	// listed under the BridgeConfig.links.
 	assertContains(t, out, "links:")
