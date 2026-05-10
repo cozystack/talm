@@ -120,12 +120,6 @@ const (
 	// helmKeyTalosVersion is the engine-injected template key
 	// for the Talos version of the cluster being rendered.
 	helmKeyTalosVersion = "TalosVersion"
-
-	// templateBoolTrue is the string ipIsValid (and similar
-	// predicates) emit on a true outcome, mirroring Helm's
-	// include-returns-string convention so callers can write
-	// `eq (ipIsValid x) "true"` directly.
-	templateBoolTrue = "true"
 )
 
 var warnRegex = regexp.MustCompile(warnStartDelim + `((?s).*)` + warnEndDelim)
@@ -306,20 +300,18 @@ func cidrPrefixLen(cidr string) (int, error) {
 }
 
 // ipIsValid reports whether the given string parses as an IP address literal.
-// Returns the empty string for false and "true" for true so chart templates
-// can use it inside `eq ... "true"` directly, matching the include-returns-
-// string convention. Used by the multi-doc Layer2VIPConfig block to fail-fast
-// at render time when an operator-supplied floatingIP is malformed — a
-// render-time error with the exact bad value is much cheaper to debug than
-// an apply-time rejection from the Talos config controller.
-func ipIsValid(addrStr string) (string, error) {
+// Used by the multi-doc Layer2VIPConfig block to fail-fast at render time
+// when an operator-supplied floatingIP is malformed — a render-time error
+// with the exact bad value is much cheaper to debug than an apply-time
+// rejection from the Talos config controller.
+func ipIsValid(addrStr string) (bool, error) {
 	_, err := netip.ParseAddr(addrStr)
 	if err != nil {
 		//nolint:nilerr // parse-failure is the "false" outcome of this predicate
-		return "", nil
+		return false, nil
 	}
 
-	return templateBoolTrue, nil
+	return true, nil
 }
 
 // cidrContains reports whether the given IP literal falls inside the given

@@ -206,7 +206,7 @@ nameservers:
        nonsense `name:` value, and surface only at apply time.
        Render-time `fail` with the bad value is much cheaper to
        debug. */}}
-{{- if and .Values.floatingIP (ne (ipIsValid .Values.floatingIP) "true") (eq .MachineType "controlplane") }}
+{{- if and .Values.floatingIP (not (ipIsValid .Values.floatingIP)) (eq .MachineType "controlplane") }}
 {{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." (.Values.floatingIP | toString)) }}
 {{- end }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig

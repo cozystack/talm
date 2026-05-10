@@ -1394,10 +1394,11 @@ func TestCidrPrefixLenTemplateFunc(t *testing.T) {
 }
 
 // TestIPIsValidTemplateFunc exercises the ipIsValid predicate the
-// multi-doc chart uses to fail-fast on a typoed floatingIP. Returns
-// "true" / "" so chart templates can compose it directly inside
-// `eq ... "true"`. The fail-fast at render time is much cheaper to
-// debug than a Talos apply-time rejection.
+// multi-doc chart uses to fail-fast on a typoed floatingIP.
+// Returns Go bool; Helm's renderExpr stringifies bool as
+// "true"/"false" so the chart can compose via `if not
+// (ipIsValid ...)`. The fail-fast at render time is much cheaper
+// to debug than a Talos apply-time rejection.
 func TestIPIsValidTemplateFunc(t *testing.T) {
 	renderExpr := func(expr string) (string, error) {
 		chrt := &chart.Chart{
@@ -1419,13 +1420,13 @@ func TestIPIsValidTemplateFunc(t *testing.T) {
 		want  string
 	}{
 		{"ipv4 valid", "192.168.100.10", "true"},
-		{"ipv4 host CIDR not a bare ip", "192.168.100.10/24", ""},
-		{"ipv4 octet > 255", "10.0.0.300", ""},
-		{"ipv4 with junk suffix", "192.168.100.10x", ""},
+		{"ipv4 host CIDR not a bare ip", "192.168.100.10/24", "false"},
+		{"ipv4 octet > 255", "10.0.0.300", "false"},
+		{"ipv4 with junk suffix", "192.168.100.10x", "false"},
 		{"ipv6 valid", "2001:db8::1", "true"},
 		{"ipv6 with zone", "fe80::1%eth0", "true"},
-		{"empty returns false", "", ""},
-		{"hostname not an ip", "controlplane.example.com", ""},
+		{"empty returns false", "", "false"},
+		{"hostname not an ip", "controlplane.example.com", "false"},
 	}
 
 	for _, tt := range tests {

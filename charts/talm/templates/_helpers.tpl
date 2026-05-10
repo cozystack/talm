@@ -334,6 +334,10 @@ true
        $target rather than synthesizing a new dot here keeps the
        define body uncluttered. */ -}}
 {{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" $target) -}}
+{{- /* Hoist the scope skip-list out of the range body so it is
+       built once per call rather than once per address-table
+       entry. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" -}}
 {{- /* Track best match across iterations. dict-mutation via Sprig
        set is the established pattern for cross-iteration state in
        Go templates; range introduces a new scope per iteration so
@@ -354,7 +358,7 @@ true
        "<nil>" string, which is neither "" nor in the skip set.
        Real Talos COSI always sets scope, so this is a latent
        guardrail rather than a hot path. */ -}}
-{{- if and .spec.scope (ne (.spec.scope | toString) "") (not (has (.spec.scope | toString) (list "host" "link" "nowhere"))) -}}
+{{- if and .spec.scope (ne (.spec.scope | toString) "") (not (has (.spec.scope | toString) $skipScopes)) -}}
 {{- /* Filter 3: CIDR must contain the target. */ -}}
 {{- if cidrContains $address $target -}}
 {{- /* Filter 4: longest-prefix match. cidrPrefixLen is the
