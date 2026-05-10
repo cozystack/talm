@@ -1268,3 +1268,67 @@ func TestCidrNetworkTemplateFunc(t *testing.T) {
 		})
 	}
 }
+
+// TestCidrContainsTemplateFunc exercises the cidrContains template
+// function directly. Used by talm.discovered.link_name_for_address
+// to pick the link whose subnet hosts a floatingIP. Both IPv4 and
+// IPv6 paths are exercised so a future swap of net/netip for
+// per-family bit math surfaces here, not through chart symptoms.
+func TestCidrContainsTemplateFunc(t *testing.T) {
+	renderExpr := func(expr string) (string, error) {
+		chrt := &chart.Chart{
+			Metadata:  &chart.Metadata{Name: "cidrtest"},
+			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Values:    map[string]any{},
+		}
+		var eng Engine
+		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		if err != nil {
+			return "", err
+		}
+		return out["cidrtest/templates/out.yaml"], nil
+	}
+
+	tests := []struct {
+		name    string
+		cidr    string
+		ip      string
+		want    string
+		wantErr bool
+	}{
+		{"ipv4 host inside /24", "192.168.100.0/24", "192.168.100.10", "true", false},
+		{"ipv4 host outside /24", "192.168.100.0/24", "192.168.101.10", "false", false},
+		{"ipv4 host on boundary /24", "192.168.100.0/24", "192.168.100.0", "true", false},
+		{"ipv4 broadcast in /24", "192.168.100.0/24", "192.168.100.255", "true", false},
+		{"ipv4 inside /26 first quarter", "88.99.210.0/26", "88.99.210.37", "true", false},
+		{"ipv4 outside /26 first quarter", "88.99.210.0/26", "88.99.210.64", "false", false},
+		{"ipv4 /32 self-match", "10.0.0.1/32", "10.0.0.1", "true", false},
+		{"ipv4 /32 other-host", "10.0.0.1/32", "10.0.0.2", "false", false},
+		{"ipv6 inside /64", "2001:db8::/64", "2001:db8::1", "true", false},
+		{"ipv6 outside /64", "2001:db8::/64", "2001:db9::1", "false", false},
+		{"hetzner case: VIP in private VLAN /24", "192.168.100.4/24", "192.168.100.10", "true", false},
+		{"hetzner case: VIP NOT in public /26", "88.99.210.37/26", "192.168.100.10", "false", false},
+		{"malformed cidr", "not-a-cidr", "10.0.0.1", "", true},
+		{"malformed ip", "10.0.0.0/24", "not-an-ip", "", true},
+		{"empty cidr", "", "10.0.0.1", "", true},
+		{"empty ip", "10.0.0.0/24", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderExpr(fmt.Sprintf(`{{ cidrContains %q %q }}`, tt.cidr, tt.ip))
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for cidr=%q ip=%q, got output %q", tt.cidr, tt.ip, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for cidr=%q ip=%q: %v", tt.cidr, tt.ip, err)
+			}
+			if got != tt.want {
+				t.Errorf("cidrContains(%q, %q) = %q, want %q", tt.cidr, tt.ip, got, tt.want)
+			}
+		})
+	}
+}
