@@ -102,6 +102,12 @@ func createSecureTmp(dir string) (tmpPath string, h windows.Handle, err error) {
 		return "", 0, err
 	}
 
+	// SecurityAttributes.Length is uint32 by ABI; unsafe.Sizeof
+	// returns uintptr. windows.SecurityAttributes is 1 uint32 + 2
+	// pointers, so its size is 24 bytes on win64 and 12 on win32 —
+	// both fit uint32 trivially. The conversion is the canonical
+	// Windows ABI idiom (mirrored across golang.org/x/sys/windows
+	// examples) and not a real overflow risk.
 	sa := windows.SecurityAttributes{ //nolint:varnamelen // Windows API conventional short name
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		SecurityDescriptor: sd,
