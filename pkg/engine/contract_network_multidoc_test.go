@@ -419,3 +419,25 @@ func TestContract_NetworkMultidoc_HetznerTopology_VIPOnPrivateVLAN(t *testing.T)
 	assertContains(t, out, "- address: 88.99.210.37/26")
 	assertContains(t, out, "gateway: 88.99.210.1")
 }
+
+// Contract: when the floatingIP isn't on any discovered subnet (e.g.
+// an upstream-routable VIP that arrives via the default-route link,
+// or an operator typo), Layer2VIPConfig falls back to the
+// IPv4-default-route link rather than silently skipping or failing.
+// Pre-fix behaviour was always-fall-back; the fix prefers
+// subnet-membership but preserves the fallback for topologies where
+// the new helper has nothing to match on. simpleNicLookup carries a
+// gateway on eth0 with addresses 192.168.201.10/24; we set a
+// floatingIP outside that subnet and assert it lands on eth0.
+func TestContract_NetworkMultidoc_FloatingIPNotInDiscoveredSubnetFallsBackToGateway(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.99.99.99"`)
+	assertContains(t, out, "link: eth0")
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig (fallback path), got %d:\n%s", got, out)
+	}
+}

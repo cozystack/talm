@@ -278,13 +278,29 @@ mtu: {{ $link.spec.mtu }}
 {{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
        has set .Values.vipLink, since the override-path block above
        has already emitted the document with the operator's chosen
-       link. */}}
-{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") $defaultLinkName }}
+       link.
+
+       Link selection prefers the link whose discovered addresses
+       contain the floatingIP (talm.discovered.link_name_for_address),
+       so a VIP in a private subnet hosted on a VLAN child lands on
+       that VLAN — not on the IPv4-default-route NIC. The
+       default-gateway link stays as the fallback for topologies
+       where the VIP isn't on any discovered subnet (typical for
+       upstream-routable VIPs that arrive via the default-route
+       link). When neither resolves a link, no Layer2VIPConfig is
+       emitted, matching the prior behaviour. */}}
+{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") }}
+{{- $vipLink := include "talm.discovered.link_name_for_address" .Values.floatingIP }}
+{{- if not $vipLink }}
+{{- $vipLink = $defaultLinkName }}
+{{- end }}
+{{- if $vipLink }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
 name: {{ .Values.floatingIP | quote }}
-link: {{ $defaultLinkName }}
+link: {{ $vipLink }}
+{{- end }}
 {{- end }}
 {{- end }}
 
