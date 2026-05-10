@@ -237,19 +237,62 @@ func TestContract_NetworkMultidoc_VLANOnBondRendersVLANConfig(t *testing.T) {
 
 // === Bridge non-gateway: silent skip ===
 
-// Contract: a bridge link that is NOT the IPv4 default route is
-// skipped silently — no BridgeConfig is emitted (chart does not yet
-// support BridgeConfig output), and no LinkConfig is emitted (it is
-// not a physical NIC). The expectation is that operators who run
-// bridges declare them via per-node body overlays. The non-gateway
-// case is the silent path; the gateway case is a hard fail (pinned
-// in contract_errors_test.go).
-func TestContract_NetworkMultidoc_NonGatewayBridgeSkipped(t *testing.T) {
+// Contract: a bridge link discovered on a node is rendered as a
+// typed BridgeConfig document, symmetric to BondConfig for bonds.
+// The non-gateway case lands BridgeConfig with addresses and mtu
+// but no routes entry (no default gateway to emit). The gateway
+// case adds the routes.gateway entry — pinned by
+// TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute.
+//
+// Prior to BridgeConfig support landing, a non-gateway bridge was
+// silently skipped (no document emitted) on the premise that the
+// feature was unimplemented; this contract pins the current
+// "always emit" shape.
+func TestContract_NetworkMultidoc_BridgeConfigEmitted(t *testing.T) {
 	out := renderCozystackWith(t, bridgeLookup(), map[string]any{
 		"advertisedSubnets": []any{testAdvertisedSubnet},
 	})
-	// No BridgeConfig — feature unimplemented.
-	assertNotContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "name: br0")
+}
+
+// Contract: a controlplane floatingIP that lives inside the subnet
+// configured on a bridge link now legitimately lands on the bridge —
+// the bridge is fully rendered as a typed BridgeConfig document, so
+// pinning the VIP there no longer leaves it dangling without a
+// surrounding network document. Symmetric to the VLAN-child case
+// pinned in HetznerTopology_VIPOnPrivateVLAN.
+//
+// Fixture: bridgeWithClusterSubnetLookup has br0 carrying
+// 10.5.0.10/24 (global scope) and the IPv4 default route. floatingIP
+// 10.5.0.99 is inside that subnet, so link_name_for_address resolves
+// to br0; the discovery-derived Layer2VIPConfig pin'ит link=br0.
+// Without BridgeConfig emission (the prior shape), this would have
+// been a "VIP on undocumented link" symptom; now BridgeConfig
+// documents the link explicitly and the chart also emits STP
+// settings carried in spec.bridgeMaster.
+func TestContract_NetworkMultidoc_VIPOnBridge(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithClusterSubnetLookup(), map[string]any{
+		"floatingIP":        "10.5.0.99",
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+
+	// BridgeConfig must be emitted alongside Layer2VIPConfig — that is
+	// the whole reason landing the VIP on a bridge is now safe.
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "name: br0")
+	assertContains(t, out, "- address: 10.5.0.10/24")
+	assertContains(t, out, "gateway: 10.5.0.1")
+	// STP setting from spec.bridgeMaster.stp.enabled must surface.
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	// Bridge port discovered via spec.slaveKind=="bridge" must be
+	// listed under the BridgeConfig.links.
+	assertContains(t, out, "links:")
+	assertContains(t, out, "  - eth0")
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.5.0.99"`)
+	assertContains(t, out, "link: br0")
 }
 
 // === Layer2VIPConfig: discovery-derived ===
@@ -599,6 +642,48 @@ func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "floatingIP") {
 		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// Contract: when the default-route-link fallback resolves to a
+// non-configurable link (Wireguard, slave NIC, anything outside the
+// {physical, bond, vlan, bridge} set), the chart MUST NOT emit
+// Layer2VIPConfig — the chart does not emit a per-link document
+// for such links, so the VIP would dangle on a link the chart
+// never configures. The fallback path mirrors the configurable-
+// link gate that link_name_for_address applies inside its own
+// iteration; matched-link selection and fallback-link selection
+// have to honour the same renderable-link set.
+//
+// Fixture: IPv4 default route on wg0 (Wireguard, not configurable).
+// floatingIP 10.99.99.99 falls outside every discovered subnet, so
+// link_name_for_address returns empty. The fallback would have
+// picked wg0 before the guard landed; with the guard it skips and
+// no Layer2VIPConfig is emitted at all.
+func TestContract_NetworkMultidoc_VIPSkipsNonConfigurableDefaultRouteLink(t *testing.T) {
+	out := renderCozystackWith(t, defaultRouteOnNonConfigurableLinkLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("Layer2VIPConfig must not emit when the only resolvable link is non-configurable; got:\n%s", out)
+	}
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("VIP pinned to non-configurable wg0 — fallback must honour the configurable-link gate; got:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_VIPSkipsNonConfigurableDefaultRouteLink.
+func TestContract_NetworkMultidoc_Generic_VIPSkipsNonConfigurableDefaultRouteLink(t *testing.T) {
+	out := renderGenericWith(t, defaultRouteOnNonConfigurableLinkLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("generic chart: Layer2VIPConfig must not emit when fallback target is non-configurable; got:\n%s", out)
+	}
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("generic chart: VIP pinned to non-configurable wg0:\n%s", out)
 	}
 }
 

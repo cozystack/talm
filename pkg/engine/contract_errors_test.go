@@ -272,35 +272,24 @@ func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error
 	}
 }
 
-// Contract: multi-doc renderer aborts when a bridge carries the IPv4
-// default route. BridgeConfig emission is not yet implemented in the
-// chart; the renderer must not silently skip the gateway link (which
-// would produce a config describing a node with no working uplink).
-// The fail names the offending link, the missing feature
-// (BridgeConfig), and the recourse (per-node body overlay, or move
-// the VIP via vipLink).
-func TestContract_Errors_MultidocBridgeAsGateway(t *testing.T) {
+// Contract: multi-doc renderer no longer aborts when a bridge
+// carries the IPv4 default route — it now emits a typed
+// BridgeConfig document with the gateway. The previous shape
+// hard-failed here on the premise that BridgeConfig emission was
+// unimplemented, but the typed-document branch handles bridges
+// symmetrically to bonds today. The per-chart cross-product is
+// pinned in TestContract_NetworkMultidoc_BridgeConfigEmitted and
+// TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute; this
+// test stays as the negative pin against the previous fail-fast.
+func TestContract_Errors_MultidocBridgeAsGateway_NoLongerFails(t *testing.T) {
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			err := renderExpectingError(t, chartPath, multidocTalos, bridgeAsGatewayLookup(), map[string]any{
 				"endpoint":          testEndpoint,
 				"advertisedSubnets": []any{testAdvertisedSubnet},
 			})
-			if err == nil {
-				t.Fatalf("expected bridge-as-gateway fail, got nil")
-			}
-			msg := err.Error()
-			if !strings.Contains(msg, "talm:") {
-				t.Errorf("error must use 'talm:' prefix, got: %s", msg)
-			}
-			if !strings.Contains(msg, `"br0"`) {
-				t.Errorf("error must name the offending link 'br0', got: %s", msg)
-			}
-			if !strings.Contains(msg, "BridgeConfig") {
-				t.Errorf("error must mention BridgeConfig as the missing feature, got: %s", msg)
-			}
-			if !strings.Contains(msg, "vipLink") {
-				t.Errorf("error must suggest vipLink as a workaround, got: %s", msg)
+			if err != nil {
+				t.Errorf("bridge-as-gateway must no longer fail (BridgeConfig is emitted now), got: %v", err)
 			}
 		})
 	}

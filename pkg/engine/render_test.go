@@ -1726,41 +1726,25 @@ func TestMultiDocLinkConfigStripsFloatingIPFromAddresses(t *testing.T) {
 	}
 }
 
-// TestMultiDocFailsWhenBridgeCarriesDefaultRoute pins the guardrail
-// for the case where a discovered bridge is the IPv4-default link.
-// The bridge branch of the renderer skips emission (BridgeConfig is
-// not yet implemented), so without an explicit fail the rendered
-// config would carry no document for the gateway-bearing link at
-// all — silent drop of the entire network configuration. The
-// guardrail surfaces the missing branch as a clear error pointing
-// the operator at the per-node body workaround.
-func TestMultiDocFailsWhenBridgeCarriesDefaultRoute(t *testing.T) {
-	origLookup := helmEngine.LookupFunc
-	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
-	helmEngine.LookupFunc = bridgeWithGatewayLookup()
+// TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute pins
+// that a discovered bridge that is also the IPv4-default link is
+// rendered as a typed BridgeConfig document with the gateway entry
+// attached. Earlier shapes of the renderer hard-failed here on the
+// premise that BridgeConfig emission was unimplemented; the typed-
+// document branch now handles bridges symmetrically to bonds, so
+// the operator no longer has to declare the bridge via a per-node
+// body overlay just to keep the default-route link alive.
+func TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute(t *testing.T) {
+	output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", bridgeWithGatewayLookup(), "v1.12")
 
-	chrt, err := loader.LoadDir("../../charts/cozystack")
-	if err != nil {
-		t.Fatalf("load chart: %v", err)
+	if !strings.Contains(output, "kind: BridgeConfig") {
+		t.Errorf("expected BridgeConfig for the gateway bridge, got:\n%s", output)
 	}
-	values := cloneValues(chrt.Values)
-	if v, _ := values["endpoint"].(string); v == "" {
-		values["endpoint"] = testEndpoint
+	if !strings.Contains(output, "name: br0") {
+		t.Errorf("BridgeConfig must carry name=br0 (the discovered bridge link), got:\n%s", output)
 	}
-	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
-		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
-	}
-
-	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
-		"Values":       values,
-		"TalosVersion": "v1.12",
-	})
-	if err == nil {
-		t.Fatal("expected render to fail when a bridge carries the IPv4 default route — silent drop of every network document for the gateway link is the regression this guardrail prevents")
-	}
-	if !strings.Contains(err.Error(), "bridge") {
-		t.Errorf("fail message must name the bridge so the operator can locate the offending link, got: %v", err)
+	if !strings.Contains(output, "gateway:") {
+		t.Errorf("BridgeConfig for the IPv4-default-route bridge must carry the gateway entry, got:\n%s", output)
 	}
 }
 
@@ -4721,6 +4705,217 @@ func noDefaultRouteWithSubnetMatchLookup() func(string, string, string) (map[str
 				return publicNIC, nil
 			case "enp0s31f6.4000":
 				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// bridgeWithClusterSubnetLookup is the BridgeConfig analogue of
+// hetznerPublicNICWithPrivateVLANLookup: a node where the cluster
+// network is configured on a bridge link (e.g. a node that bridges
+// physical NICs into one logical "uplink" carrying the cluster
+// subnet) and the floatingIP belongs inside that bridge's subnet.
+//
+// With BridgeConfig emission landed the bridge is rendered as a
+// typed document and the discovery-derived Layer2VIPConfig can
+// safely pin link=br0. Without BridgeConfig (the prior shape) the
+// VIP would have dangled on a link with no surrounding network
+// document.
+//
+// Topology: eth0 (physical, slaveKind=bridge, masterIndex=2) +
+// br0 (bridge, index=2) carrying the cluster subnet
+// 10.5.0.10/24 and the IPv4 default route via 10.5.0.1.
+func bridgeWithClusterSubnetLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+			"slaveKind":    "bridge",
+			"masterIndex":  2,
+		},
+	}
+	br0 := map[string]any{
+		"metadata": map[string]any{"id": "br0"},
+		"spec": map[string]any{
+			"kind":  "bridge",
+			"index": 2,
+			"bridgeMaster": map[string]any{
+				"stp": map[string]any{"enabled": true},
+			},
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.5.0.1",
+					"outLinkName": "br0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, br0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "br0", "address": "10.5.0.10/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"10.5.0.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "br0":
+				return br0, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// defaultRouteOnNonConfigurableLinkLookup pins the contract that
+// the default-route-link fallback in the discovery-derived
+// Layer2VIPConfig path must also pass the configurable-link gate.
+// A node whose IPv4 default route sits on a Wireguard / slave /
+// other unmanaged link must NOT pin the VIP there — the chart
+// emits no per-link document for such links, so the VIP would
+// dangle on a link the chart never configures.
+//
+// Topology: physical NIC enp0s31f6 with a private address but no
+// default route; Wireguard wg0 carries the IPv4 default route.
+// floatingIP 10.99.99.99 falls outside every discovered subnet, so
+// link_name_for_address returns empty and the chart falls back —
+// but the fallback target wg0 is non-configurable, so the chart
+// MUST NOT emit Layer2VIPConfig at all (matches the prior "no
+// match, no emit" silent-skip path).
+func defaultRouteOnNonConfigurableLinkLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	wireguard := map[string]any{
+		"metadata": map[string]any{"id": "wg0"},
+		"spec": map[string]any{
+			"kind":  "ether",
+			"index": 3,
+			"mtu":   1420,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "10.244.0.1",
+					"outLinkName": "wg0",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, wireguard},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "wg0", "address": "10.244.0.5/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "wg0":
+				return wireguard, nil
 			case "":
 				return linksList, nil
 			}

@@ -248,6 +248,22 @@ busPath: {{ .spec.busPath }}
 {{- toJson $slaves -}}
 {{- end -}}
 
+{{- /* Get bridge member interfaces (ports) for a given bridge index.
+       Discovered via spec.slaveKind=="bridge" + spec.masterIndex
+       matching — symmetric to bond_slaves above. Returns the JSON list
+       so the multi-doc renderer can iterate without reaching back into
+       the links collection. */ -}}
+{{- define "talm.discovered.bridge_slaves" -}}
+{{- $bridgeIndex := . -}}
+{{- $slaves := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if and (eq .spec.slaveKind "bridge") (eq (int .spec.masterIndex) (int $bridgeIndex)) -}}
+{{- $slaves = append $slaves .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $slaves -}}
+{{- end -}}
+
 {{- /* Generate bond configuration from bondMaster spec */ -}}
 {{- define "talm.discovered.bond_config" -}}
 {{- $linkName := . -}}

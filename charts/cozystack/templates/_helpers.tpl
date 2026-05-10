@@ -249,17 +249,51 @@ link: {{ .Values.vipLink }}
 {{- $linkGateway = include "talm.discovered.gateway_by_link" $linkName }}
 {{- end }}
 {{- if eq $kind "bridge" }}
-{{- /* BridgeConfig is a separate v1alpha1 typed document the chart
-       does not yet emit. Skipping a non-gateway bridge leaves the
-       rendered config without a bridge document and the operator is
-       responsible for declaring it via a per-node body. A bridge
-       carrying the IPv4 default route, however, cannot be silently
-       skipped: that would drop every network document for the
-       gateway link and the rendered config would describe a node
-       with no working uplink. Surface a fail with the offending
-       link and the migration path. */ -}}
-{{- if $isGatewayLink }}
-{{- fail (printf "talm: discovered bridge %q is the IPv4-default link, but BridgeConfig emission is not yet implemented in the chart. Move the bridge declaration into a per-node body overlay (kind: BridgeConfig), or set Values.vipLink to a different link until bridge support lands." $linkName) }}
+{{- /* BridgeConfig emission. Discovers bridge ports (members) via
+       talm.discovered.bridge_slaves and emits a typed v1.12+
+       BridgeConfig document with the same address / route / mtu
+       shape as the other branches. STP and VLAN filtering are
+       opt-in: they are emitted only when the bridge controller
+       reported a non-nil spec.bridgeMaster.stp / spec.bridgeMaster
+       value, so a default-state bridge stays minimal. */ -}}
+{{- $bridgeMaster := $link.spec.bridgeMaster }}
+{{- $bridgePorts := fromJsonArray (include "talm.discovered.bridge_slaves" $link.spec.index) }}
+---
+apiVersion: v1alpha1
+kind: BridgeConfig
+name: {{ $linkName }}
+{{- if $bridgePorts }}
+links:
+{{- range $bridgePorts }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- if $bridgeMaster }}
+{{- if $bridgeMaster.stp }}
+{{- if hasKey $bridgeMaster.stp "enabled" }}
+stp:
+  enabled: {{ $bridgeMaster.stp.enabled }}
+{{- end }}
+{{- end }}
+{{- if $bridgeMaster.vlan }}
+{{- if hasKey $bridgeMaster.vlan "filtering" }}
+vlan:
+  filtering: {{ $bridgeMaster.vlan.filtering }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
 {{- end }}
 {{- else if eq $kind "bond" }}
 {{- $bondMaster := $link.spec.bondMaster }}
@@ -377,8 +411,17 @@ mtu: {{ $link.spec.mtu }}
        emitted, matching the prior behaviour. */}}
 {{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") }}
 {{- $vipLink := include "talm.discovered.link_name_for_address" .Values.floatingIP }}
+{{- /* Default-gateway fallback must also point at a configurable
+       link — otherwise an unmanaged default-route NIC (Wireguard,
+       a CNI bridge before BridgeConfig support, a slave link) would
+       silently win selection and the rendered Layer2VIPConfig would
+       dangle on a link the chart never emits a per-link document
+       for. Mirror the same configurable-link gate
+       link_name_for_address applies inside its own iteration. */ -}}
 {{- if not $vipLink }}
+{{- if has $defaultLinkName $configurableLinks }}
 {{- $vipLink = $defaultLinkName }}
+{{- end }}
 {{- end }}
 {{- if $vipLink }}
 ---
