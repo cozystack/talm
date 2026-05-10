@@ -397,3 +397,57 @@ func TestContract_UpdateFileWithConfirmation_SameContentSkips(t *testing.T) {
 		t.Errorf("identical content should not touch mtime")
 	}
 }
+
+// === updateKubeconfigEndpoint ===
+
+// Contract: updateKubeconfigEndpoint normalises the supplied endpoint
+// through the same canonical form as normalizeEndpoint. The IPv6
+// `[host]` no-port input must round-trip to `https://[host]:6443` —
+// not `https://[[host]]:6443` (the historic bug from re-implementing
+// the trim-and-rejoin logic without the bracket-stripping branch).
+// Multiple clusters in the kubeconfig all receive the same rewrite.
+func TestContract_UpdateKubeconfigEndpoint_NormalisesAllClusters(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"ipv4_no_port", "1.2.3.4", fixtureEndpointIPv4Canonical},
+		{"ipv4_with_port", "1.2.3.4:50000", fixtureEndpointIPv4Canonical},
+		{"hostname_no_port", "node.example.com", fixtureEndpointHostnameCanonical},
+		// The regression case: bracketed IPv6 literal with no port.
+		// A naive trim+rejoin (re-implemented without the bracket-
+		// stripping branch from normalizeEndpoint) would emit
+		// "https://[[2001:db8::1]]:6443" because net.SplitHostPort
+		// fails on the bare bracketed form and net.JoinHostPort then
+		// re-brackets the already-bracketed string. Pinning the
+		// canonical IPv6 output guards against any future inline
+		// re-implementation.
+		{"ipv6_bracketed_no_port", "[2001:db8::1]", fixtureEndpointIPv6Canonical},
+		{"ipv6_bracketed_with_port", "[2001:db8::1]:6443", fixtureEndpointIPv6Canonical},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := clientcmdapi.NewConfig()
+			cfg.Clusters["one"] = &clientcmdapi.Cluster{Server: fixtureEndpointIPv4Canonical}
+			cfg.Clusters["two"] = &clientcmdapi.Cluster{Server: "https://5.6.7.8:6443"}
+			data, err := clientcmd.Write(*cfg)
+			if err != nil {
+				t.Fatalf("clientcmd.Write: %v", err)
+			}
+
+			got, err := updateKubeconfigEndpoint(data, tc.in)
+			if err != nil {
+				t.Fatalf("updateKubeconfigEndpoint(%q): %v", tc.in, err)
+			}
+
+			parsed, err := clientcmd.Load(got)
+			if err != nil {
+				t.Fatalf("clientcmd.Load round-trip: %v", err)
+			}
+			for name, c := range parsed.Clusters {
+				if c.Server != tc.want {
+					t.Errorf("cluster %q server = %q, want %q (input %q)", name, c.Server, tc.want, tc.in)
+				}
+			}
+		})
+	}
+}

@@ -17,7 +17,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,17 +169,13 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 			}
 		}
 
-		// Set --k8s-endpoint from GlobalArgs.Endpoints
+		// Set --k8s-endpoint from GlobalArgs.Endpoints. Delegate to
+		// normalizeEndpoint so the canonical form (including the IPv6
+		// `[host]` no-port branch) matches the rest of the package
+		// instead of re-implementing the trim-and-rejoin logic and
+		// silently dropping the bracket-stripping branch.
 		if !cmd.Flags().Changed("k8s-endpoint") && len(GlobalArgs.Endpoints) > 0 {
-			host := GlobalArgs.Endpoints[0]
-			host = strings.TrimPrefix(host, "https://")
-
-			host = strings.TrimPrefix(host, "http://")
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
-
-			k8sEndpoint := "https://" + net.JoinHostPort(host, "6443")
+			k8sEndpoint := normalizeEndpoint(GlobalArgs.Endpoints[0])
 			if err := cmd.Flags().Set("k8s-endpoint", k8sEndpoint); err != nil {
 				return errors.Wrap(err, "failed to set k8s-endpoint")
 			}
@@ -327,16 +322,12 @@ func updateKubeconfigEndpoint(kubeconfigData []byte, endpoint string) ([]byte, e
 		return nil, errors.Wrap(err, "failed to parse kubeconfig")
 	}
 
-	// Normalize endpoint to https://host:6443
-	host := endpoint
-	host = strings.TrimPrefix(host, "https://")
-
-	host = strings.TrimPrefix(host, "http://")
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-
-	k8sEndpoint := "https://" + net.JoinHostPort(host, "6443")
+	// Delegate to normalizeEndpoint so the canonical form matches the
+	// k8s-endpoint flag set above (and every other normaliser in the
+	// package). Re-implementing the trim-and-rejoin logic here used to
+	// drop the IPv6 `[host]` no-port branch — same class of bug
+	// nosprintfhostport surfaced for the talosctl wrapper.
+	k8sEndpoint := normalizeEndpoint(endpoint)
 
 	// Update server for all clusters
 	for _, cluster := range config.Clusters {
