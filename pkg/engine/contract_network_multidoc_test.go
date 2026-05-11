@@ -1030,6 +1030,69 @@ func TestContract_NetworkMultidoc_Generic_FloatingIPNotInDiscoveredSubnetFallsBa
 	assertContains(t, out, "link: eth0")
 }
 
+// Generic-chart mirror of TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr.
+func TestContract_NetworkMultidoc_Generic_LinkAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderGenericWith(t, malformedAddressEntryLookup(), map[string]any{
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("generic chart: malformed CIDR leaked into rendered addresses:\n%s", out)
+	}
+	if !strings.Contains(out, "- address: 192.168.100.4/24") {
+		t.Errorf("generic chart: valid sibling CIDR dropped by the filter:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_LinkAddressesSkipsNilScope.
+func TestContract_NetworkMultidoc_Generic_LinkAddressesSkipsNilScope(t *testing.T) {
+	out := renderGenericWith(t, hetznerWithNilScopeAddressLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "192.168.0.5/16") {
+		t.Errorf("generic chart: nil-scope CIDR leaked into rendered addresses:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_VIPLinkTieBreakByIterationOrder.
+func TestContract_NetworkMultidoc_Generic_VIPLinkTieBreakByIterationOrder(t *testing.T) {
+	out := renderGenericWith(t, twoConfigurableLinksSamePrefixLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "link: eth0")
+	if strings.Contains(out, "link: eth1") {
+		t.Errorf("generic chart: tie-break regressed:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_BridgeConfig_VLANOnlyNoStp.
+func TestContract_NetworkMultidoc_Generic_BridgeConfig_VLANOnlyNoStp(t *testing.T) {
+	out := renderGenericWith(t, bridgeWithVLANOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
+	if strings.Contains(out, "stp:") {
+		t.Errorf("generic chart: BridgeConfig emits stp: block when bridgeMaster.stp unset:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_BridgeConfig_StpOnlyNoVlan.
+func TestContract_NetworkMultidoc_Generic_BridgeConfig_StpOnlyNoVlan(t *testing.T) {
+	out := renderGenericWith(t, bridgeWithSTPOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	if strings.Contains(out, "vlan:") {
+		t.Errorf("generic chart: BridgeConfig emits vlan: block when bridgeMaster.vlan unset:\n%s", out)
+	}
+}
+
 // Contract: when the floatingIP isn't on any discovered subnet (e.g.
 // an upstream-routable VIP that arrives via the default-route link,
 // or an operator typo), Layer2VIPConfig falls back to the
