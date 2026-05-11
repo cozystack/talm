@@ -61,7 +61,24 @@ talm init -p cozystack -N myawesomecluster --image factory.talos.dev/installer/<
 
 `--image` rewrites the top-level `image:` field in the preset's `values.yaml` before write. The flag is honored on initial `init` only — for an existing project, edit `values.yaml` directly. The `cozystack` preset declares `image:`; the `generic` preset does not, so `--image --preset generic` is rejected up front.
 
-Edit `values.yaml` to set your cluster's control-plane endpoint. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty on purpose so a missed override fails loudly instead of silently embedding a placeholder. For cozystack VIP setups set `endpoint` and `floatingIP` together (same IP, single shared VIP); for single-node clusters use that node's routable IP and leave `floatingIP` blank; for multi-node with an external load balancer use the LB URL and leave `floatingIP` blank. When `vipLink` is left empty the chart picks the link automatically using a two-step rule: first, longest-prefix-match across configurable links — if the `floatingIP` falls inside the CIDR of any address on a configurable link (physical NIC, bond, VLAN, bridge), the most specific subnet wins (this handles the Hetzner-style topology where a public NIC carries the default route and a VLAN child carries the private cluster subnet — the VIP lands on the VLAN child); otherwise it falls back to the IPv4-default-gateway-bearing link, for upstream-routable VIPs that arrive via the default route. Addresses on links the chart does not emit a per-link document for (Wireguard, kernel-managed loopback, slave NICs of a bond, anything outside the configurable set) are skipped — a VIP pinned there would have no surrounding network document. Set `vipLink` explicitly when the target link does not yet exist on the live system at first apply (typically a VLAN sub-interface) — the chart pins `Layer2VIPConfig.link` to it directly and emits the document even on a totally fresh node where discovery has not yet populated the addresses table. The chart does not auto-emit a `LinkConfig` or `VLANConfig` for the override link; the operator is responsible for ensuring the link comes up, typically by adding a `LinkConfig` or `VLANConfig` for that link to the per-node body overlay alongside `vipLink`. Subnet-selector fields (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived automatically from the node's default-gateway-bearing link, so no override is needed unless you have a multi-homed node that requires a specific subnet pinned.
+Edit `values.yaml` to set your cluster's control-plane endpoint. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty on purpose so a missed override fails loudly instead of silently embedding a placeholder.
+
+Endpoint / floatingIP combinations:
+
+- **cozystack VIP setup**: set `endpoint` and `floatingIP` together to the same IP — single shared VIP.
+- **single-node cluster**: set `endpoint` to the node's routable IP and leave `floatingIP` blank.
+- **multi-node with external load balancer**: set `endpoint` to the LB URL and leave `floatingIP` blank.
+
+When `vipLink` is left empty the chart picks the link automatically using a two-step rule:
+
+1. **Longest-prefix match across configurable links.** If `floatingIP` falls inside the CIDR of any address on a configurable link (physical NIC, bond, VLAN, bridge), the most specific subnet wins. This handles the Hetzner-style topology where a public NIC carries the default route and a VLAN child carries the private cluster subnet — the VIP lands on the VLAN child.
+2. **Fallback to the IPv4-default-gateway-bearing link.** Used when no configurable link's CIDR contains the `floatingIP` — typical for upstream-routable VIPs that arrive via the default route.
+
+Addresses on links the chart does not emit a per-link document for (Wireguard, kernel-managed loopback, slave NICs of a bond, anything outside the configurable set) are skipped — a VIP pinned there would have no surrounding network document.
+
+Set `vipLink` explicitly when the target link does not yet exist on the live system at first apply (typically a VLAN sub-interface). The chart pins `Layer2VIPConfig.link` to it directly and emits the document even on a fresh node where discovery has not yet populated the addresses table. The chart does not auto-emit a `LinkConfig` or `VLANConfig` for the override link; the operator is responsible for ensuring the link comes up, typically by adding a `LinkConfig` or `VLANConfig` for that link to the per-node body overlay alongside `vipLink`.
+
+Subnet-selector fields (`kubelet.validSubnets`, `etcd.advertisedSubnets`) are derived automatically from the node's default-gateway-bearing link, so no override is needed unless you have a multi-homed node that requires a specific subnet pinned.
 
 Boot Talos Linux node, let's say it has address `192.0.2.4`. Then:
 
@@ -126,7 +143,30 @@ cluster:
         endpoint: https://192.0.2.4:6443
 ```
 
-> **Note:** The output format depends on the Talos version configured in `Chart.yaml` (`templateOptions.talosVersion`) or via the `--talos-version` CLI flag. For Talos < v1.12, the output is a single YAML document with `machine.network` and `machine.registries` sections (as shown above). For Talos >= v1.12, the output uses the multi-document format with separate typed documents instead of the deprecated monolithic fields. `HostnameConfig` and `ResolverConfig` are always emitted; one network interface document is emitted per configurable link on the node (`LinkConfig` for physical NICs, `BondConfig` for bond masters, `VLANConfig` for VLAN sub-interfaces) — multi-NIC nodes therefore produce one document per NIC, not one document total. The link carrying the IPv4 default route gets the gateway entry on its document; every other link is emitted gateway-less. Both IPv4 and IPv6 global-scope addresses on a link are surfaced in its document. Bond slaves are filtered out so they do not collide with the master's `BondConfig`. Bridges are emitted as `BridgeConfig` documents symmetric to `BondConfig` for bonds: ports are discovered via `spec.slaveKind=="bridge"` + `spec.masterIndex`, and STP / VLAN-filtering settings reach the output when the bridge controller reports them on `spec.bridgeMaster`. A bridge carrying the IPv4 default route gets the gateway entry on its `BridgeConfig` document; non-gateway bridges get the same shape without `routes.gateway`. The operator-declared `floatingIP` is stripped from per-link addresses so the VIP currently held by a leader does not leak into the static `LinkConfig`. `Layer2VIPConfig` appears on controlplane nodes when `floatingIP` is set; `RegistryMirrorConfig` is emitted only by the cozystack chart.
+> **Note: output format depends on Talos version.**
+>
+> Selected via `Chart.yaml` (`templateOptions.talosVersion`) or `--talos-version`:
+>
+> - **Talos < v1.12** — single YAML document with `machine.network` and `machine.registries` sections (as shown above).
+> - **Talos >= v1.12** — multi-document format with separate typed documents instead of the deprecated monolithic fields.
+>
+> For v1.12+ multi-doc output, one document is emitted per configurable link on the node, plus a fixed pair on every render:
+>
+> - `HostnameConfig` and `ResolverConfig` — always emitted.
+> - `LinkConfig` — physical NICs.
+> - `BondConfig` — bond masters. Bond slaves are filtered out so they do not collide with the master's document.
+> - `VLANConfig` — VLAN sub-interfaces.
+> - `BridgeConfig` — bridges, symmetric to `BondConfig` for bonds. Ports discovered via `spec.slaveKind == "bridge"` + `spec.masterIndex`; STP / VLAN-filtering settings reach the output when the bridge controller reports them on `spec.bridgeMaster`.
+> - `Layer2VIPConfig` — controlplane nodes when `floatingIP` is set.
+> - `RegistryMirrorConfig` — cozystack chart only.
+>
+> Per-link emission rules:
+>
+> - The link carrying the IPv4 default route gets the `routes.gateway` entry on its document; every other link is emitted gateway-less. Applies uniformly to `LinkConfig`, `BondConfig`, `VLANConfig`, `BridgeConfig`.
+> - Both IPv4 and IPv6 global-scope addresses on a link are surfaced.
+> - The operator-declared `floatingIP` is stripped from per-link addresses so the VIP currently held by a leader does not leak into the static document.
+>
+> Multi-NIC nodes therefore produce one document per NIC, not one document total.
 
 > **Version compatibility (`templateOptions.talosVersion` / `--talos-version`).** This setting must match the **Talos version actually running on the target node** — i.e. the maintenance ISO/PXE the node booted from for `apply -i`, or the installed Talos for an authenticated apply. It is **not** the same as `install.image`, which only controls what gets written to disk after a successful apply. When the configured contract is newer than the running binary, machinery injects fields (e.g. `machine.install.grubUseUKICmdline` from v1.12) that the running parser does not know, and the apply fails on the node side with `failed to parse config: unknown keys found during decoding: ...`. `talm apply` runs a best-effort pre-flight check against the running version and prints a `warning: pre-flight: ...` line with a hint when it detects this mismatch; if the warning is missed, the same hint is appended to the apply error. Either reboot the node into a maintenance image that matches the configured contract, or lower `templateOptions.talosVersion` / `--talos-version` to match what is running.
 

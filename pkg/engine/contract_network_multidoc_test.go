@@ -707,6 +707,68 @@ func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP(t *testing.T) {
 	}
 }
 
+// Contract: Filter 2 in link_name_for_address (raw-truthy
+// .spec.scope check before any toString coercion) rejects
+// entries whose scope field is absent / nil. Without the
+// raw-truthy guard, the looser variant would let a nil-scope
+// entry through as the literal "<nil>" string (neither empty
+// nor in the skip-list) and the address would propagate into
+// the longest-prefix-match candidate set. Real Talos COSI
+// always sets scope, so this is a latent guardrail rather than
+// a hot path — but pinning the contract here means a future
+// refactor that drops the raw-truthy guard surfaces.
+//
+// Fixture: VLAN child carries the global /24 (real cluster
+// subnet) plus a nil-scope /16 covering the same floatingIP.
+// The /16 has a LONGER prefix span — without Filter 2 the
+// nil-scope entry would still lose to the /24 by longest-
+// prefix-match (24 > 16), so iteration order alone would not
+// surface the regression. Both addresses are on the SAME link
+// (enp0s31f6.4000), so the test instead asserts on the
+// LinkConfig.addresses emission: the nil-scope CIDR must NOT
+// appear there even though it sits on a configurable link.
+func TestContract_NetworkMultidoc_LinkAddressesSkipsNilScope(t *testing.T) {
+	out := renderCozystackWith(t, hetznerWithNilScopeAddressLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	// VIP still resolves to the VLAN child via the global-scope /24.
+	assertContains(t, out, "link: enp0s31f6.4000")
+	// Nil-scope /16 must be filtered out of addresses_by_link
+	// (Filter 2 is shared between link_name_for_address and
+	// addresses_by_link), so it must not appear in any
+	// `- address:` line of the rendered output.
+	if strings.Contains(out, "192.168.0.5/16") {
+		t.Errorf("nil-scope CIDR 192.168.0.5/16 leaked into rendered addresses; Filter 2's raw-truthy scope check regressed:\n%s", out)
+	}
+}
+
+// Contract: when two configurable links both carry CIDRs of
+// the same prefix length and both contain the floatingIP,
+// link_name_for_address picks the FIRST match in iteration
+// order. Strict-gt comparator (`gt $prefixLen
+// $best.prefixLen`) means a later equal-prefix entry cannot
+// overwrite the best-so-far. This is the documented behaviour
+// — "ties resolve by iteration order" — and the pin here
+// catches a future refactor that flips the comparator to ge
+// (later wins) or sorts the addresses table differently.
+//
+// Fixture: eth0 and eth1 both carry 192.168.100.x/24 covering
+// floatingIP 192.168.100.10. eth0 is listed FIRST in the
+// addresses table, so eth0 wins.
+func TestContract_NetworkMultidoc_VIPLinkTieBreakByIterationOrder(t *testing.T) {
+	out := renderCozystackWith(t, twoConfigurableLinksSamePrefixLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: eth0")
+	if strings.Contains(out, "link: eth1") {
+		t.Errorf("tie-break regressed — equal-prefix later entry won over earlier one; iteration-order contract documented in link_name_for_address comment:\n%s", out)
+	}
+}
+
 // Contract: when the default-route-link fallback resolves to a
 // non-configurable link (Wireguard, slave NIC, anything outside the
 // {physical, bond, vlan, bridge} set), the chart MUST NOT emit
@@ -808,6 +870,42 @@ func TestContract_NetworkMultidoc_Generic_VIPGracefulWhenFloatingIPNil(t *testin
 	}
 	if strings.Contains(out, "<nil>") {
 		t.Errorf("generic chart: rendered output leaks the Sprig <nil> literal:\n%s", out)
+	}
+}
+
+// Contract: explicit falsy non-string floatingIP values (numeric 0,
+// bool false) must trip the fail-fast rather than be silently
+// treated as "operator unset the field". A raw-truthiness gate
+// would skip the predicate entirely and ship a config with no
+// Layer2VIPConfig where the operator clearly intended one (just
+// with a malformed value). Coercing through toString first
+// distinguishes "did not supply" (nil, "") from "supplied a bad
+// shape" (0, false, 192168, "10.0.0.300").
+func TestContract_NetworkMultidoc_VIPFailsOnFalsyNonStringFloatingIP(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     any
+		wantInMsg string
+	}{
+		{"numeric zero", 0, "0"},
+		{"bool false", false, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+				"floatingIP":        tc.input,
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+			})
+			if err == nil {
+				t.Fatalf("expected render to fail on floatingIP=%v, got nil error", tc.input)
+			}
+			if !strings.Contains(err.Error(), "floatingIP") {
+				t.Errorf("error must mention the offending field; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInMsg) {
+				t.Errorf("error must echo the bad value %q; got: %v", tc.wantInMsg, err)
+			}
+		})
 	}
 }
 

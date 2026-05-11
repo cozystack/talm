@@ -123,33 +123,27 @@ nameservers:
 {{- else }}
   []
 {{- end }}
-{{- /* Validate floatingIP before either VIP-emission branch
-       below depends on it. A typo here would otherwise silently
-       fall through cidrContains (lenient on parse failure) into
-       the default-link fallback, ship a Layer2VIPConfig with a
-       nonsense `name:` value, and surface only at apply time.
-       Render-time `fail` with the bad value is much cheaper to
-       debug.
+{{- /* Coerce .Values.floatingIP to its string form once at the
+       top of the multi-doc body and reuse the result everywhere
+       a downstream lookup or formatter needs it. Done outside
+       the controlplane-only validation block below because the
+       per-link addresses_by_link strip on every link emission
+       below also depends on the same stringified value and a
+       worker render with `floatingIP: 192168` would otherwise
+       feed printf "%s/" an int, producing `%!s(int=192168)/`
+       that never matches a CIDR. The coercion isolates that
+       trap to one place and lets the rest of the template treat
+       the value uniformly.
 
-       Gate on the RAW .Values.floatingIP first: nil and missing
-       fields are falsy on the raw value but Sprig's `nil |
-       toString` returns the literal string "<nil>" — truthy and
-       not a valid IP, so feeding it to ipIsValid below would
-       fail-fast on every controlplane render where the operator
-       left floatingIP unset (single-node clusters, LB-fronted
-       multi-node, anything Helm coalesces out of the values
-       table).
-
-       Then coerce through toString INSIDE the gated body. An
-       unquoted numeric YAML scalar (floatingIP: 192168) parses
-       as int, and ipIsValid is a Go function with a string
-       parameter — passing an int would raise the Go-template
-       "wrong type for value; expected string; got int" panic
-       instead of the friendly fail message. The toString
-       coercion is also the safety net for any future operator
-       yaml shape we have not yet thought of. */}}
-{{- if and .Values.floatingIP (eq .MachineType "controlplane") }}
+       "<nil>" is Sprig's serialisation of nil and "" is the
+       unset string; both mean "operator did not supply a
+       value" and skip the validation. Numeric 0, bool false,
+       and any other shape stringifies and reaches ipIsValid as
+       its serialised form — the friendly fail names the bad
+       value with %q. */}}
 {{- $fipStr := .Values.floatingIP | toString }}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
+{{- if and $fipIsSet (eq .MachineType "controlplane") }}
 {{- if not (ipIsValid $fipStr) }}
 {{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) }}
 {{- end }}
@@ -160,11 +154,11 @@ nameservers:
        case: a VLAN sub-interface this template is about to bring up).
        The discovery-derived block below skips its own Layer2VIPConfig
        when this branch fires, so we never emit duplicates. */}}
-{{- if and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") }}
+{{- if and $fipIsSet .Values.vipLink (eq .MachineType "controlplane") }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
-name: {{ .Values.floatingIP | quote }}
+name: {{ $fipStr | quote }}
 link: {{ .Values.vipLink }}
 {{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
@@ -185,7 +179,13 @@ link: {{ .Values.vipLink }}
        and follower configs out of sync. */}}
 {{- $addresses := list }}
 {{- range $rawAddresses }}
-{{- if not (and $.Values.floatingIP (hasPrefix (printf "%s/" $.Values.floatingIP) .)) }}
+{{- /* Use the hoisted $fipStr/$fipIsSet from the top of the
+       define so the strip honours the same coerced value the
+       validation block above used. Going through `printf "%s/"
+       $.Values.floatingIP` directly would emit
+       `%!s(int=192168)/` for a numeric YAML scalar on a worker
+       render (controlplane was caught by the fail-fast). */ -}}
+{{- if not (and $fipIsSet (hasPrefix (printf "%s/" $fipStr) .)) }}
 {{- $addresses = append $addresses . }}
 {{- end }}
 {{- end }}
@@ -361,8 +361,8 @@ mtu: {{ $link.spec.mtu }}
        upstream-routable VIPs that arrive via the default-route
        link). When neither resolves a link, no Layer2VIPConfig is
        emitted, matching the prior behaviour. */}}
-{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") }}
-{{- $vipLink := include "talm.discovered.link_name_for_address" .Values.floatingIP }}
+{{- if and $fipIsSet (not .Values.vipLink) (eq .MachineType "controlplane") }}
+{{- $vipLink := include "talm.discovered.link_name_for_address" $fipStr }}
 {{- /* Default-gateway fallback must also point at a configurable
        link — otherwise an unmanaged default-route NIC (Wireguard,
        a slave link) would silently win selection and the rendered
@@ -378,7 +378,7 @@ mtu: {{ $link.spec.mtu }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
-name: {{ .Values.floatingIP | quote }}
+name: {{ $fipStr | quote }}
 link: {{ $vipLink }}
 {{- end }}
 {{- end }}

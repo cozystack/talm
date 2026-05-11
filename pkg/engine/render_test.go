@@ -4517,6 +4517,225 @@ func hetznerPublicNICWithPrivateVLANLookup() func(string, string, string) (map[s
 	}
 }
 
+// hetznerWithNilScopeAddressLookup mirrors hetznerPublicNICWithPrivateVLANLookup
+// but adds a configurable-link entry whose .spec.scope is nil
+// (no scope field) AND whose CIDR happens to contain the
+// operator-declared floatingIP. Filter 2 in
+// link_name_for_address claims to skip these entries; this
+// fixture pins the guardrail. Real Talos COSI always sets
+// scope, so the entry is synthetic — but the looser variant
+// (only toString'd check) would let a nil-scope entry through
+// as the literal "<nil>" string, which is neither "" nor in the
+// skip-list. A future refactor that drops the raw-truthy guard
+// must surface here.
+func hetznerWithNilScopeAddressLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	privateVLAN := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6.4000"},
+		"spec": map[string]any{
+			"kind":      "vlan",
+			"index":     2,
+			"linkIndex": 1,
+			"vlan":      map[string]any{"vlanID": 4000},
+			"mtu":       1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC, privateVLAN},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			// VLAN child has TWO addresses on it: a global-scope
+			// /24 (cluster network) and a NIL-scope /16 covering
+			// the same target. Filter 2 must skip the nil-scope
+			// entry — otherwise longest-prefix-match would still
+			// land on enp0s31f6.4000 (same link), but a different
+			// fixture where the nil-scope CIDR sits on a less-
+			// specific link could let it win selection by virtue
+			// of being matched at all.
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.100.4/24", "family": "inet4", "scope": "global"}},
+			// scope key absent entirely — Filter 2's raw-truthy
+			// check on .spec.scope rejects this entry.
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6.4000", "address": "192.168.0.5/16", "family": "inet4"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.4/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "enp0s31f6":
+				return publicNIC, nil
+			case "enp0s31f6.4000":
+				return privateVLAN, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// twoConfigurableLinksSamePrefixLookup pins tie-break behavior
+// for link_name_for_address when two configurable links both
+// carry CIDRs of the same prefix length and both contain the
+// floatingIP. Current contract: iteration order over the COSI
+// addresses list decides — strict-gt comparator means the first
+// match in iteration order wins. This fixture lists eth0's
+// 192.168.100.0/24 first and eth1's 192.168.100.0/24 second.
+// A future refactor that flips the comparator to ge (or sorts
+// the addresses table differently) silently changes behavior;
+// pinning the current iteration-order contract catches it.
+func twoConfigurableLinksSamePrefixLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+			"mtu":          1500,
+		},
+	}
+	eth1 := map[string]any{
+		"metadata": map[string]any{"id": "eth1"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        2,
+			"hardwareAddr": "aa:bb:cc:00:00:02",
+			"busPath":      "pci-0000:00:1f.1",
+			"mtu":          1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.100.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, eth1},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			// Both links carry the SAME /24 and both contain the
+			// floatingIP. eth0 listed FIRST so the strict-gt
+			// comparator never overwrites the best-so-far with
+			// eth1's equal-prefix entry — eth0 wins by iteration
+			// order.
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.100.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth1", "address": "192.168.100.11/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.100.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "eth1":
+				return eth1, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // hetznerWithLinkScopedAddressLookup pins that Filter 2 in
 // link_name_for_address (scope must be set and not host/link/nowhere)
 // actually fires. Without the filter, a link-scoped /16 covering the
