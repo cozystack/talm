@@ -1737,14 +1737,43 @@ func TestMultiDocLinkConfigStripsFloatingIPFromAddresses(t *testing.T) {
 func TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute(t *testing.T) {
 	output := renderChartTemplateWithLookup(t, "../../charts/cozystack", "templates/controlplane.yaml", bridgeWithGatewayLookup(), "v1.12")
 
-	if !strings.Contains(output, "kind: BridgeConfig") {
-		t.Errorf("expected BridgeConfig for the gateway bridge, got:\n%s", output)
+	// Find the br0 document and verify it is the BridgeConfig with the
+	// gateway entry attached. Asserting against split documents
+	// (rather than "some BridgeConfig" / "some gateway:" globally)
+	// guards against an alternate shape where the renderer emits a
+	// stray LinkConfig for br0 alongside the BridgeConfig, or where
+	// the gateway lands on the wrong document entirely.
+	var (
+		br0Doc      string
+		br0Kinds    []string
+		linkConfigs int
+	)
+	for doc := range strings.SplitSeq(output, "\n---\n") {
+		if !strings.Contains(doc, "name: br0\n") && !strings.HasSuffix(strings.TrimSpace(doc), "name: br0") {
+			continue
+		}
+		br0Doc = doc
+		for line := range strings.SplitSeq(doc, "\n") {
+			if kind, ok := strings.CutPrefix(line, "kind:"); ok {
+				br0Kinds = append(br0Kinds, strings.TrimSpace(kind))
+				if strings.Contains(line, "LinkConfig") {
+					linkConfigs++
+				}
+			}
+		}
 	}
-	if !strings.Contains(output, "name: br0") {
-		t.Errorf("BridgeConfig must carry name=br0 (the discovered bridge link), got:\n%s", output)
+
+	if br0Doc == "" {
+		t.Fatalf("no document named br0 in rendered output:\n%s", output)
 	}
-	if !strings.Contains(output, "gateway:") {
-		t.Errorf("BridgeConfig for the IPv4-default-route bridge must carry the gateway entry, got:\n%s", output)
+	if linkConfigs > 0 {
+		t.Errorf("br0 was emitted as a LinkConfig — wrong kind for a bridge link:\n%s", output)
+	}
+	if !strings.Contains(br0Doc, "kind: BridgeConfig") {
+		t.Errorf("br0 document is not a BridgeConfig (kinds seen: %v):\n%s", br0Kinds, br0Doc)
+	}
+	if !strings.Contains(br0Doc, "gateway:") {
+		t.Errorf("br0 BridgeConfig is missing the routes.gateway entry for the IPv4 default route:\n%s", br0Doc)
 	}
 }
 
@@ -6632,6 +6661,15 @@ func renderCozystackExpectError(t *testing.T, lookup func(string, string, string
 	values := cloneValues(chrt.Values)
 	if v, _ := values["endpoint"].(string); v == "" {
 		values["endpoint"] = testEndpoint
+	}
+	// Seed advertisedSubnets the same way renderChartTemplateWithLookup
+	// does — otherwise an error test that targets a deeper validation
+	// (e.g. malformed floatingIP) trips the empty-discovery required()
+	// guard on advertisedSubnets first and surfaces the wrong error.
+	// Callers that want to exercise the required() guard itself
+	// override the field explicitly via the `overrides` argument.
+	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
+		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 	}
 	maps.Copy(values, overrides)
 
