@@ -260,21 +260,89 @@ func (e Engine) initFunMap(tmpl *template.Template) {
 		}
 	}
 
-	// cidrNetwork canonicalizes a CIDR string to its network form
-	// ("192.168.201.10/24" -> "192.168.201.0/24"), matching what
-	// operators see in Talos docs and upstream examples. Sprig ships
-	// no equivalent; net/netip's ParsePrefix + Masked handles both
-	// IPv4 and IPv6 without any host-bit arithmetic in the template.
-	funcMap["cidrNetwork"] = func(cidr string) (string, error) {
-		p, err := netip.ParsePrefix(cidr)
-		if err != nil {
-			return "", fmt.Errorf("cidrNetwork: %w", err)
-		}
-
-		return p.Masked().String(), nil
-	}
+	funcMap["cidrNetwork"] = cidrNetwork
+	funcMap["cidrContains"] = cidrContains
+	funcMap["cidrPrefixLen"] = cidrPrefixLen
+	funcMap["ipIsValid"] = ipIsValid
 
 	tmpl.Funcs(funcMap)
+}
+
+// cidrNetwork returns the network portion of a CIDR (host bits zeroed). The
+// canonical "<network>/<prefix>" form is what operators see in Talos docs and
+// upstream examples. Sprig ships no equivalent; net/netip's ParsePrefix +
+// Masked handles both IPv4 and IPv6 without any host-bit arithmetic in the
+// template.
+func cidrNetwork(cidr string) (string, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return "", fmt.Errorf("cidrNetwork: %w", err)
+	}
+
+	return prefix.Masked().String(), nil
+}
+
+// cidrPrefixLen returns the prefix length (in bits) of the given CIDR. -1
+// signals an unparseable input rather than an error so the chart-side
+// longest-prefix-match comparator can simply check `gt prefixLen bestSoFar`
+// without having to thread error handling through every iteration. Mirrors
+// the lenient parse behaviour of cidrContains for the same reason: a corrupt
+// or future-format entry in the COSI addresses table must not crash the
+// entire chart render.
+func cidrPrefixLen(cidr string) (int, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is deliberately a sentinel value, see docstring
+		return -1, nil
+	}
+
+	return prefix.Bits(), nil
+}
+
+// ipIsValid reports whether the given string parses as an IP address literal.
+// Used by the multi-doc Layer2VIPConfig block to fail-fast at render time
+// when an operator-supplied floatingIP is malformed — a render-time error
+// with the exact bad value is much cheaper to debug than an apply-time
+// rejection from the Talos config controller.
+func ipIsValid(addrStr string) (bool, error) {
+	_, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is the "false" outcome of this predicate
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// cidrContains reports whether the given IP literal falls inside the given
+// CIDR. Used by the multi-doc Layer2VIPConfig discovery path to pick the link
+// whose subnet hosts the operator-declared floatingIP — net/netip handles
+// IPv4 and IPv6 uniformly so chart templates do not have to do per-family bit
+// math.
+//
+// Parse failures on either input return (false, nil) rather than an error.
+// Set-membership semantics: an undefined CIDR cannot contain anything; an
+// undefined IP is not in any defined set. The chart-side helper that drives
+// the membership search runs over every entry in the addresses COSI
+// resource, so a single corrupt or future-format entry must not crash the
+// entire render. The operator-typoed floatingIP case is handled separately
+// by the chart layer: cozystack and generic call ipIsValid up-front and
+// fail the render with a clear hint that names the bad value, so a typoed
+// floatingIP never reaches cidrContains.
+func cidrContains(cidr, addrStr string) (bool, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is deliberately the "no match" case; see docstring
+		return false, nil
+	}
+
+	addr, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		//nolint:nilerr // parse-failure is deliberately the "no match" case; see docstring
+		return false, nil
+	}
+
+	return prefix.Contains(addr), nil
 }
 
 // render takes a map of templates/values and renders them. The err return is

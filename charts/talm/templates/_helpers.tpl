@@ -1,3 +1,27 @@
+{{- /* Validate .Values.floatingIP is a parseable IPv4 / IPv6 literal
+       on controlplane renders. Shared by both the v1.12 multi-doc
+       and the v1.11 legacy network defines so the same fail-fast
+       happens regardless of the rendered Talos version. Calling
+       template must pass the chart context as the dot — the partial
+       reads .Values.floatingIP and .MachineType.
+
+       The Sprig serialisation of nil is the literal string "<nil>",
+       and an unset string is "". Both mean "operator did not supply
+       a value" and skip the check. Numeric YAML scalars (operator
+       writes `floatingIP: 192168` without quotes), bool false /
+       numeric 0, and any other shape stringifies via toString and
+       reaches ipIsValid — the friendly fail names the bad value
+       with %q. */ -}}
+{{- define "talm.validate_floatingIP" -}}
+{{- $fipStr := .Values.floatingIP | toString -}}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") -}}
+{{- if and $fipIsSet (eq .MachineType "controlplane") -}}
+{{- if not (ipIsValid $fipStr) -}}
+{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "talm.discovered.system_disk_name" }}
 {{- $systemDisk := (lookup "systemdisk" "" "system-disk") }}
 {{- if $systemDisk }}
@@ -109,11 +133,25 @@
 {{- break }}
 {{- end }}
 {{- end }}
+{{- /* Coerce .Values.floatingIP through toString before the prefix
+       compare so an unquoted numeric YAML scalar (operator writes
+       `floatingIP: 192168`) does not emit `%!s(int=192168)/` that
+       never matches a real CIDR. Same trap the v1.12 multi-doc
+       path guards against; legacy schema needs the same treatment.
+       toString'd nil renders as "<nil>" which is also harmless —
+       it cannot match a real CIDR prefix. */ -}}
+{{- $fipStr := $.Values.floatingIP | toString }}
 {{- $addresses := list }}
 {{- range (lookup "addresses" "" "").items }}
-{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) }}
-{{- if not (hasPrefix (printf "%s/" $.Values.floatingIP) .spec.address) }}
-{{- $addresses = append $addresses .spec.address }}
+{{- /* Filter malformed or future-format entries the same way
+       addresses_by_link does (cidrPrefixLen >= 0). A corrupt entry
+       in the COSI addresses table must not leak verbatim into the
+       legacy v1.11 machine.network.interfaces[].addresses block. */ -}}
+{{- $address := .spec.address | toString }}
+{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 }}
+{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) $validCidr }}
+{{- if not (hasPrefix (printf "%s/" $fipStr) $address) }}
+{{- $addresses = append $addresses $address }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -248,6 +286,22 @@ busPath: {{ .spec.busPath }}
 {{- toJson $slaves -}}
 {{- end -}}
 
+{{- /* Get bridge member interfaces (ports) for a given bridge index.
+       Discovered via spec.slaveKind=="bridge" + spec.masterIndex
+       matching — symmetric to bond_slaves above. Returns the JSON list
+       so the multi-doc renderer can iterate without reaching back into
+       the links collection. */ -}}
+{{- define "talm.discovered.bridge_slaves" -}}
+{{- $bridgeIndex := . -}}
+{{- $slaves := list -}}
+{{- range (lookup "links" "" "").items -}}
+{{- if and (eq .spec.slaveKind "bridge") (eq (int .spec.masterIndex) (int $bridgeIndex)) -}}
+{{- $slaves = append $slaves .metadata.id -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $slaves -}}
+{{- end -}}
+
 {{- /* Generate bond configuration from bondMaster spec */ -}}
 {{- define "talm.discovered.bond_config" -}}
 {{- $linkName := . -}}
@@ -286,6 +340,103 @@ bond:
 {{- if and $link (eq $link.spec.kind "bond") -}}
 true
 {{- end -}}
+{{- end -}}
+
+{{- /* Returns the link name whose discovered addresses contain a CIDR
+       encompassing the supplied IP literal. Used by the multi-doc
+       Layer2VIPConfig path to pin the VIP onto the link carrying the
+       relevant subnet, rather than the IPv4 default-route link (which
+       is wrong whenever the floatingIP lives on a non-default-route
+       NIC, e.g. a private VLAN child on a Hetzner-style topology).
+       Returns the empty string when no link's addresses contain the
+       IP — the caller (multi-doc Layer2VIPConfig block in the
+       cozystack and generic charts) falls back to
+       default_link_name_by_gateway in that case.
+
+       Selection rules:
+
+         1. The link must be in the configurable-link set
+            (talm.discovered.configurable_link_names) — addresses on
+            links the chart does not emit a per-link document for
+            (Wireguard, kernel-managed loopback, slave NICs of a
+            bond, anything outside the {physical NIC, bond, vlan,
+            bridge} set) must not steal the VIP. A VIP pinned there
+            would have no surrounding network document.
+
+         2. The address must be globally scoped — host-local,
+            link-local, and nowhere-scoped addresses are skipped, the
+            same filter addresses_by_link applies before emitting
+            LinkConfig.addresses.
+
+         3. Longest-prefix wins. When a node has overlapping subnets
+            (e.g. a /16 on a physical NIC and a /24 on a VLAN child
+            both containing the floatingIP), the more specific subnet
+            is the right answer — same rule the kernel uses for route
+            decisions. Without this, iteration order would silently
+            decide.
+
+       CIDR-membership is computed by the engine-registered
+       cidrContains helper (net/netip-backed); chart templates do not
+       have to do per-family bit math, and IPv4 / IPv6 are handled
+       uniformly. cidrContains is lenient on parse failures (returns
+       false), so a single corrupt or future-format entry in the
+       address table cannot crash the entire render. */ -}}
+{{- define "talm.discovered.link_name_for_address" -}}
+{{- $target := . -}}
+{{- /* configurable_link_names ignores its dot input — it walks the
+       links collection via lookup. Any value is safe; passing
+       $target rather than synthesizing a new dot here keeps the
+       define body uncluttered. */ -}}
+{{- $configurable := fromJsonArray (include "talm.discovered.configurable_link_names" $target) -}}
+{{- /* Hoist the scope skip-list out of the range body so it is
+       built once per call rather than once per address-table
+       entry. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" -}}
+{{- /* Track best match across iterations. dict-mutation via Sprig
+       set is the established pattern for cross-iteration state in
+       Go templates; range introduces a new scope per iteration so
+       a plain $var = ... reassignment does not propagate. */ -}}
+{{- $best := dict "link" "" "prefixLen" -1 -}}
+{{- range (lookup "addresses" "" "").items -}}
+{{- $address := .spec.address | toString -}}
+{{- $linkName := .spec.linkName | toString -}}
+{{- if and $address $linkName -}}
+{{- /* Filter 1: link must be configurable. */ -}}
+{{- if has $linkName $configurable -}}
+{{- /* Filter 2: scope must be set and not host/link/nowhere.
+       Match the addresses_by_link rule exactly: truthy check on
+       the raw .spec.scope field (rejects nil) AND non-empty
+       string check on its toString'd value AND not in the
+       skip-list. The looser variant (only the toString'd check)
+       would let a nil-scope entry through as the literal
+       "<nil>" string, which is neither "" nor in the skip set.
+       Real Talos COSI always sets scope, so this is a latent
+       guardrail rather than a hot path. */ -}}
+{{- if and .spec.scope (ne (.spec.scope | toString) "") (not (has (.spec.scope | toString) $skipScopes)) -}}
+{{- /* Filter 3: CIDR must contain the target. */ -}}
+{{- if cidrContains $address $target -}}
+{{- /* Filter 4: longest-prefix match. cidrPrefixLen is the
+       engine-registered helper that wraps net/netip.Prefix.Bits;
+       it returns -1 on parse failure, which loses to any valid
+       prefix length under `gt`. The prior shape split the CIDR on
+       "/" and atoi-d the second part — masked the failure mode
+       where a /0 default-route entry mixed into the address table
+       would tie at 0 and let iteration order pick the winner.
+       Ties at the same prefix length resolve by COSI's emission
+       order for the addresses resource — rare in practice (two
+       configurable links with identically-sized CIDRs both
+       containing the floatingIP). */ -}}
+{{- $prefixLen := cidrPrefixLen $address -}}
+{{- if gt $prefixLen (get $best "prefixLen") -}}
+{{- $_ := set $best "link" $linkName -}}
+{{- $_ := set $best "prefixLen" $prefixLen -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- get $best "link" -}}
 {{- end -}}
 
 {{- /* Check if a link is a vlan interface */ -}}
@@ -393,11 +544,26 @@ vlans:
 {{- define "talm.discovered.addresses_by_link" -}}
 {{- $linkName := . -}}
 {{- $addresses := list -}}
+{{- /* Hoist the scope skip-list out of the range body so it is
+       built once per call rather than once per address-table
+       entry. Symmetric to the hoisted skip-list inside
+       link_name_for_address. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" -}}
 {{- range (lookup "addresses" "" "").items -}}
 {{- $hasScope := and .spec.scope (ne (.spec.scope | toString) "") -}}
-{{- $skip := has (.spec.scope | toString) (list "host" "link" "nowhere") -}}
-{{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) -}}
-{{- $addresses = append $addresses .spec.address -}}
+{{- $skip := has (.spec.scope | toString) $skipScopes -}}
+{{- /* Filter out corrupt or future-format entries whose address
+       does not parse as a CIDR. cidrPrefixLen returns -1 on parse
+       failure, which we treat as "skip" the same way
+       link_name_for_address does — a single bad entry in COSI
+       must not propagate into LinkConfig / VLANConfig / BridgeConfig
+       addresses where it would produce a config Talos rejects on
+       apply with a less-informative error than the chart could
+       give. */ -}}
+{{- $address := .spec.address | toString -}}
+{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 -}}
+{{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) $validCidr -}}
+{{- $addresses = append $addresses $address -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $addresses -}}

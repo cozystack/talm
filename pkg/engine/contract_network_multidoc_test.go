@@ -237,19 +237,77 @@ func TestContract_NetworkMultidoc_VLANOnBondRendersVLANConfig(t *testing.T) {
 
 // === Bridge non-gateway: silent skip ===
 
-// Contract: a bridge link that is NOT the IPv4 default route is
-// skipped silently — no BridgeConfig is emitted (chart does not yet
-// support BridgeConfig output), and no LinkConfig is emitted (it is
-// not a physical NIC). The expectation is that operators who run
-// bridges declare them via per-node body overlays. The non-gateway
-// case is the silent path; the gateway case is a hard fail (pinned
-// in contract_errors_test.go).
-func TestContract_NetworkMultidoc_NonGatewayBridgeSkipped(t *testing.T) {
+// Contract: a bridge link discovered on a node is rendered as a
+// typed BridgeConfig document, symmetric to BondConfig for bonds.
+// The non-gateway case lands BridgeConfig with addresses and mtu
+// but no routes entry (no default gateway to emit). The gateway
+// case adds the routes.gateway entry — pinned by
+// TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute.
+//
+// Prior to BridgeConfig support landing, a non-gateway bridge was
+// silently skipped (no document emitted) on the premise that the
+// feature was unimplemented; this contract pins the current
+// "always emit" shape.
+func TestContract_NetworkMultidoc_BridgeConfigEmitted(t *testing.T) {
 	out := renderCozystackWith(t, bridgeLookup(), map[string]any{
 		"advertisedSubnets": []any{testAdvertisedSubnet},
 	})
-	// No BridgeConfig — feature unimplemented.
-	assertNotContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "name: br0")
+}
+
+// Contract: a controlplane floatingIP that lives inside the subnet
+// configured on a bridge link now legitimately lands on the bridge —
+// the bridge is fully rendered as a typed BridgeConfig document, so
+// pinning the VIP there no longer leaves it dangling without a
+// surrounding network document. Symmetric to the VLAN-child case
+// pinned in HetznerTopology_VIPOnPrivateVLAN.
+//
+// Fixture: bridgeWithClusterSubnetLookup has br0 carrying
+// 10.5.0.10/24 (global scope) and the IPv4 default route. floatingIP
+// 10.5.0.99 is inside that subnet, so link_name_for_address resolves
+// to br0; the discovery-derived Layer2VIPConfig pins link=br0.
+// Without BridgeConfig emission (the prior shape), this would have
+// been a "VIP on undocumented link" symptom; now BridgeConfig
+// documents the link explicitly and the chart also emits STP
+// settings carried in spec.bridgeMaster.
+func TestContract_NetworkMultidoc_VIPOnBridge(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithClusterSubnetLookup(), map[string]any{
+		"floatingIP":        "10.5.0.99",
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+
+	// BridgeConfig must be emitted alongside Layer2VIPConfig — that is
+	// the whole reason landing the VIP on a bridge is now safe.
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "name: br0")
+	assertContains(t, out, "- address: 10.5.0.10/24")
+	assertContains(t, out, "gateway: 10.5.0.1")
+	// STP setting from spec.bridgeMaster.stp.enabled must surface.
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	// VLAN filtering from spec.bridgeMaster.vlan.filteringEnabled
+	// must surface as the shorter yaml key (filtering) the
+	// BridgeConfig output schema uses.
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
+	// Bridge port discovered via spec.slaveKind=="bridge" must be
+	// listed under the BridgeConfig.links.
+	assertContains(t, out, "links:")
+	assertContains(t, out, "  - eth0")
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.5.0.99"`)
+	assertContains(t, out, "link: br0")
+	// Guard against an alternate implementation that emits Layer2VIPConfig
+	// on the wrong link (the physical NIC slaved under the bridge): the
+	// physical port eth0 is in configurable_link_names too, so a regression
+	// in the link-selection helper could land the VIP there instead.
+	if strings.Contains(out, "link: eth0\n") {
+		t.Errorf("Layer2VIPConfig points at eth0 (bridge port) instead of br0:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
 }
 
 // === Layer2VIPConfig: discovery-derived ===
@@ -345,4 +403,864 @@ func TestContract_NetworkMultidoc_FloatingIPStrippedFromLinkAddresses(t *testing
 	assertContains(t, out, `name: "192.168.201.10"`)
 	// LinkConfig.addresses must NOT contain the VIP CIDR.
 	assertNotContains(t, out, "- address: 192.168.201.10/24")
+}
+
+// === Hetzner-style topology: public NIC + private VLAN child ===
+
+// Contract: a controlplane floatingIP that lives in a private subnet
+// hosted on a VLAN sub-interface — while the IPv4 default route goes
+// out the parent (public) NIC — must be pinned to the VLAN child in
+// Layer2VIPConfig, NOT to the default-route link. The relevant
+// real-world topology is a deployment where a single physical NIC
+// carries the public-internet default gateway and a VLAN child
+// carries the private cluster network where the VIP belongs.
+//
+// Why this needs a dedicated pin: the discovery-derived
+// Layer2VIPConfig.link selection in the multi-doc chart must not
+// short-circuit to the IPv4-default-route link. Doing so puts the
+// VIP on the public NIC; Talos installs the VIP there and the
+// cluster never sees the leader on the private subnet.
+//
+// The test pins three independent contracts:
+//
+//  1. VLANConfig for the private VLAN child is emitted with the
+//     correct parent, vlanID, and addresses. If discovery state has
+//     classified the link correctly and configurable_link_names
+//     enumerates it, the existing VLAN branch in the multi-doc
+//     template fires. Surfacing this assertion as part of the
+//     same test means a regression in either the iteration filter
+//     or the kind classification surfaces immediately, not via a
+//     separate downstream symptom.
+//
+//  2. Layer2VIPConfig is emitted with link=enp0s31f6.4000.
+//     Helper talm.discovered.link_name_for_address picks the link
+//     whose CIDR encompasses the floatingIP.
+//
+//  3. There is no Layer2VIPConfig with link=enp0s31f6 — guards
+//     against an alternate implementation that emits both
+//     documents, leaving the operator's apply with a duplicate VIP
+//     target.
+func TestContract_NetworkMultidoc_HetznerTopology_VIPOnPrivateVLAN(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	// Assertion 1: VLANConfig for the private VLAN child is emitted.
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: enp0s31f6.4000")
+	assertContains(t, out, "vlanID: 4000")
+	assertContains(t, out, "parent: enp0s31f6")
+	assertContains(t, out, "- address: 192.168.100.4/24")
+
+	// Assertion 2: Layer2VIPConfig pins the VIP to the VLAN child.
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+
+	// Assertion 3: no Layer2VIPConfig with the wrong link, and exactly one document total.
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig points at the public default-route NIC; should be the VLAN child:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
+
+	// Assertion 4: the public NIC retains its address and default
+	// route — the fix must not collaterally drop public uplink config
+	// while moving the VIP.
+	assertContains(t, out, "name: enp0s31f6\n")
+	assertContains(t, out, "- address: 88.99.210.37/26")
+	assertContains(t, out, "gateway: 88.99.210.1")
+}
+
+// Contract: the IPv6 counterpart of the Hetzner-topology test.
+// Same shape — public NIC carries the IPv4 default route, VLAN
+// child carries the private cluster network — but the private
+// subnet and the floatingIP are IPv6 (ULA /64 and a host inside
+// it). net/netip's Prefix.Contains is family-agnostic, so the
+// VIP-link helper resolves the same way as for IPv4. Without this
+// pin, a future swap of cidrContains for a per-family
+// implementation could silently regress only the IPv6 path.
+//
+// Real-world relevance: dual-stack Hetzner / colo deployments where
+// IPv4 reaches the upstream gateway and the cluster speaks IPv6
+// internally over a private VLAN. The cluster VIP must land on the
+// VLAN's IPv6 ULA, not on the public NIC.
+func TestContract_NetworkMultidoc_HetznerTopology_IPv6VIPOnPrivateVLAN(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateIPv6VLANLookup(), map[string]any{
+		"floatingIP":        "2001:db8:cafe::10",
+		"advertisedSubnets": []any{"2001:db8:cafe::/64"},
+	})
+
+	// VLANConfig for the private VLAN child must still be emitted
+	// with the IPv6 ULA as a global-scope address.
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: enp0s31f6.4000")
+	assertContains(t, out, "vlanID: 4000")
+	assertContains(t, out, "parent: enp0s31f6")
+	assertContains(t, out, "- address: 2001:db8:cafe::4/64")
+
+	// Layer2VIPConfig pinned to the VLAN child via subnet membership.
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "2001:db8:cafe::10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+
+	// Must not pin the IPv6 VIP to the public NIC; exactly one
+	// Layer2VIPConfig document.
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig points at the public IPv4-default-route NIC; should be the VLAN child:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
+
+	// Public NIC keeps its IPv4 address and default route — the IPv6
+	// fix must not collaterally drop the IPv4 uplink.
+	assertContains(t, out, "name: enp0s31f6\n")
+	assertContains(t, out, "- address: 88.99.210.37/26")
+	assertContains(t, out, "gateway: 88.99.210.1")
+}
+
+// Contract: a non-configurable link (Wireguard, kernel-managed
+// loopback, or other interface the chart does not emit a per-link
+// document for) cannot win VIP-link selection even if its
+// discovered address CIDR contains the floatingIP.
+// configurable_link_names is the gate — addresses on links outside
+// that set are skipped before CIDR membership is even checked. The
+// chart does not emit LinkConfig for non-configurable links, so a
+// VIP pinned to one would have no surrounding network document and
+// would race the link's own address management on apply.
+//
+// Fixture: Wireguard subnet 10.244.0.0/16 on wg0 (kind=ether, no
+// busPath, not in configurable_link_names). floatingIP 10.244.0.5
+// is INSIDE wg0's subnet. The helper must skip wg0 and fall back
+// to $defaultLinkName (the IPv4-default-route physical NIC).
+func TestContract_NetworkMultidoc_VIPSkipsNonConfigurableLink(t *testing.T) {
+	out := renderCozystackWith(t, hetznerWithWireguardLookup(), map[string]any{
+		"floatingIP":        "10.244.0.5",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.244.0.5"`)
+	// Falls back to the IPv4-default-route NIC because wg0 is not
+	// in configurable_link_names — even though its /16 contains the
+	// VIP.
+	assertContains(t, out, "link: enp0s31f6\n")
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("Layer2VIPConfig stole link=wg0 (non-configurable Wireguard); must skip non-configurable links:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: when two configurable links both carry addresses whose
+// CIDR contains the floatingIP, the link with the more specific
+// (longer) prefix wins. Mirrors the kernel's longest-prefix rule for
+// route decisions. Without this, iteration order silently picks the
+// "winning" link.
+//
+// Fixture: enp0s31f6 has 192.168.0.10/16 (broad) listed first,
+// enp0s31f6.4000 has 192.168.100.4/24 (narrow) listed second. Both
+// CIDRs contain floatingIP 192.168.100.10. The /24 must win.
+func TestContract_NetworkMultidoc_VIPLinkLongestPrefixMatch(t *testing.T) {
+	out := renderCozystackWith(t, overlappingSubnetsLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("Layer2VIPConfig picked the broader /16 instead of the more specific /24 — longest-prefix-match regressed:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: BridgeConfig emits the vlan sub-block even when
+// spec.bridgeMaster carries no stp setting. Pins the independence
+// of the two BridgeConfig sub-blocks (stp / vlan) against a future
+// refactor that accidentally nests one inside the other or
+// conditions one on the other.
+func TestContract_NetworkMultidoc_BridgeConfig_VLANOnlyNoStp(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithVLANOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
+	if strings.Contains(out, "stp:") {
+		t.Errorf("BridgeConfig emits stp: block when spec.bridgeMaster.stp is unset; sub-blocks must be independent:\n%s", out)
+	}
+}
+
+// Contract: BridgeConfig emits the stp sub-block even when
+// spec.bridgeMaster carries no vlan setting. Mirror of the
+// VLAN-only contract above.
+func TestContract_NetworkMultidoc_BridgeConfig_StpOnlyNoVlan(t *testing.T) {
+	out := renderCozystackWith(t, bridgeWithSTPOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	if strings.Contains(out, "vlan:") {
+		t.Errorf("BridgeConfig emits vlan: block when spec.bridgeMaster.vlan is unset; sub-blocks must be independent:\n%s", out)
+	}
+}
+
+// Contract: malformed entries in COSI's addresses table do not
+// propagate into the rendered LinkConfig / VLANConfig / BridgeConfig
+// `addresses` blocks. The chart's addresses_by_link helper filters
+// out entries whose `.spec.address` fails to parse as a CIDR
+// (cidrPrefixLen returns -1), so a corrupt or future-format entry
+// stays inside discovery and never reaches a typed document Talos
+// would reject on apply.
+//
+// Fixture: malformedAddressEntryLookup carries
+// "definitely-not-a-cidr" on enp0s31f6.4000 sandwiched between two
+// well-formed entries. The test asserts the bad value is absent
+// from any `- address:` line and the valid sibling
+// 192.168.100.4/24 IS present.
+func TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderCozystackWith(t, malformedAddressEntryLookup(), map[string]any{
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("malformed CIDR leaked into LinkConfig/VLANConfig.addresses; corrupt COSI entries must be filtered at addresses_by_link:\n%s", out)
+	}
+	if !strings.Contains(out, "- address: 192.168.100.4/24") {
+		t.Errorf("valid sibling CIDR 192.168.100.4/24 missing from VLANConfig.addresses; filter must not drop well-formed entries:\n%s", out)
+	}
+}
+
+// Contract: a malformed address entry in COSI's addresses table does
+// not crash the chart render. cidrContains is lenient on parse
+// failures (returns false), so the helper skips the bad entry and
+// continues iterating; the rest of the addresses table is processed
+// normally and the VIP-link still resolves correctly.
+//
+// Fixture: a "definitely-not-a-cidr" entry sandwiched between two
+// valid ones. The render must produce the same Layer2VIPConfig as
+// the well-formed Hetzner topology.
+func TestContract_NetworkMultidoc_VIPLinkSurvivesMalformedAddressEntry(t *testing.T) {
+	out := renderCozystackWith(t, malformedAddressEntryLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+}
+
+// Contract: a link-scoped address (scope=link, RFC 3927-style
+// 169.254/16 link-local) on a configurable link must NOT win VIP-
+// link selection even when its CIDR is the most specific match.
+// Filter 2 in link_name_for_address skips host/link/nowhere-scoped
+// addresses, mirroring the filter addresses_by_link applies before
+// emitting LinkConfig.addresses. Without this filter, link-local
+// noise on a configurable VLAN could trump the operator's intent.
+//
+// Fixture: VLAN child carries 192.168.100.4/24 (global) AND
+// 169.254.0.1/16 (link-local). floatingIP 169.254.0.5 is INSIDE
+// the link-local /16. The helper must skip that entry; the global
+// /24 doesn't match the VIP, so the helper returns "" and the
+// caller falls back to the default-route link (enp0s31f6).
+func TestContract_NetworkMultidoc_VIPSkipsLinkScopedAddress(t *testing.T) {
+	out := renderCozystackWith(t, hetznerWithLinkScopedAddressLookup(), map[string]any{
+		"floatingIP":        "169.254.0.5",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "169.254.0.5"`)
+	// Falls back to the default-route NIC because the only link
+	// whose subnet contains the VIP is link-scoped, which is
+	// filtered out before the longest-prefix comparison runs.
+	assertContains(t, out, "link: enp0s31f6\n")
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: a malformed floatingIP fails the chart render at
+// template time with a clear hint that names the bad value. The
+// previous shape silently fell through cidrContains (lenient on
+// parse failure) into the default-link fallback, shipping a
+// Layer2VIPConfig with a nonsense `name:` value that surfaced only
+// when Talos rejected it on apply. Render-time fail is much cheaper
+// to debug.
+//
+// Fixture: simple Hetzner topology with floatingIP "10.0.0.300"
+// (octet > 255). Render must fail; the error message must include
+// the bad literal so the operator can correlate.
+func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "10.0.0.300",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if err == nil {
+		t.Fatal("expected render to fail on malformed floatingIP, got nil error")
+	}
+	if !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("error must echo the bad floatingIP literal so the operator can correlate; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// Contract: Filter 2 in link_name_for_address (raw-truthy
+// .spec.scope check before any toString coercion) rejects
+// entries whose scope field is absent / nil. Without the
+// raw-truthy guard, the looser variant would let a nil-scope
+// entry through as the literal "<nil>" string (neither empty
+// nor in the skip-list) and the address would propagate into
+// the longest-prefix-match candidate set. Real Talos COSI
+// always sets scope, so this is a latent guardrail rather than
+// a hot path — but pinning the contract here means a future
+// refactor that drops the raw-truthy guard surfaces.
+//
+// Fixture: VLAN child carries the global /24 (real cluster
+// subnet) plus a nil-scope /16 covering the same floatingIP.
+// The /16 has a LONGER prefix span — without Filter 2 the
+// nil-scope entry would still lose to the /24 by longest-
+// prefix-match (24 > 16), so iteration order alone would not
+// surface the regression. Both addresses are on the SAME link
+// (enp0s31f6.4000), so the test instead asserts on the
+// LinkConfig.addresses emission: the nil-scope CIDR must NOT
+// appear there even though it sits on a configurable link.
+func TestContract_NetworkMultidoc_LinkAddressesSkipsNilScope(t *testing.T) {
+	out := renderCozystackWith(t, hetznerWithNilScopeAddressLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	// VIP still resolves to the VLAN child via the global-scope /24.
+	assertContains(t, out, "link: enp0s31f6.4000")
+	// Nil-scope /16 must be filtered out of addresses_by_link
+	// (Filter 2 is shared between link_name_for_address and
+	// addresses_by_link), so it must not appear in any
+	// `- address:` line of the rendered output.
+	if strings.Contains(out, "192.168.0.5/16") {
+		t.Errorf("nil-scope CIDR 192.168.0.5/16 leaked into rendered addresses; Filter 2's raw-truthy scope check regressed:\n%s", out)
+	}
+}
+
+// Contract: when two configurable links both carry CIDRs of
+// the same prefix length and both contain the floatingIP,
+// link_name_for_address picks the FIRST match in iteration
+// order. Strict-gt comparator (`gt $prefixLen
+// $best.prefixLen`) means a later equal-prefix entry cannot
+// overwrite the best-so-far. This is the documented behaviour
+// — "ties resolve by iteration order" — and the pin here
+// catches a future refactor that flips the comparator to ge
+// (later wins) or sorts the addresses table differently.
+//
+// Fixture: eth0 and eth1 both carry 192.168.100.x/24 covering
+// floatingIP 192.168.100.10. eth0 is listed FIRST in the
+// addresses table, so eth0 wins.
+func TestContract_NetworkMultidoc_VIPLinkTieBreakByIterationOrder(t *testing.T) {
+	out := renderCozystackWith(t, twoConfigurableLinksSamePrefixLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: eth0")
+	if strings.Contains(out, "link: eth1") {
+		t.Errorf("tie-break regressed — equal-prefix later entry won over earlier one; iteration-order contract documented in link_name_for_address comment:\n%s", out)
+	}
+}
+
+// === Legacy v1.11 fail-fast contracts ===
+//
+// The shared talm.validate_floatingIP partial is included from
+// both the v1.12 multi-doc define and the v1.11 legacy define,
+// so render-time fail-fast on a malformed floatingIP works
+// regardless of templateOptions.talosVersion. These contracts
+// pin the legacy path so a future refactor that drops the
+// include silently regresses only one schema.
+
+// Contract: legacy v1.11 render path fails fast on a malformed
+// floatingIP literal — same shape as the multi-doc contract
+// pinned by TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP.
+func TestContract_NetworkLegacy_VIPFailsOnInvalidFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "10.0.0.300",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+
+	if err == nil {
+		t.Fatal("expected render to fail on malformed floatingIP on v1.11, got nil error")
+	}
+	if !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("error must echo the bad floatingIP literal; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path coerces numeric floatingIP
+// through toString before predicate so the Go-template
+// "wrong type for value; expected string; got int" panic does
+// not fire. Mirror of
+// TestContract_NetworkMultidoc_VIPFailsOnNumericFloatingIP.
+func TestContract_NetworkLegacy_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+
+	if err == nil {
+		t.Fatal("expected render to fail on numeric floatingIP on v1.11, got nil error")
+	}
+	if strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("got Go-template type-mismatch panic; the toString coercion must run before the predicate on v1.11 too: %v", err)
+	}
+	if !strings.Contains(err.Error(), "192168") {
+		t.Errorf("error must echo the bad value (stringified); got: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path treats nil floatingIP as
+// "unset" — no fail, no Layer2VIP, no "<nil>" leak. Mirror of
+// TestContract_NetworkMultidoc_VIPGracefulWhenFloatingIPNil.
+func TestContract_NetworkLegacy_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err != nil {
+		t.Fatalf("nil floatingIP must render cleanly on v1.11, got error: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path fails fast on explicitly
+// falsy non-string floatingIP (numeric 0, bool false). Same
+// raw-truthy bypass the multi-doc path closed.
+func TestContract_NetworkLegacy_VIPFailsOnFalsyNonStringFloatingIP(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     any
+		wantInMsg string
+	}{
+		{"numeric zero", 0, "0"},
+		{"bool false", false, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+				"floatingIP":        tc.input,
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+			}, "v1.11")
+			if err == nil {
+				t.Fatalf("expected render to fail on floatingIP=%v on v1.11, got nil error", tc.input)
+			}
+			if !strings.Contains(err.Error(), "floatingIP") {
+				t.Errorf("error must mention the offending field; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInMsg) {
+				t.Errorf("error must echo the bad value %q; got: %v", tc.wantInMsg, err)
+			}
+		})
+	}
+}
+
+// Contract: legacy v1.11 default_addresses_by_gateway filters
+// malformed entries from the COSI addresses table the same way
+// addresses_by_link does — cidrPrefixLen < 0 entries do not leak
+// into the rendered machine.network.interfaces[].addresses block.
+// Mirror of TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr
+// against the legacy schema.
+func TestContract_NetworkLegacy_DefaultAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderChartTemplateWithLookup(t, cozystackChartPath, controlplaneTpl, malformedAddressEntryLookup(), "v1.11")
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("legacy v1.11: malformed CIDR leaked into machine.network.interfaces[].addresses; default_addresses_by_gateway filter regressed:\n%s", out)
+	}
+}
+
+// Generic-chart mirrors of the four legacy fail-fast contracts above.
+
+func TestContract_NetworkLegacy_Generic_VIPFailsOnInvalidFloatingIP(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "10.0.0.300",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err == nil || !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("generic v1.11: expected fail-fast naming the bad floatingIP, got: %v", err)
+	}
+}
+
+func TestContract_NetworkLegacy_Generic_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err == nil || strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("generic v1.11: numeric floatingIP must produce friendly fail (not Go-template type panic); got: %v", err)
+	}
+}
+
+func TestContract_NetworkLegacy_Generic_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err != nil {
+		t.Errorf("generic v1.11: nil floatingIP must render cleanly, got: %v", err)
+	}
+}
+
+// Contract: when the default-route-link fallback resolves to a
+// non-configurable link (Wireguard, slave NIC, anything outside the
+// {physical, bond, vlan, bridge} set), the chart MUST NOT emit
+// Layer2VIPConfig — the chart does not emit a per-link document
+// for such links, so the VIP would dangle on a link the chart
+// never configures. The fallback path mirrors the configurable-
+// link gate that link_name_for_address applies inside its own
+// iteration; matched-link selection and fallback-link selection
+// have to honour the same renderable-link set.
+//
+// Fixture: IPv4 default route on wg0 (Wireguard, not configurable).
+// floatingIP 10.99.99.99 falls outside every discovered subnet, so
+// link_name_for_address returns empty. The fallback would have
+// picked wg0 before the guard landed; with the guard it skips and
+// no Layer2VIPConfig is emitted at all.
+func TestContract_NetworkMultidoc_VIPSkipsNonConfigurableDefaultRouteLink(t *testing.T) {
+	out := renderCozystackWith(t, defaultRouteOnNonConfigurableLinkLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("Layer2VIPConfig must not emit when the only resolvable link is non-configurable; got:\n%s", out)
+	}
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("VIP pinned to non-configurable wg0 — fallback must honour the configurable-link gate; got:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_VIPSkipsNonConfigurableDefaultRouteLink.
+func TestContract_NetworkMultidoc_Generic_VIPSkipsNonConfigurableDefaultRouteLink(t *testing.T) {
+	out := renderGenericWith(t, defaultRouteOnNonConfigurableLinkLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("generic chart: Layer2VIPConfig must not emit when fallback target is non-configurable; got:\n%s", out)
+	}
+	if strings.Contains(out, "link: wg0") {
+		t.Errorf("generic chart: VIP pinned to non-configurable wg0:\n%s", out)
+	}
+}
+
+// Contract: discovery has populated the addresses table with a
+// configurable link whose subnet contains the floatingIP, but the
+// routes table has no IPv4 default route yet (fresh-boot before
+// the gateway is reachable, or policy-routing-only topology).
+// Layer2VIPConfig must still emit pinned to the subnet-matching
+// link — a successful link_name_for_address resolution does not
+// depend on $defaultLinkName being non-empty.
+//
+// Pinning this case catches a future refactor that reintroduces an
+// outer $defaultLinkName guard around the whole VIP-emission block
+// and silently regresses the fresh-boot / policy-routing path.
+func TestContract_NetworkMultidoc_VIPEmitsWithMatchingSubnetEvenWithoutDefaultRoute(t *testing.T) {
+	out := renderCozystackWith(t, noDefaultRouteWithSubnetMatchLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig, got %d:\n%s", got, out)
+	}
+}
+
+// Contract: a nil / unset floatingIP on a controlplane node
+// renders without error and emits no Layer2VIPConfig. The
+// validation block must gate on the RAW .Values.floatingIP
+// truthiness before any toString coercion — Sprig's
+// `nil | toString` returns the literal string "<nil>", which is
+// truthy and not a valid IP, so a naive predicate on the
+// toString'd value would fail-fast on every controlplane render
+// where the operator left floatingIP unset (single-node
+// clusters, LB-fronted multi-node, anything Helm coalesces out
+// of the values table).
+func TestContract_NetworkMultidoc_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	out := renderCozystackWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("Layer2VIPConfig must not emit when floatingIP is nil; got:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("rendered output leaks the Sprig <nil> literal — fail-fast misfired on nil floatingIP:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of the nil-safe contract above.
+func TestContract_NetworkMultidoc_Generic_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	out := renderGenericWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if strings.Contains(out, "kind: Layer2VIPConfig") {
+		t.Errorf("generic chart: Layer2VIPConfig must not emit when floatingIP is nil; got:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("generic chart: rendered output leaks the Sprig <nil> literal:\n%s", out)
+	}
+}
+
+// Contract: explicit falsy non-string floatingIP values (numeric 0,
+// bool false) must trip the fail-fast rather than be silently
+// treated as "operator unset the field". A raw-truthiness gate
+// would skip the predicate entirely and ship a config with no
+// Layer2VIPConfig where the operator clearly intended one (just
+// with a malformed value). Coercing through toString first
+// distinguishes "did not supply" (nil, "") from "supplied a bad
+// shape" (0, false, 192168, "10.0.0.300").
+func TestContract_NetworkMultidoc_VIPFailsOnFalsyNonStringFloatingIP(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     any
+		wantInMsg string
+	}{
+		{"numeric zero", 0, "0"},
+		{"bool false", false, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+				"floatingIP":        tc.input,
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+			})
+			if err == nil {
+				t.Fatalf("expected render to fail on floatingIP=%v, got nil error", tc.input)
+			}
+			if !strings.Contains(err.Error(), "floatingIP") {
+				t.Errorf("error must mention the offending field; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInMsg) {
+				t.Errorf("error must echo the bad value %q; got: %v", tc.wantInMsg, err)
+			}
+		})
+	}
+}
+
+// Contract: a numeric (non-string) floatingIP — typed without
+// quotes in values.yaml so YAML parses it as int — must produce
+// the friendly fail-fast error, NOT a Go-template
+// "wrong type for value; expected string; got int" panic.
+//
+// The ipIsValid template function is registered with a string
+// parameter; passing an int through Go text/template raises a
+// type-mismatch panic that surfaces as a stack trace at the line
+// of the `if` predicate, defeating the whole point of the
+// validation block. The chart guards against this by coercing
+// .Values.floatingIP through `toString` before the predicate.
+//
+// Pinning this here ensures a future refactor that drops the
+// toString coercion does not silently regress into the panic —
+// which is exactly the kind of latent failure mode the CLAUDE.md
+// "Helm/Go template numeric scalar" rule flags as a recurring
+// trap.
+func TestContract_NetworkMultidoc_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168, // int, not string
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if err == nil {
+		t.Fatal("expected render to fail on numeric floatingIP, got nil error")
+	}
+	if strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("got Go-template type-mismatch panic instead of friendly fail; the toString coercion must run before the predicate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "192168") {
+		t.Errorf("error must echo the bad value (stringified); got: %v", err)
+	}
+}
+
+// Contract: the malformed-floatingIP fail-fast block runs BEFORE
+// either VIP-emission branch, so even an operator who set vipLink
+// (which would normally suppress the discovery branch entirely)
+// still gets a clear render-time error rather than a Layer2VIPConfig
+// document with a nonsense `name:` value. Pin the validation order
+// here — the override block is at the top of the multi-doc network
+// section, so a future refactor that moves the validation BELOW the
+// override would silently regress this case.
+func TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIPEvenWithVipLinkOverride(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "192.168.300.10",
+		"vipLink":           "enp0s31f6.4000",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if err == nil {
+		t.Fatal("expected render to fail on malformed floatingIP, got nil error (vipLink override must NOT bypass validation)")
+	}
+	if !strings.Contains(err.Error(), "192.168.300.10") {
+		t.Errorf("error must echo the bad floatingIP literal so the operator can correlate; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// === Generic-chart mirror tests ===
+//
+// The generic chart carries a verbatim copy of the multi-doc
+// Layer2VIPConfig selection block from the cozystack chart, but
+// every cozystack contract test routes through renderCozystackWith.
+// These mirrors exist so a regression in only the generic chart's
+// helper hunk surfaces immediately. If the generic chart ever
+// drifts from cozystack on this contract, the symmetric pair fails
+// and the gap is obvious.
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_HetznerTopology_VIPOnPrivateVLAN.
+func TestContract_NetworkMultidoc_Generic_HetznerTopology_VIPOnPrivateVLAN(t *testing.T) {
+	out := renderGenericWith(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.100.10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("generic chart: Layer2VIPConfig points at the public NIC instead of the VLAN child:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_HetznerTopology_IPv6VIPOnPrivateVLAN.
+func TestContract_NetworkMultidoc_Generic_HetznerTopology_IPv6VIPOnPrivateVLAN(t *testing.T) {
+	out := renderGenericWith(t, hetznerPublicNICWithPrivateIPv6VLANLookup(), map[string]any{
+		"floatingIP":        "2001:db8:cafe::10",
+		"advertisedSubnets": []any{"2001:db8:cafe::/64"},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "2001:db8:cafe::10"`)
+	assertContains(t, out, "link: enp0s31f6.4000")
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_VIPLinkLongestPrefixMatch.
+func TestContract_NetworkMultidoc_Generic_VIPLinkLongestPrefixMatch(t *testing.T) {
+	out := renderGenericWith(t, overlappingSubnetsLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "link: enp0s31f6\n") {
+		t.Errorf("generic chart: longest-prefix match regressed:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_FloatingIPNotInDiscoveredSubnetFallsBackToGateway.
+func TestContract_NetworkMultidoc_Generic_FloatingIPNotInDiscoveredSubnetFallsBackToGateway(t *testing.T) {
+	out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, "link: eth0")
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr.
+func TestContract_NetworkMultidoc_Generic_LinkAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderGenericWith(t, malformedAddressEntryLookup(), map[string]any{
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("generic chart: malformed CIDR leaked into rendered addresses:\n%s", out)
+	}
+	if !strings.Contains(out, "- address: 192.168.100.4/24") {
+		t.Errorf("generic chart: valid sibling CIDR dropped by the filter:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_LinkAddressesSkipsNilScope.
+func TestContract_NetworkMultidoc_Generic_LinkAddressesSkipsNilScope(t *testing.T) {
+	out := renderGenericWith(t, hetznerWithNilScopeAddressLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "link: enp0s31f6.4000")
+	if strings.Contains(out, "192.168.0.5/16") {
+		t.Errorf("generic chart: nil-scope CIDR leaked into rendered addresses:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_VIPLinkTieBreakByIterationOrder.
+func TestContract_NetworkMultidoc_Generic_VIPLinkTieBreakByIterationOrder(t *testing.T) {
+	out := renderGenericWith(t, twoConfigurableLinksSamePrefixLookup(), map[string]any{
+		"floatingIP":        "192.168.100.10",
+		"advertisedSubnets": []any{"192.168.100.0/24"},
+	})
+	assertContains(t, out, "link: eth0")
+	if strings.Contains(out, "link: eth1") {
+		t.Errorf("generic chart: tie-break regressed:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_BridgeConfig_VLANOnlyNoStp.
+func TestContract_NetworkMultidoc_Generic_BridgeConfig_VLANOnlyNoStp(t *testing.T) {
+	out := renderGenericWith(t, bridgeWithVLANOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "vlan:")
+	assertContains(t, out, "filtering: true")
+	if strings.Contains(out, "stp:") {
+		t.Errorf("generic chart: BridgeConfig emits stp: block when bridgeMaster.stp unset:\n%s", out)
+	}
+}
+
+// Generic-chart mirror of TestContract_NetworkMultidoc_BridgeConfig_StpOnlyNoVlan.
+func TestContract_NetworkMultidoc_Generic_BridgeConfig_StpOnlyNoVlan(t *testing.T) {
+	out := renderGenericWith(t, bridgeWithSTPOnlyLookup(), map[string]any{
+		"advertisedSubnets": []any{"10.5.0.0/24"},
+	})
+	assertContains(t, out, "kind: BridgeConfig")
+	assertContains(t, out, "stp:")
+	assertContains(t, out, "enabled: true")
+	if strings.Contains(out, "vlan:") {
+		t.Errorf("generic chart: BridgeConfig emits vlan: block when bridgeMaster.vlan unset:\n%s", out)
+	}
+}
+
+// Contract: when the floatingIP isn't on any discovered subnet (e.g.
+// an upstream-routable VIP that arrives via the default-route link,
+// or an operator typo), Layer2VIPConfig falls back to the
+// IPv4-default-route link rather than silently skipping or failing.
+// Pre-fix behaviour was always-fall-back; the fix prefers
+// subnet-membership but preserves the fallback for topologies where
+// the new helper has nothing to match on. simpleNicLookup carries a
+// gateway on eth0 with addresses 192.168.201.10/24; we set a
+// floatingIP outside that subnet and assert it lands on eth0.
+func TestContract_NetworkMultidoc_FloatingIPNotInDiscoveredSubnetFallsBackToGateway(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"floatingIP":        "10.99.99.99",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "10.99.99.99"`)
+	assertContains(t, out, "link: eth0")
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig (fallback path), got %d:\n%s", got, out)
+	}
 }

@@ -123,17 +123,37 @@ nameservers:
 {{- else }}
   []
 {{- end }}
+{{- /* Coerce .Values.floatingIP to its string form once at the
+       top of the multi-doc body and reuse the result everywhere
+       a downstream lookup or formatter needs it. The per-link
+       addresses_by_link strip on every link emission below
+       depends on the same stringified value — a worker render
+       with `floatingIP: 192168` would otherwise feed printf
+       "%s/" an int, producing `%!s(int=192168)/` that never
+       matches a CIDR. The coercion isolates that trap to one
+       place and lets the rest of the template treat the value
+       uniformly.
+
+       "<nil>" is Sprig's serialisation of nil and "" is the
+       unset string; both mean "operator did not supply a
+       value". The shared talm.validate_floatingIP partial below
+       handles the actual fail-fast — invoke it here AND in the
+       legacy define so a malformed value fails at render time
+       regardless of the rendered Talos version. */}}
+{{- $fipStr := .Values.floatingIP | toString }}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
+{{- include "talm.validate_floatingIP" . }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
        does not yet exist on the live system at first apply (typical
        case: a VLAN sub-interface this template is about to bring up).
        The discovery-derived block below skips its own Layer2VIPConfig
        when this branch fires, so we never emit duplicates. */}}
-{{- if and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") }}
+{{- if and $fipIsSet .Values.vipLink (eq .MachineType "controlplane") }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
-name: {{ .Values.floatingIP | quote }}
+name: {{ $fipStr | quote }}
 link: {{ .Values.vipLink }}
 {{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
@@ -154,7 +174,13 @@ link: {{ .Values.vipLink }}
        and follower configs out of sync. */}}
 {{- $addresses := list }}
 {{- range $rawAddresses }}
-{{- if not (and $.Values.floatingIP (hasPrefix (printf "%s/" $.Values.floatingIP) .)) }}
+{{- /* Use the hoisted $fipStr/$fipIsSet from the top of the
+       define so the strip honours the same coerced value the
+       validation block above used. Going through `printf "%s/"
+       $.Values.floatingIP` directly would emit
+       `%!s(int=192168)/` for a numeric YAML scalar on a worker
+       render (controlplane was caught by the fail-fast). */ -}}
+{{- if not (and $fipIsSet (hasPrefix (printf "%s/" $fipStr) .)) }}
 {{- $addresses = append $addresses . }}
 {{- end }}
 {{- end }}
@@ -163,17 +189,58 @@ link: {{ .Values.vipLink }}
 {{- $linkGateway = include "talm.discovered.gateway_by_link" $linkName }}
 {{- end }}
 {{- if eq $kind "bridge" }}
-{{- /* BridgeConfig is a separate v1alpha1 typed document the chart
-       does not yet emit. Skipping a non-gateway bridge leaves the
-       rendered config without a bridge document and the operator is
-       responsible for declaring it via a per-node body. A bridge
-       carrying the IPv4 default route, however, cannot be silently
-       skipped: that would drop every network document for the
-       gateway link and the rendered config would describe a node
-       with no working uplink. Surface a fail with the offending
-       link and the migration path. */ -}}
-{{- if $isGatewayLink }}
-{{- fail (printf "talm: discovered bridge %q is the IPv4-default link, but BridgeConfig emission is not yet implemented in the chart. Move the bridge declaration into a per-node body overlay (kind: BridgeConfig), or set Values.vipLink to a different link until bridge support lands." $linkName) }}
+{{- /* BridgeConfig emission. Discovers bridge ports (members) via
+       talm.discovered.bridge_slaves and emits a typed v1.12+
+       BridgeConfig document with the same address / route / mtu
+       shape as the other branches. STP and VLAN filtering are
+       opt-in: they are emitted only when the bridge controller
+       reported a non-nil spec.bridgeMaster.stp / spec.bridgeMaster
+       value, so a default-state bridge stays minimal. */ -}}
+{{- $bridgeMaster := $link.spec.bridgeMaster }}
+{{- $bridgePorts := fromJsonArray (include "talm.discovered.bridge_slaves" $link.spec.index) }}
+---
+apiVersion: v1alpha1
+kind: BridgeConfig
+name: {{ $linkName }}
+{{- if $bridgePorts }}
+links:
+{{- range $bridgePorts }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- if $bridgeMaster }}
+{{- if $bridgeMaster.stp }}
+{{- if hasKey $bridgeMaster.stp "enabled" }}
+stp:
+  enabled: {{ $bridgeMaster.stp.enabled }}
+{{- end }}
+{{- end }}
+{{- /* COSI's BridgeVLANSpec serialises FilteringEnabled as
+       yaml:"filteringEnabled" (verified against
+       siderolabs/talos pkg/machinery/resources/network/link.go).
+       The output-side BridgeConfig schema uses the shorter
+       yaml:"filtering,omitempty" key — so we read the long form
+       from discovery and emit the short form into the rendered
+       document. */ -}}
+{{- if $bridgeMaster.vlan }}
+{{- if hasKey $bridgeMaster.vlan "filteringEnabled" }}
+vlan:
+  filtering: {{ $bridgeMaster.vlan.filteringEnabled }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
 {{- end }}
 {{- else if eq $kind "bond" }}
 {{- $bondMaster := $link.spec.bondMaster }}
@@ -278,18 +345,50 @@ mtu: {{ $link.spec.mtu }}
 {{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
        has set .Values.vipLink, since the override-path block above
        has already emitted the document with the operator's chosen
-       link. */}}
-{{- if and .Values.floatingIP (not .Values.vipLink) (eq .MachineType "controlplane") $defaultLinkName }}
+       link.
+
+       Link selection prefers the link whose discovered addresses
+       contain the floatingIP (talm.discovered.link_name_for_address),
+       so a VIP in a private subnet hosted on a VLAN child lands on
+       that VLAN — not on the IPv4-default-route NIC. The
+       default-gateway link stays as the fallback for topologies
+       where the VIP isn't on any discovered subnet (typical for
+       upstream-routable VIPs that arrive via the default-route
+       link). When neither resolves a link, no Layer2VIPConfig is
+       emitted, matching the prior behaviour. */}}
+{{- if and $fipIsSet (not .Values.vipLink) (eq .MachineType "controlplane") }}
+{{- $vipLink := include "talm.discovered.link_name_for_address" $fipStr }}
+{{- /* Default-gateway fallback must also point at a configurable
+       link — otherwise an unmanaged default-route NIC (Wireguard,
+       a slave link) would silently win selection and the rendered
+       Layer2VIPConfig would dangle on a link the chart never emits
+       a per-link document for. Mirror the same configurable-link
+       gate link_name_for_address applies inside its own iteration. */ -}}
+{{- if not $vipLink }}
+{{- if has $defaultLinkName $configurableLinks }}
+{{- $vipLink = $defaultLinkName }}
+{{- end }}
+{{- end }}
+{{- if $vipLink }}
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
-name: {{ .Values.floatingIP | quote }}
-link: {{ $defaultLinkName }}
+name: {{ $fipStr | quote }}
+link: {{ $vipLink }}
+{{- end }}
 {{- end }}
 {{- end }}
 
 {{- /* Shared legacy network section for machine.network */ -}}
 {{- define "talos.config.network.legacy" }}
+{{- /* Coerce floatingIP through toString and call the shared
+       talm.validate_floatingIP partial so legacy renders fail at
+       template time on a malformed value, same as the multi-doc
+       path. $fipStr / $fipIsSet are reused below in place of every
+       direct .Values.floatingIP reference. */ -}}
+{{- $fipStr := .Values.floatingIP | toString }}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
+{{- include "talm.validate_floatingIP" . }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
@@ -301,7 +400,7 @@ link: {{ $defaultLinkName }}
        top-level interfaces[] entry that carries only the vip block.
        When vipLink == $defaultLinkName the inline vip below already
        lands on the right link, so no override entry is needed. */}}
-    {{- $vipOverride := and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
+    {{- $vipOverride := and $fipIsSet .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
     {{- /* Suppress the inline (discovery-derived) vip when the operator
        has redirected it to a different link; otherwise the VIP would
        be pinned twice on different interfaces. */}}
@@ -332,25 +431,25 @@ link: {{ $defaultLinkName }}
           routes:
             - network: 0.0.0.0/0
               gateway: {{ include "talm.discovered.default_gateway" . }}
-          {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
+          {{- if and $fipIsSet (eq .MachineType "controlplane") (not $suppressInlineVip) }}
           vip:
-            ip: {{ .Values.floatingIP }}
+            ip: {{ $fipStr }}
           {{- end }}
       {{- else }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
+      {{- if and $fipIsSet (eq .MachineType "controlplane") (not $suppressInlineVip) }}
       vip:
-        ip: {{ .Values.floatingIP }}
+        ip: {{ $fipStr }}
       {{- end }}
       {{- end }}
     {{- end }}
     {{- if $vipOverride }}
     - interface: {{ .Values.vipLink }}
       vip:
-        ip: {{ .Values.floatingIP }}
+        ip: {{ $fipStr }}
     {{- end }}
     {{- end }}
 {{- end }}
