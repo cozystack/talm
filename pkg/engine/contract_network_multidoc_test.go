@@ -298,6 +298,16 @@ func TestContract_NetworkMultidoc_VIPOnBridge(t *testing.T) {
 	assertContains(t, out, "kind: Layer2VIPConfig")
 	assertContains(t, out, `name: "10.5.0.99"`)
 	assertContains(t, out, "link: br0")
+	// Guard against an alternate implementation that emits Layer2VIPConfig
+	// on the wrong link (the physical NIC slaved under the bridge): the
+	// physical port eth0 is in configurable_link_names too, so a regression
+	// in the link-selection helper could land the VIP there instead.
+	if strings.Contains(out, "link: eth0\n") {
+		t.Errorf("Layer2VIPConfig points at eth0 (bridge port) instead of br0:\n%s", out)
+	}
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig document, got %d:\n%s", got, out)
+	}
 }
 
 // === Layer2VIPConfig: discovery-derived ===
