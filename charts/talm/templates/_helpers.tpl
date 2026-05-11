@@ -1,3 +1,27 @@
+{{- /* Validate .Values.floatingIP is a parseable IPv4 / IPv6 literal
+       on controlplane renders. Shared by both the v1.12 multi-doc
+       and the v1.11 legacy network defines so the same fail-fast
+       happens regardless of the rendered Talos version. Calling
+       template must pass the chart context as the dot — the partial
+       reads .Values.floatingIP and .MachineType.
+
+       The Sprig serialisation of nil is the literal string "<nil>",
+       and an unset string is "". Both mean "operator did not supply
+       a value" and skip the check. Numeric YAML scalars (operator
+       writes `floatingIP: 192168` without quotes), bool false /
+       numeric 0, and any other shape stringifies via toString and
+       reaches ipIsValid — the friendly fail names the bad value
+       with %q. */ -}}
+{{- define "talm.validate_floatingIP" -}}
+{{- $fipStr := .Values.floatingIP | toString -}}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") -}}
+{{- if and $fipIsSet (eq .MachineType "controlplane") -}}
+{{- if not (ipIsValid $fipStr) -}}
+{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "talm.discovered.system_disk_name" }}
 {{- $systemDisk := (lookup "systemdisk" "" "system-disk") }}
 {{- if $systemDisk }}
@@ -109,10 +133,18 @@
 {{- break }}
 {{- end }}
 {{- end }}
+{{- /* Coerce .Values.floatingIP through toString before the prefix
+       compare so an unquoted numeric YAML scalar (operator writes
+       `floatingIP: 192168`) does not emit `%!s(int=192168)/` that
+       never matches a real CIDR. Same trap the v1.12 multi-doc
+       path guards against; legacy schema needs the same treatment.
+       toString'd nil renders as "<nil>" which is also harmless —
+       it cannot match a real CIDR prefix. */ -}}
+{{- $fipStr := $.Values.floatingIP | toString }}
 {{- $addresses := list }}
 {{- range (lookup "addresses" "" "").items }}
 {{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) }}
-{{- if not (hasPrefix (printf "%s/" $.Values.floatingIP) .spec.address) }}
+{{- if not (hasPrefix (printf "%s/" $fipStr) .spec.address) }}
 {{- $addresses = append $addresses .spec.address }}
 {{- end }}
 {{- end }}

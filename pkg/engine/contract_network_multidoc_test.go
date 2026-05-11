@@ -779,6 +779,133 @@ func TestContract_NetworkMultidoc_VIPLinkTieBreakByIterationOrder(t *testing.T) 
 	}
 }
 
+// === Legacy v1.11 fail-fast contracts ===
+//
+// The shared talm.validate_floatingIP partial is included from
+// both the v1.12 multi-doc define and the v1.11 legacy define,
+// so render-time fail-fast on a malformed floatingIP works
+// regardless of templateOptions.talosVersion. These contracts
+// pin the legacy path so a future refactor that drops the
+// include silently regresses only one schema.
+
+// Contract: legacy v1.11 render path fails fast on a malformed
+// floatingIP literal — same shape as the multi-doc contract
+// pinned by TestContract_NetworkMultidoc_VIPFailsOnInvalidFloatingIP.
+func TestContract_NetworkLegacy_VIPFailsOnInvalidFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "10.0.0.300",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+
+	if err == nil {
+		t.Fatal("expected render to fail on malformed floatingIP on v1.11, got nil error")
+	}
+	if !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("error must echo the bad floatingIP literal; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "floatingIP") {
+		t.Errorf("error must mention the offending field name; got: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path coerces numeric floatingIP
+// through toString before predicate so the Go-template
+// "wrong type for value; expected string; got int" panic does
+// not fire. Mirror of
+// TestContract_NetworkMultidoc_VIPFailsOnNumericFloatingIP.
+func TestContract_NetworkLegacy_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+
+	if err == nil {
+		t.Fatal("expected render to fail on numeric floatingIP on v1.11, got nil error")
+	}
+	if strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("got Go-template type-mismatch panic; the toString coercion must run before the predicate on v1.11 too: %v", err)
+	}
+	if !strings.Contains(err.Error(), "192168") {
+		t.Errorf("error must echo the bad value (stringified); got: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path treats nil floatingIP as
+// "unset" — no fail, no Layer2VIP, no "<nil>" leak. Mirror of
+// TestContract_NetworkMultidoc_VIPGracefulWhenFloatingIPNil.
+func TestContract_NetworkLegacy_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err != nil {
+		t.Fatalf("nil floatingIP must render cleanly on v1.11, got error: %v", err)
+	}
+}
+
+// Contract: legacy v1.11 render path fails fast on explicitly
+// falsy non-string floatingIP (numeric 0, bool false). Same
+// raw-truthy bypass the multi-doc path closed.
+func TestContract_NetworkLegacy_VIPFailsOnFalsyNonStringFloatingIP(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     any
+		wantInMsg string
+	}{
+		{"numeric zero", 0, "0"},
+		{"bool false", false, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+				"floatingIP":        tc.input,
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+			}, "v1.11")
+			if err == nil {
+				t.Fatalf("expected render to fail on floatingIP=%v on v1.11, got nil error", tc.input)
+			}
+			if !strings.Contains(err.Error(), "floatingIP") {
+				t.Errorf("error must mention the offending field; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInMsg) {
+				t.Errorf("error must echo the bad value %q; got: %v", tc.wantInMsg, err)
+			}
+		})
+	}
+}
+
+// Generic-chart mirrors of the four legacy fail-fast contracts above.
+
+func TestContract_NetworkLegacy_Generic_VIPFailsOnInvalidFloatingIP(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        "10.0.0.300",
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err == nil || !strings.Contains(err.Error(), "10.0.0.300") {
+		t.Errorf("generic v1.11: expected fail-fast naming the bad floatingIP, got: %v", err)
+	}
+}
+
+func TestContract_NetworkLegacy_Generic_VIPFailsOnNumericFloatingIP(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        192168,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err == nil || strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("generic v1.11: numeric floatingIP must produce friendly fail (not Go-template type panic); got: %v", err)
+	}
+}
+
+func TestContract_NetworkLegacy_Generic_VIPGracefulWhenFloatingIPNil(t *testing.T) {
+	err := renderGenericExpectError(t, hetznerPublicNICWithPrivateVLANLookup(), map[string]any{
+		"floatingIP":        nil,
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	}, "v1.11")
+	if err != nil {
+		t.Errorf("generic v1.11: nil floatingIP must render cleanly, got: %v", err)
+	}
+}
+
 // Contract: when the default-route-link fallback resolves to a
 // non-configurable link (Wireguard, slave NIC, anything outside the
 // {physical, bond, vlan, bridge} set), the chart MUST NOT emit

@@ -6648,7 +6648,10 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 // by tests that pin error-message contracts (fail-fast on malformed
 // floatingIP, etc.). On unexpected success the returned error is
 // nil and the caller is responsible for t.Fatal-ing.
-func renderCozystackExpectError(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) error {
+//
+// Variadic talosVersion: defaults to v1.12 (multi-doc path); pass
+// "v1.11" or earlier to exercise the legacy network define.
+func renderCozystackExpectError(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any, talosVersion ...string) error {
 	t.Helper()
 	origLookup := helmEngine.LookupFunc
 	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
@@ -6673,10 +6676,51 @@ func renderCozystackExpectError(t *testing.T, lookup func(string, string, string
 	}
 	maps.Copy(values, overrides)
 
+	version := "v1.12"
+	if len(talosVersion) > 0 && talosVersion[0] != "" {
+		version = talosVersion[0]
+	}
+
 	eng := helmEngine.Engine{}
 	_, err = eng.Render(chrt, chartutil.Values{
 		"Values":       values,
-		"TalosVersion": "v1.12",
+		"TalosVersion": version,
+	})
+
+	return err //nolint:wrapcheck // surfacing the render error verbatim is the whole point of this helper
+}
+
+// renderGenericExpectError is the generic-preset counterpart of
+// renderCozystackExpectError. Used by mirror tests that pin the
+// same error-message contract on the generic chart.
+func renderGenericExpectError(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any, talosVersion ...string) error {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/generic")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+	if arr, ok := values["advertisedSubnets"].([]any); !ok || len(arr) == 0 {
+		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
+	}
+	maps.Copy(values, overrides)
+
+	version := "v1.12"
+	if len(talosVersion) > 0 && talosVersion[0] != "" {
+		version = talosVersion[0]
+	}
+
+	eng := helmEngine.Engine{}
+	_, err = eng.Render(chrt, chartutil.Values{
+		"Values":       values,
+		"TalosVersion": version,
 	})
 
 	return err //nolint:wrapcheck // surfacing the render error verbatim is the whole point of this helper

@@ -125,29 +125,24 @@ nameservers:
 {{- end }}
 {{- /* Coerce .Values.floatingIP to its string form once at the
        top of the multi-doc body and reuse the result everywhere
-       a downstream lookup or formatter needs it. Done outside
-       the controlplane-only validation block below because the
-       per-link addresses_by_link strip on every link emission
-       below also depends on the same stringified value and a
-       worker render with `floatingIP: 192168` would otherwise
-       feed printf "%s/" an int, producing `%!s(int=192168)/`
-       that never matches a CIDR. The coercion isolates that
-       trap to one place and lets the rest of the template treat
-       the value uniformly.
+       a downstream lookup or formatter needs it. The per-link
+       addresses_by_link strip on every link emission below
+       depends on the same stringified value — a worker render
+       with `floatingIP: 192168` would otherwise feed printf
+       "%s/" an int, producing `%!s(int=192168)/` that never
+       matches a CIDR. The coercion isolates that trap to one
+       place and lets the rest of the template treat the value
+       uniformly.
 
        "<nil>" is Sprig's serialisation of nil and "" is the
        unset string; both mean "operator did not supply a
-       value" and skip the validation. Numeric 0, bool false,
-       and any other shape stringifies and reaches ipIsValid as
-       its serialised form — the friendly fail names the bad
-       value with %q. */}}
+       value". The shared talm.validate_floatingIP partial below
+       handles the actual fail-fast — invoke it here AND in the
+       legacy define so a malformed value fails at render time
+       regardless of the rendered Talos version. */}}
 {{- $fipStr := .Values.floatingIP | toString }}
 {{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
-{{- if and $fipIsSet (eq .MachineType "controlplane") }}
-{{- if not (ipIsValid $fipStr) }}
-{{- fail (printf "talm: floatingIP %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $fipStr) }}
-{{- end }}
-{{- end }}
+{{- include "talm.validate_floatingIP" . }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
        does not yet exist on the live system at first apply (typical
@@ -386,6 +381,14 @@ link: {{ $vipLink }}
 
 {{- /* Shared legacy network section for machine.network */ -}}
 {{- define "talos.config.network.legacy" }}
+{{- /* Coerce floatingIP through toString and call the shared
+       talm.validate_floatingIP partial so legacy renders fail at
+       template time on a malformed value, same as the multi-doc
+       path. $fipStr / $fipIsSet are reused below in place of every
+       direct .Values.floatingIP reference. */ -}}
+{{- $fipStr := .Values.floatingIP | toString }}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
+{{- include "talm.validate_floatingIP" . }}
   network:
     hostname: {{ include "talm.discovered.hostname" . | quote }}
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
@@ -397,7 +400,7 @@ link: {{ $vipLink }}
        top-level interfaces[] entry that carries only the vip block.
        When vipLink == $defaultLinkName the inline vip below already
        lands on the right link, so no override entry is needed. */}}
-    {{- $vipOverride := and .Values.floatingIP .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
+    {{- $vipOverride := and $fipIsSet .Values.vipLink (eq .MachineType "controlplane") (ne .Values.vipLink $defaultLinkName) }}
     {{- /* Suppress the inline (discovery-derived) vip when the operator
        has redirected it to a different link; otherwise the VIP would
        be pinned twice on different interfaces. */}}
@@ -428,25 +431,25 @@ link: {{ $vipLink }}
           routes:
             - network: 0.0.0.0/0
               gateway: {{ include "talm.discovered.default_gateway" . }}
-          {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
+          {{- if and $fipIsSet (eq .MachineType "controlplane") (not $suppressInlineVip) }}
           vip:
-            ip: {{ .Values.floatingIP }}
+            ip: {{ $fipStr }}
           {{- end }}
       {{- else }}
       addresses: {{ include "talm.discovered.default_addresses_by_gateway" . }}
       routes:
         - network: 0.0.0.0/0
           gateway: {{ include "talm.discovered.default_gateway" . }}
-      {{- if and .Values.floatingIP (eq .MachineType "controlplane") (not $suppressInlineVip) }}
+      {{- if and $fipIsSet (eq .MachineType "controlplane") (not $suppressInlineVip) }}
       vip:
-        ip: {{ .Values.floatingIP }}
+        ip: {{ $fipStr }}
       {{- end }}
       {{- end }}
     {{- end }}
     {{- if $vipOverride }}
     - interface: {{ .Values.vipLink }}
       vip:
-        ip: {{ .Values.floatingIP }}
+        ip: {{ $fipStr }}
     {{- end }}
     {{- end }}
 {{- end }}
