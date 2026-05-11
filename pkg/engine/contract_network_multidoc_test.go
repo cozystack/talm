@@ -874,6 +874,19 @@ func TestContract_NetworkLegacy_VIPFailsOnFalsyNonStringFloatingIP(t *testing.T)
 	}
 }
 
+// Contract: legacy v1.11 default_addresses_by_gateway filters
+// malformed entries from the COSI addresses table the same way
+// addresses_by_link does — cidrPrefixLen < 0 entries do not leak
+// into the rendered machine.network.interfaces[].addresses block.
+// Mirror of TestContract_NetworkMultidoc_LinkAddressesFilterMalformedCidr
+// against the legacy schema.
+func TestContract_NetworkLegacy_DefaultAddressesFilterMalformedCidr(t *testing.T) {
+	out := renderChartTemplateWithLookup(t, cozystackChartPath, controlplaneTpl, malformedAddressEntryLookup(), "v1.11")
+	if strings.Contains(out, "definitely-not-a-cidr") {
+		t.Errorf("legacy v1.11: malformed CIDR leaked into machine.network.interfaces[].addresses; default_addresses_by_gateway filter regressed:\n%s", out)
+	}
+}
+
 // Generic-chart mirrors of the four legacy fail-fast contracts above.
 
 func TestContract_NetworkLegacy_Generic_VIPFailsOnInvalidFloatingIP(t *testing.T) {

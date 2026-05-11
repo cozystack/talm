@@ -143,9 +143,15 @@
 {{- $fipStr := $.Values.floatingIP | toString }}
 {{- $addresses := list }}
 {{- range (lookup "addresses" "" "").items }}
-{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) }}
-{{- if not (hasPrefix (printf "%s/" $fipStr) .spec.address) }}
-{{- $addresses = append $addresses .spec.address }}
+{{- /* Filter malformed or future-format entries the same way
+       addresses_by_link does (cidrPrefixLen >= 0). A corrupt entry
+       in the COSI addresses table must not leak verbatim into the
+       legacy v1.11 machine.network.interfaces[].addresses block. */ -}}
+{{- $address := .spec.address | toString }}
+{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 }}
+{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) $validCidr }}
+{{- if not (hasPrefix (printf "%s/" $fipStr) $address) }}
+{{- $addresses = append $addresses $address }}
 {{- end }}
 {{- end }}
 {{- end }}
