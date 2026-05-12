@@ -318,6 +318,16 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		wrapTUICommand(wrappedCmd, baseCmdName)
 	}
 
+	// Special handling for reset: flip talm's default to the
+	// META-preserving selective wipe when the operator passed no
+	// wipe-related flags. Upstream's --wipe-mode=all destroys META
+	// and prevents self-recovery; the safer default matches the
+	// recipe operators reach for anyway. See wrapResetCommand
+	// godoc for the precedence rules.
+	if baseCmdName == resetCmdName {
+		wrapResetCommand(wrappedCmd)
+	}
+
 	// Copy all subcommands
 	for _, subCmd := range cmd.Commands() {
 		wrappedCmd.AddCommand(wrapTalosCommand(subCmd, subCmd.Name()))

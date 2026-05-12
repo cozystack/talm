@@ -285,18 +285,72 @@ Expected: delete succeeds; read returns `NotFound`.
 
 Expected: refuses with `etcd data directory is not empty`.
 
-### H2. Reset a control-plane node (graceful + reboot, system labels only)
+### H2. Reset a control-plane node (talm safe default — preserves META)
 
-⚠️ Destructive. Run only against a cluster you can afford to lose one node from. Requires `--system-labels-to-wipe=STATE` (and optionally `EPHEMERAL`) for a recoverable reset — `--wipe-mode=all` (the default) removes META too, which makes self-recovery impossible.
+⚠️ Destructive. Run only against a cluster you can afford to lose one node from. The talm default populates `--system-labels-to-wipe=STATE,EPHEMERAL` automatically when neither `--wipe-mode` nor `--system-labels-to-wipe` was passed, so META survives and the node self-recovers on the next boot. Upstream `talosctl reset` defaults to `--wipe-mode=all`, which destroys META; that path is exposed in talm as the explicit `--wipe-mode=all` opt-in (see H2a).
 
 ```bash
 /tmp/talm-safety reset --graceful=true --reboot \
-  --system-labels-to-wipe=STATE \
-  --system-labels-to-wipe=EPHEMERAL \
   --nodes $NODE --endpoints $OTHER_NODE
 ```
 
-Expected: etcd member departs (`talm etcd members` from another node shows 2 members), node reboots, `post check passed`.
+Expected: etcd member departs (`talm etcd members` from another node shows 2 members), node reboots, `post check passed`. After the reboot the node returns to etcd as a fresh member with placeholder hostname `talos-XXXXX` within ~90s; the next `talm apply` refreshes the hostname.
+
+Regression anchors:
+
+- `talm reset --help` must show the talm-divergence note on both `--wipe-mode` ("preserves META") and `--system-labels-to-wipe` ("STATE,EPHEMERAL"). Without the help text, the default flip is invisible to operators reading the CLI surface.
+- The reset request must succeed without the operator having to type `--system-labels-to-wipe` manually. If the node comes back in maintenance mode requiring fresh apply, the wrapper did not apply the safe default and META was wiped — that is a regression.
+
+### H2a. Reset with explicit destructive opt-in (`--wipe-mode=all` or `--wipe-mode=system-disk`)
+
+⚠️ Highly destructive — META wiped, node CANNOT self-recover and requires fresh apply against `--insecure` maintenance mode. Run only on a cluster where the multi-day re-bootstrap cost is acceptable.
+
+Two opt-out values land in the same destructive server-side branch: `--wipe-mode=all` (full system disk + user disks) and `--wipe-mode=system-disk` (system disk only). Both bypass the safety override and wipe META. `--wipe-mode=user-disks` is safe — it doesn't touch system partitions.
+
+```bash
+# Equivalent destructive paths:
+/tmp/talm-safety reset --wipe-mode=all --graceful=true --reboot \
+  --nodes $NODE --endpoints $OTHER_NODE
+/tmp/talm-safety reset --wipe-mode=system-disk --graceful=true --reboot \
+  --nodes $NODE --endpoints $OTHER_NODE
+```
+
+Expected: same as H2 up to the reboot; after the reboot the node comes up in maintenance mode (no machine config). `talm get hostnames -i --nodes $NODE` succeeds via the insecure path but the node is not yet a cluster member.
+
+Regression anchor: when EITHER of these commands is run the wrapper MUST NOT silently add `--system-labels-to-wipe=STATE,EPHEMERAL` (which would override the operator's stated intent and quietly turn a destructive reset into a selective one). Verify via `talm reset --wipe-mode=all --help` or by observing that the reset request actually destroys META.
+
+### H2b. Reset with operator-specified narrower scope (`--system-labels-to-wipe=STATE` only)
+
+```bash
+/tmp/talm-safety reset --system-labels-to-wipe=STATE --graceful=true --reboot \
+  --nodes $NODE --endpoints $OTHER_NODE
+```
+
+Expected: only STATE wiped, EPHEMERAL kept (containerd image cache survives the reset), node returns. The operator's explicit narrower list must be honored byte-for-byte; the wrapper MUST NOT silently expand to `STATE,EPHEMERAL`.
+
+Regression anchor: after the node returns, `talm dmesg --nodes $NODE | grep -i ephemeral` should show no fresh-format markers for the EPHEMERAL partition. If the wrapper silently expanded the operator's list, EPHEMERAL would have been wiped too.
+
+### H2c. Reset with `--graceful=false` (ungraceful, preserves safe default)
+
+```bash
+/tmp/talm-safety reset --graceful=false --reboot \
+  --nodes $NODE --endpoints $OTHER_NODE
+```
+
+Expected: ungraceful reset (no etcd leave), but the wrapper's safe default still fires (STATE+EPHEMERAL labels populated by talm because no wipe flag was passed). Node reboots; etcd cluster recovers via remaining quorum; rejoining member appears within ~120s.
+
+Regression anchor: the default-flip MUST be independent of `--graceful`. A change that conditions the flip on `--graceful=true` is a regression — operators on ungraceful reset are the ones who most need the safe default.
+
+### H2d. Reset triggered from modeline-bearing project root
+
+```bash
+cd $PROJECT  # directory with nodes/$NODE.yaml carrying the modeline
+/tmp/talm-safety reset --reboot --graceful=true
+```
+
+Expected: same outcome as H2 — modeline supplies `--nodes` / `--endpoints` from `nodes/$NODE.yaml`, no wipe flags on the CLI, wrapper applies the safe default, META preserved.
+
+Regression anchor: the default-flip is gated on `Changed("wipe-mode") && Changed("system-labels-to-wipe")` only — it is independent of where in the PreRunE chain it runs. A refactor that reorders the dispatch chain must keep this path working (modeline-supplied `--nodes` / `--endpoints` plus no operator-supplied wipe flags must still produce the safe default).
 
 ### H3. Etcd quorum after reset
 

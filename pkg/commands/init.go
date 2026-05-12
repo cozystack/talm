@@ -31,7 +31,6 @@ import (
 	"github.com/cozystack/talm/pkg/generated"
 	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/mgmt/gen"
@@ -955,19 +954,6 @@ const (
 	// instead of silently leaving the project on a stale preset.
 	overwritePolicyNonInteractive
 )
-
-// stdinIsTTY reports whether process stdin is connected to a
-// terminal. Var-typed so the unit tests can swap a fake.
-//
-// term.IsTerminal correctly returns false for /dev/null and pipes —
-// the naive os.Stdin.Stat()&ModeCharDevice check accepted /dev/null
-// (it's a character device) and led the previous version to prompt
-// in cron / scripted shells, EOFing the read.
-//
-//nolint:gochecknoglobals // injection seam for testability; matches stdinReader below.
-var stdinIsTTY = func() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
-}
 
 // stdinReader is the io.Reader the interactive prompt reads from.
 // Var-typed so unit tests can supply canned input.
