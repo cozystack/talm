@@ -224,6 +224,23 @@ For example, to run a dashboard for three nodes:
 talm dashboard -f node1.yaml -f node2.yaml -f node3.yaml
 ```
 
+### `talm reset` — META-preserving default
+
+`talm reset` diverges from upstream `talosctl reset` on one default. Upstream defaults to `--wipe-mode=all`, which wipes the Talos META partition along with STATE and EPHEMERAL — the node cannot self-recover and comes up in maintenance mode requiring a full re-apply. Talm instead populates `--system-labels-to-wipe=STATE,EPHEMERAL` when neither `--wipe-mode` nor `--system-labels-to-wipe` was passed, which preserves META so the node rejoins the cluster from its META-stored bootstrap config on the next boot.
+
+Explicit operator intent is honored unchanged:
+
+```bash
+# talm default — preserves META, node self-recovers.
+talm reset --reboot --graceful=true --nodes $NODE --endpoints $OTHER_NODE
+
+# Explicit destructive opt-in (upstream's default).
+talm reset --wipe-mode=all --reboot --nodes $NODE --endpoints $OTHER_NODE
+
+# Operator-specified narrower scope is honored byte-for-byte.
+talm reset --system-labels-to-wipe=STATE --reboot --nodes $NODE --endpoints $OTHER_NODE
+```
+
 ## Customization
 
 You're free to edit template files in `./templates` directory.
