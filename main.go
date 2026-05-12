@@ -73,8 +73,14 @@ func main() {
 	}
 }
 
-func Execute() error {
-	rootCmd.PersistentFlags().StringVar(
+// registerRootFlags installs the persistent flag set on rootCmd.
+// Extracted from Execute so tests can exercise the registration
+// without running cobra's executor. Single-call contract: cobra
+// panics on duplicate flag registration, so production calls this
+// exactly once from Execute; tests must build a fresh
+// *cobra.Command for each invocation.
+func registerRootFlags(cmd *cobra.Command) {
+	cmd.PersistentFlags().StringVar(
 		&commands.GlobalArgs.Talosconfig,
 		"talosconfig",
 		"",
@@ -84,13 +90,34 @@ func Execute() error {
 			filepath.Join(constants.ServiceAccountMountPath, constants.TalosconfigFilename),
 		),
 	)
-	rootCmd.PersistentFlags().StringVar(&commands.Config.RootDir, "root", ".", "root directory of the project")
-	rootCmd.PersistentFlags().StringVar(&commands.GlobalArgs.CmdContext, "context", "", "Context to be used in command")
-	rootCmd.PersistentFlags().StringSliceVarP(&commands.GlobalArgs.Nodes, "nodes", "n", []string{}, "target the specified nodes")
-	rootCmd.PersistentFlags().StringSliceVarP(&commands.GlobalArgs.Endpoints, "endpoints", "e", []string{}, "override default endpoints in Talos configuration")
-	rootCmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
-	rootCmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
-	rootCmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
+	cmd.PersistentFlags().StringVar(&commands.Config.RootDir, "root", ".", "root directory of the project")
+	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.CmdContext, "context", "", "Context to be used in command")
+	// --nodes is registered WITHOUT the `-n` shorthand. The
+	// previous registration carried `-n`, which silently captured
+	// any `-n <value>` an operator typed — for example
+	// `talm get hostnames -n network --nodes $NODE --endpoints
+	// $NODE` parsed `network` as a second node entry and then
+	// failed inside the gRPC name resolver with "produced zero
+	// addresses". Operators who type `-n namespace` for a
+	// subcommand argument (the muscle memory pattern from
+	// `kubectl`-style CLIs) now get a clean "flag -n not defined"
+	// from cobra — loud refusal instead of silent
+	// misinterpretation. The long form `--nodes` and modeline
+	// auto-population continue to work identically. Upstream
+	// talosctl does NOT register `-n` for `--namespace` on any
+	// subcommand (verified against image.go's PersistentFlags
+	// StringVar and get.go's local --namespace StringVar — both
+	// shorthand-free), so dropping `-n` from talm root closes a
+	// shadow trap without introducing any inherited-alias gap.
+	cmd.PersistentFlags().StringSliceVar(&commands.GlobalArgs.Nodes, "nodes", []string{}, "target the specified nodes")
+	cmd.PersistentFlags().StringSliceVarP(&commands.GlobalArgs.Endpoints, "endpoints", "e", []string{}, "override default endpoints in Talos configuration")
+	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
+	cmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
+	cmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
+}
+
+func Execute() error {
+	registerRootFlags(rootCmd)
 
 	cmd, err := rootCmd.ExecuteContextC(context.Background())
 	if err != nil && !common.SuppressErrors {
