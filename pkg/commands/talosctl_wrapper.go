@@ -172,6 +172,11 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		wrapUpgradeCommand(wrappedCmd, originalRunE)
 	}
 
+	// Special handling for dmesg command
+	if baseCmdName == "dmesg" {
+		wrapDmesgCommand(wrappedCmd)
+	}
+
 	// Special handling for rotate-ca command
 	if baseCmdName == "rotate-ca" {
 		wrapRotateCACommand(wrappedCmd, originalRunE)
@@ -183,6 +188,69 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	}
 
 	return wrappedCmd
+}
+
+func wrapDmesgCommand(cmd *cobra.Command) {
+	originalFlagErrorFunc := cmd.FlagErrorFunc()
+	cmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		if isDmesgTailBoolParseError(err) {
+			//nolint:wrapcheck // return a replacement error so the operator sees the actionable talm hint instead of the pflag internals.
+			return errors.WithHint(
+				errors.WithHint(
+					errors.New("talm dmesg: --tail is a boolean toggling tail-mode for --follow, not a line count"),
+					dmesgTailLineCountHint(err),
+				),
+				"to stream only new messages on a follow, run: talm dmesg --follow --tail",
+			)
+		}
+
+		return originalFlagErrorFunc(cmd, err)
+	})
+}
+
+func isDmesgTailBoolParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errString := err.Error()
+
+	return strings.Contains(errString, `for "--tail" flag`) && strings.Contains(errString, "strconv.ParseBool")
+}
+
+func dmesgTailLineCountHint(err error) string {
+	const fallbackLineCount = "N"
+
+	lineCount := fallbackLineCount
+	if err != nil {
+		lineCount = dmesgTailLineCountFromError(err.Error())
+	}
+
+	if lineCount == fallbackLineCount {
+		return "for the last N lines, run: talm dmesg --nodes <node> | tail -n N"
+	}
+
+	return fmt.Sprintf("for the last %s lines, run: talm dmesg --nodes <node> | tail -n %s", lineCount, lineCount)
+}
+
+func dmesgTailLineCountFromError(errString string) string {
+	value, ok := strings.CutPrefix(errString, `invalid argument "`)
+	if !ok {
+		return "N"
+	}
+
+	value, _, ok = strings.Cut(value, `" for "--tail" flag`)
+	if !ok || value == "" {
+		return "N"
+	}
+
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return "N"
+		}
+	}
+
+	return value
 }
 
 func init() {
