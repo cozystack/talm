@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,20 +50,23 @@ const applyCommandName = "talm apply"
 var applyCmdFlags struct {
 	helpers.Mode
 
-	certFingerprints  []string
-	insecure          bool
-	configFiles       []string // -f/--files
-	talosVersion      string
-	withSecrets       string
-	debug             bool
-	kubernetesVersion string
-	dryRun            bool
-	preserve          bool
-	stage             bool
-	force             bool
-	configTryTimeout  time.Duration
-	nodesFromArgs     bool
-	endpointsFromArgs bool
+	certFingerprints       []string
+	insecure               bool
+	configFiles            []string // -f/--files
+	talosVersion           string
+	withSecrets            string
+	debug                  bool
+	kubernetesVersion      string
+	dryRun                 bool
+	preserve               bool
+	stage                  bool
+	force                  bool
+	configTryTimeout       time.Duration
+	nodesFromArgs          bool
+	endpointsFromArgs      bool
+	skipResourceValidation bool
+	skipDriftPreview       bool
+	skipPostApplyVerify    bool
 }
 
 //nolint:gochecknoglobals // cobra command, idiomatic for cobra-based CLIs
@@ -239,12 +243,16 @@ func applyOneFileTemplateMode(configFile string, modelineTemplates []string, wit
 // original ctx unchanged.
 func buildApplyClosure() applyFunc {
 	return func(ctx context.Context, c *client.Client, data []byte) error {
-		cosiCtx, err := cosiPreflightContext(ctx)
+		cosiCtx, nodeID, err := cosiPreflightContext(ctx)
 		if err != nil {
 			return err
 		}
 
 		preflightCheckTalosVersion(cosiCtx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
+
+		if err := runPreApplyGates(cosiCtx, c, data, nodeID, os.Stderr); err != nil {
+			return err
+		}
 
 		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 			Data:           data,
@@ -257,6 +265,10 @@ func buildApplyClosure() applyFunc {
 		}
 
 		helpers.PrintApplyResults(resp)
+
+		if err := runPostApplyGate(cosiCtx, c, data, nodeID, os.Stderr); err != nil {
+			return err
+		}
 
 		return nil
 	}
@@ -320,8 +332,14 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 		fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
 
 		read := cosiVersionReader(c)
+
 		for _, node := range targetNodes {
-			preflightCheckTalosVersion(client.WithNode(ctx, node), read, applyCmdFlags.talosVersion, os.Stderr)
+			nodeCtx := client.WithNode(ctx, node)
+			preflightCheckTalosVersion(nodeCtx, read, applyCmdFlags.talosVersion, os.Stderr)
+
+			if err := runPreApplyGates(nodeCtx, c, result, node, os.Stderr); err != nil {
+				return err
+			}
 		}
 
 		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
@@ -331,13 +349,133 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			TryModeTimeout: durationpb.New(applyCmdFlags.configTryTimeout),
 		})
 		if err != nil {
+			// Post-apply verify intentionally not run on this path:
+			// Talos's ApplyConfiguration is multi-node aware, so an
+			// error here doesn't pinpoint which nodes succeeded and
+			// which didn't. Surface the wrapped error so the operator
+			// can re-run apply (which will re-trigger the pre-apply
+			// gate too) — running verify on possibly-partially-applied
+			// state would produce confusing per-node divergence noise
+			// on top of the actual failure.
 			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 		}
 
 		helpers.PrintApplyResults(resp)
 
-		return nil
+		return runPostApplyGates(ctx, c, result, targetNodes)
 	})
+}
+
+// runPostApplyGates fans Phase 2B verification across every target
+// node, collecting per-node findings before surfacing them. Apply
+// already happened on every node — short-circuiting on the first
+// divergence would hide later nodes' state. Mirrors ValidateRefs's
+// collect-then-block pattern.
+func runPostApplyGates(ctx context.Context, c *client.Client, result []byte, targetNodes []string) error {
+	var perNodeErrs []error
+
+	for _, node := range targetNodes {
+		if err := runPostApplyGate(client.WithNode(ctx, node), c, result, node, os.Stderr); err != nil {
+			perNodeErrs = append(perNodeErrs, errors.Wrapf(err, "node %s", node))
+		}
+	}
+
+	return errors.Join(perNodeErrs...)
+}
+
+// runPreApplyGates wires the two pre-apply safety gates against the
+// rendered MachineConfig. Phase 1 (resource existence) blocks on bad
+// refs unless --skip-resource-validation is set. Phase 2A (drift
+// preview) is informational and never blocks; --skip-drift-preview
+// suppresses the read entirely.
+//
+// Phase 2A intentionally runs on --dry-run: the diff is read-only,
+// and "show me what would change" is precisely what dry-run is for.
+// Skipping it would leave operators with no way to preview drift
+// short of a real apply.
+func runPreApplyGates(ctx context.Context, c *client.Client, rendered []byte, nodeID string, w io.Writer) error {
+	if !applyCmdFlags.skipResourceValidation {
+		if err := preflightValidateResources(ctx, cosiLinksDisksReader(c), rendered, w); err != nil {
+			return err
+		}
+	}
+
+	if !shouldRunDriftPreview(applyCmdFlags.skipDriftPreview) {
+		return nil
+	}
+
+	return previewDrift(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), rendered, nodeID, w)
+}
+
+// shouldRunDriftPreview is the testable predicate for Phase 2A
+// scheduling. Pure function for pin-testing the contract: dry-run
+// is intentionally NOT a skip reason here (the preview is read-only;
+// dry-run wants the diff). Only the explicit skip flag suppresses
+// the gate.
+func shouldRunDriftPreview(skip bool) bool {
+	return !skip
+}
+
+// runPostApplyGate wires Phase 2B (post-apply state verification).
+// Skipped on dry-run (no real apply) and on the staged/try/reboot
+// apply modes:
+//
+//   - --mode=staged stores the new config as staged; the active
+//     MachineConfig resource is unchanged until reboot, so a verify
+//     against ActiveID always reports divergence.
+//   - --mode=try applies the config but auto-rolls back after the
+//     configured timeout; verify would race against the rollback
+//     timer and produce false positives.
+//   - --mode=reboot reboots the node after ApplyConfiguration
+//     returns success; the COSI connection dies mid-verify and the
+//     reader returns a transient error, which the gate would
+//     surface as a blocker — a false positive for a successful
+//     reboot apply.
+//
+// All three modes have explicit contracts that diverge from "what
+// was sent is what is on the node now after success was reported"
+// (or guarantee the on-node state is inaccessible for verification);
+// the gate respects them.
+func runPostApplyGate(ctx context.Context, c *client.Client, sent []byte, nodeID string, w io.Writer) error {
+	if !shouldRunPostApplyVerify(applyCmdFlags.Mode.Mode, applyCmdFlags.dryRun, applyCmdFlags.skipPostApplyVerify) {
+		return nil
+	}
+
+	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w)
+}
+
+// shouldRunPostApplyVerify is the testable predicate for runPostApplyGate.
+// Returns false when the verify must be skipped for any reason listed in
+// runPostApplyGate's doc.
+func shouldRunPostApplyVerify(mode machineapi.ApplyConfigurationRequest_Mode, dryRun, skip bool) bool {
+	if skip || dryRun {
+		return false
+	}
+
+	switch mode {
+	case machineapi.ApplyConfigurationRequest_STAGED,
+		machineapi.ApplyConfigurationRequest_TRY,
+		machineapi.ApplyConfigurationRequest_REBOOT,
+		// AUTO is skipped because Talos's apply-server promotes AUTO
+		// to REBOOT internally when the change requires it (the
+		// CanApplyImmediate check inside v1alpha1_server.go's AUTO
+		// branch). The verify call would then race the reboot the
+		// node dispatches in a goroutine before returning the RPC,
+		// producing a false-positive transient-error blocker —
+		// the same shape the explicit REBOOT skip avoids.
+		//
+		// Cost: AUTO applies that DON'T require a reboot lose their
+		// post-apply verify. Acceptable trade-off: the verify is
+		// default-off until the Talos-mutated-field allowlist lands
+		// (see #172), and an operator who needs verify-on-no-reboot
+		// can pass --mode=no-reboot explicitly.
+		machineapi.ApplyConfigurationRequest_AUTO:
+		return false
+	case machineapi.ApplyConfigurationRequest_NO_REBOOT:
+		// fall through to default true.
+	}
+
+	return true
 }
 
 // withApplyClient creates a Talos client appropriate for the current apply
@@ -531,21 +669,21 @@ func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClie
 // invariant. Surface it as an error instead of silently passing the
 // ctx through to a COSI call that apid will reject — the latter is
 // the exact silent no-op this helper exists to prevent.
-func cosiPreflightContext(ctx context.Context) (context.Context, error) {
+func cosiPreflightContext(ctx context.Context) (context.Context, string, error) {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
-		return ctx, nil
+		return ctx, "", nil
 	}
 
 	nodes := md.Get("nodes")
 	switch len(nodes) {
 	case 0:
-		return ctx, nil
+		return ctx, "", nil
 	case 1:
-		return client.WithNode(ctx, nodes[0]), nil
+		return client.WithNode(ctx, nodes[0]), nodes[0], nil
 	default:
 		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
-		return nil, errors.WithHint(
+		return nil, "", errors.WithHint(
 			errors.Newf("cosiPreflightContext: refusing to scope ctx with %d nodes; expected exactly one", len(nodes)),
 			"applyTemplatesPerNode iterates one node at a time, so a multi-element plural slice at this point indicates a broken caller",
 		)
@@ -740,6 +878,9 @@ func init() {
 	applyCmd.Flags().DurationVar(&applyCmdFlags.configTryTimeout, "timeout", constants.ConfigTryTimeout, "the config will be rolled back after specified timeout (if try mode is selected)")
 	applyCmd.Flags().StringSliceVar(&applyCmdFlags.certFingerprints, "cert-fingerprint", nil, "list of server certificate fingeprints to accept (defaults to no check)")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.force, "force", false, "will overwrite existing files")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands; see #172)")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 
 	addCommand(applyCmd)

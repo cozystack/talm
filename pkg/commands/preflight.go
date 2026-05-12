@@ -68,20 +68,32 @@ func annotateApplyConfigError(err error) error {
 	return errors.WithHint(err, applyConfigDecodeHint)
 }
 
-// versionReader fetches the running Talos version from a node. It returns
-// ok=false on any error so callers can treat the result as best-effort. The
-// signature is what makes preflightCheckTalosVersion testable without a live
-// COSI server.
-type versionReader func(ctx context.Context) (version string, ok bool)
+// versionReader fetches the running Talos version from a node. Three-valued
+// return mirrors the linksDisksReader / machineConfigReader contract:
+//
+//   - (version, true,  nil) — success
+//   - ("",      false, err) — real read failure (network, RPC, COSI server)
+//   - ("",      false, nil) — by-design unreachable (auth-disallowed, etc.)
+//
+// Callers decide what each combination means. preflightCheckTalosVersion's
+// pre-apply warning silently surrenders on any !ok regardless of err
+// (best-effort warning). verifyPostUpgradeVersion treats err!=nil as a real
+// read failure that IS the rollback signal — exactly what the gate exists to
+// catch — and surfaces it as a hint-bearing blocker.
+type versionReader func(ctx context.Context) (version string, ok bool, err error)
 
 // cosiVersionReader returns a versionReader that reads the Talos version from
 // the node's COSI `Versions.runtime.talos.dev/runtime/version` resource. The
 // resource is declared NonSensitive in Talos and is therefore reachable
 // through a maintenance (--insecure) connection that only carries the Reader
-// role. Any read failure (RPC error, NotFound, PermissionDenied, multi-node
-// proxy error) is reported as ok=false.
+// role.
+//
+// Any read failure (RPC error, NotFound, PermissionDenied, multi-node proxy
+// error, connection refused) flows through as (false, wrapped err). Callers
+// that need to distinguish a real failure from a no-result case can inspect
+// the err.
 func cosiVersionReader(c *client.Client) versionReader {
-	return func(ctx context.Context) (string, bool) {
+	return func(ctx context.Context) (string, bool, error) {
 		ctx, cancel := context.WithTimeout(ctx, preflightCOSIReadTimeout)
 		defer cancel()
 
@@ -91,10 +103,10 @@ func cosiVersionReader(c *client.Client) versionReader {
 			resource.NewMetadata(runtime.NamespaceName, runtime.VersionType, "version", resource.VersionUndefined),
 		)
 		if err != nil {
-			return "", false
+			return "", false, errors.Wrap(err, "reading runtime.Version COSI resource")
 		}
 
-		return res.TypedSpec().Version, true
+		return res.TypedSpec().Version, true, nil
 	}
 }
 
@@ -108,7 +120,12 @@ func cosiVersionReader(c *client.Client) versionReader {
 // aggressive contract — this is the documented reproduction case for the
 // "unknown keys found during decoding" error.
 func preflightCheckTalosVersion(ctx context.Context, read versionReader, configuredVersion string, w io.Writer) {
-	runningVersion, ok := read(ctx)
+	// Pre-apply warning is best-effort: silent surrender on any !ok
+	// regardless of err. The err is captured but intentionally
+	// discarded — if reading the runtime.Version fails, the apply call
+	// that follows will surface the underlying connection issue with a
+	// clearer message than this gate could.
+	runningVersion, ok, _ := read(ctx)
 	if !ok {
 		return
 	}
