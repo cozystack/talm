@@ -112,11 +112,21 @@ func TestAnnotateApplyConfigError(t *testing.T) {
 	}
 }
 
-// stubReader is a versionReader that returns a fixed value, matching the
-// contract preflightCheckTalosVersion uses (string, ok). Tests use it to
-// drive the function without standing up a live COSI server.
+// stubReader is a versionReader that returns a fixed (version, ok) pair
+// with err=nil. Tests use it to drive the version-comparison logic
+// without standing up a live COSI server. The "ok=false err=nil" shape
+// it produces models the by-design-unreachable case; tests that need
+// to exercise the err!=nil path use stubReaderErr.
 func stubReader(version string, ok bool) versionReader {
-	return func(context.Context) (string, bool) { return version, ok }
+	return func(context.Context) (string, bool, error) { return version, ok, nil }
+}
+
+// stubReaderErr is a versionReader that returns (false, err) — the
+// shape that surfaces when reading runtime.Version legitimately fails
+// (connection refused, context deadline exceeded, RPC error). The
+// post-upgrade verify treats this as the rollback signal.
+func stubReaderErr(err error) versionReader {
+	return func(context.Context) (string, bool, error) { return "", false, err }
 }
 
 func TestPreflightCheckTalosVersion(t *testing.T) {

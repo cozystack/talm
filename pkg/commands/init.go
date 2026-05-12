@@ -31,6 +31,7 @@ import (
 	"github.com/cozystack/talm/pkg/generated"
 	"github.com/cozystack/talm/pkg/secureperm"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	"github.com/siderolabs/talos/cmd/talosctl/cmd/mgmt/gen"
@@ -772,9 +773,14 @@ func readChartYamlPreset() (string, error) {
 // imageLineRe matches the top-level `image:` line in a preset
 // values.yaml regardless of YAML serialization style — double-quoted,
 // single-quoted, unquoted, with or without a trailing comment.
-// Line-anchored (?m)^image:…$ so a nested key, indented entry, or
-// commented `# image:` line is never substituted.
-var imageLineRe = regexp.MustCompile(`(?m)^image:.*$`)
+//
+// Line-anchored (?m)^image: requires at least one space (or end-of-
+// line) after the colon. Without the space requirement the regex
+// would also match `image:noSpaceValue`, which is not valid YAML
+// (yaml.v3 rejects key:value with no space after colon) — silently
+// rewriting a broken preset masks the underlying preset bug. With
+// the space requirement, only valid YAML key-value pairs match.
+var imageLineRe = regexp.MustCompile(`(?m)^image:(\s|$).*$`)
 
 // applyImageOverride returns values with the top-level `image:` line
 // replaced so it points at override. An empty override returns values
@@ -822,14 +828,83 @@ func applyImageOverride(values []byte, override string) ([]byte, error) {
 	}), nil
 }
 
+// validateImageRefShape rejects --image values that cannot be a
+// plausible installer image reference. The check is intentionally
+// loose — it does not vouch for the image existing in any registry
+// or for the tag being a valid Talos version — only that the value
+// has the structural shape of an OCI ref: a registry-or-path
+// component, at least one path separator, and either a ":TAG"
+// suffix or an "@sha256:" / "@sha512:" digest pin.
+//
+// Catches: bare ":malformed", "no-slash:tag" (docker-hub-style
+// shortcuts that won't resolve in the talm context), trailing
+// "/" with no tag, empty-tag colon prefixes. Misses (intentionally):
+// non-existent registries, invalid version tags, unsupported
+// platforms — those surface at apply time as expected.
+func validateImageRefShape(ref string) error {
+	if strings.HasPrefix(ref, ":") || strings.HasPrefix(ref, "@") || strings.HasPrefix(ref, "/") {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("--image %q is malformed: starts with a reserved separator (':' or '@' or '/')", ref),
+			"pass a full image reference such as 'ghcr.io/siderolabs/installer:v1.13.0' or 'factory.talos.dev/installer/<sha>:<version>'",
+		)
+	}
+
+	if strings.HasSuffix(ref, ":") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, "@") {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("--image %q is malformed: ends with a separator with nothing after it", ref),
+			"add a tag (e.g. ':v1.13.0') or a digest pin (e.g. '@sha256:<hex>') after the last path component",
+		)
+	}
+
+	if !strings.Contains(ref, "/") {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("--image %q is missing a registry / path component", ref),
+			"Talos installer images are pulled by full reference — pass at least 'registry/path:tag', not a bare 'name:tag' shortcut",
+		)
+	}
+
+	lastSlash := strings.LastIndex(ref, "/")
+	tail := ref[lastSlash+1:]
+
+	hasTag := false
+	if idx := strings.LastIndex(tail, ":"); idx > 0 && idx < len(tail)-1 {
+		hasTag = true
+	}
+
+	hasDigest := strings.Contains(ref, "@sha256:") || strings.Contains(ref, "@sha512:")
+
+	if !hasTag && !hasDigest {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("--image %q has no tag or digest", ref),
+			"append ':<version>' (e.g. ':v1.13.0') or '@sha256:<hex>' to pin the installer build",
+		)
+	}
+
+	return nil
+}
+
 // validateImageOverride scans presetFiles for the chosen preset's
 // values.yaml and confirms a top-level image line is present when
 // the user passed --image. The check runs before any file is written
 // so a flag-vs-preset mismatch fails the command up front instead of
 // leaving a half-initialized project on disk.
+//
+// Also performs a basic shape check on the override itself —
+// malformed values like "::malformed" or "no-slash:tag" are rejected
+// here, instead of being silently written to values.yaml and only
+// surfacing on the next talm template / apply call deep inside
+// configloader.NewFromBytes.
 func validateImageOverride(presetFiles map[string]string, presetName, override string) error {
 	if override == "" {
 		return nil
+	}
+
+	if err := validateImageRefShape(override); err != nil {
+		return err
 	}
 
 	for path, content := range presetFiles {
@@ -860,8 +935,51 @@ func validateImageOverride(presetFiles map[string]string, presetName, override s
 	)
 }
 
-// askUserOverwrite asks user if they want to overwrite a file.
-func askUserOverwrite(filePath string) (bool, error) {
+// overwritePolicy describes how a single update-time file conflict
+// should be resolved. The decision is made once per call so the unit
+// tests (and the --force gate) can short-circuit the interactive
+// prompt deterministically.
+type overwritePolicy int
+
+const (
+	// overwritePolicyAsk prompts the user on stdin; the historical
+	// behaviour, used when stdin is a real tty and --force is not set.
+	overwritePolicyAsk overwritePolicy = iota
+	// overwritePolicyForce always accepts the overwrite. Used when
+	// --force is set; the operator opted in.
+	overwritePolicyForce
+	// overwritePolicyNonInteractive blocks the call with a hint to
+	// rerun under a tty or with --force. Used when stdin is not a tty
+	// and --force is not set — distinguishes "operator declined" from
+	// "talm couldn't even ask" so a scripted refresh fails loudly
+	// instead of silently leaving the project on a stale preset.
+	overwritePolicyNonInteractive
+)
+
+// stdinIsTTY reports whether process stdin is connected to a
+// terminal. Var-typed so the unit tests can swap a fake.
+//
+// term.IsTerminal correctly returns false for /dev/null and pipes —
+// the naive os.Stdin.Stat()&ModeCharDevice check accepted /dev/null
+// (it's a character device) and led the previous version to prompt
+// in cron / scripted shells, EOFing the read.
+//
+//nolint:gochecknoglobals // injection seam for testability; matches stdinReader below.
+var stdinIsTTY = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// stdinReader is the io.Reader the interactive prompt reads from.
+// Var-typed so unit tests can supply canned input.
+//
+//nolint:gochecknoglobals // injection seam for testability.
+var stdinReader io.Reader = os.Stdin
+
+// askUserOverwrite resolves a single update-time file conflict
+// according to overwritePolicy. Returns (true, nil) to accept the
+// overwrite, (false, nil) to skip, or an error when policy is
+// non-interactive (with a hint pointing the operator at --force).
+func askUserOverwrite(filePath string, policy overwritePolicy) (bool, error) {
 	// Show relative path from project root
 	relPath, err := filepath.Rel(Config.RootDir, filePath)
 	if err != nil {
@@ -869,7 +987,22 @@ func askUserOverwrite(filePath string) (bool, error) {
 		relPath = filePath
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	switch policy {
+	case overwritePolicyForce:
+		fmt.Fprintf(os.Stderr, "Overwriting %s (--force)\n", relPath)
+
+		return true, nil
+	case overwritePolicyNonInteractive:
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return false, errors.WithHint(
+			errors.Newf("file %q differs from the preset template, but talm is running non-interactively and cannot prompt for confirmation", relPath),
+			"rerun under a tty to confirm interactively, or pass --force to accept all preset-template overwrites.",
+		)
+	case overwritePolicyAsk:
+		// fall through to interactive prompt below
+	}
+
+	reader := bufio.NewReader(stdinReader)
 
 	fmt.Fprintf(os.Stderr, "File %s differs from template. Overwrite? [y/N]: ", relPath)
 
@@ -881,6 +1014,19 @@ func askUserOverwrite(filePath string) (bool, error) {
 	response = strings.TrimSpace(strings.ToLower(response))
 
 	return response == "y" || response == "yes", nil
+}
+
+// resolveOverwritePolicy picks the policy for the current invocation
+// from the (--force, tty) inputs. Pure function for testability.
+func resolveOverwritePolicy(force, isTTY bool) overwritePolicy {
+	switch {
+	case force:
+		return overwritePolicyForce
+	case !isTTY:
+		return overwritePolicyNonInteractive
+	}
+
+	return overwritePolicyAsk
 }
 
 // filesDiffer checks if two files have different content.
@@ -898,46 +1044,49 @@ func filesDiffer(filePath string, newContent []byte) (bool, error) {
 	return !bytes.Equal(existingContent, newContent), nil
 }
 
-// updateFileWithConfirmation updates a file if it differs, asking user for confirmation.
-func updateFileWithConfirmation(filePath string, newContent []byte, permissions os.FileMode) error {
-	// Check if file exists
-	exists := fileExists(filePath)
-
-	if !exists {
-		// File doesn't exist, create it without asking
-		parentDir := filepath.Dir(filePath)
-		if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
-			return errors.Wrap(err, "failed to create output dir")
-		}
-
-		if err := os.WriteFile(filePath, newContent, permissions); err != nil {
-			return errors.Wrap(err, "failed to write file")
-		}
-
-		// Show relative path from project root
-		relPath, err := filepath.Rel(Config.RootDir, filePath)
-		if err != nil {
-			relPath = filePath
-		}
-
-		fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbCreated, relPath)
-
-		return nil
+// createReportedFile writes a fresh file (parent dir created as
+// needed) and prints a one-line `Created path/to/file` summary so
+// the operator sees what the update added. Shared between the
+// initial-create and post-overwrite branches.
+func createReportedFile(filePath string, newContent []byte, permissions os.FileMode) error {
+	parentDir := filepath.Dir(filePath)
+	if err := os.MkdirAll(parentDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "failed to create output dir")
 	}
 
-	// File exists, check if content differs
+	if err := os.WriteFile(filePath, newContent, permissions); err != nil {
+		return errors.Wrap(err, "failed to write file")
+	}
+
+	relPath, err := filepath.Rel(Config.RootDir, filePath)
+	if err != nil {
+		relPath = filePath
+	}
+
+	fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbCreated, relPath)
+
+	return nil
+}
+
+// updateFileWithConfirmation updates a file if it differs, asking user for confirmation.
+func updateFileWithConfirmation(filePath string, newContent []byte, permissions os.FileMode) error {
+	if !fileExists(filePath) {
+		return createReportedFile(filePath, newContent, permissions)
+	}
+
 	differs, err := filesDiffer(filePath, newContent)
 	if err != nil {
 		return err
 	}
 
 	if !differs {
-		// File is the same, skip silently
 		return nil
 	}
 
-	// File differs, ask user
-	overwrite, err := askUserOverwrite(filePath)
+	// File differs — pick the policy from (--force, tty) and resolve.
+	policy := resolveOverwritePolicy(initCmdFlags.force, stdinIsTTY())
+
+	overwrite, err := askUserOverwrite(filePath, policy)
 	if err != nil {
 		return errors.Wrap(err, "failed to read user input")
 	}
@@ -1109,7 +1258,7 @@ func init() {
 	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "preset for file generation (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().StringVarP(&initCmdFlags.name, "name", "N", "", "cluster name (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().StringVar(&initCmdFlags.image, "image", "", "override the Talos installer image written to the preset's values.yaml (e.g. factory.talos.dev/installer/<sha256>:<version>)")
-	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "will overwrite existing files")
+	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "overwrite existing files; on --update also auto-accepts every preset-template diff without the interactive prompt")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
 	// Remove the persistent endpoints flag from init command and add our own -e flag

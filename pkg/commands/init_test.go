@@ -175,6 +175,38 @@ podSubnets:
 		}
 	})
 
+	t.Run("rejects image: without a space after the colon", func(t *testing.T) {
+		// image:noSpace and image:foo are not valid YAML
+		// (yaml.v3 rejects key:value with no space). The regex
+		// must NOT match these, so a broken preset surfaces as a
+		// "no image: field" error from validateImageOverride
+		// rather than silently getting rewritten.
+		broken := []string{
+			"image:noSpace\n",
+			"image:ghcr.io/foo:v1\n",
+		}
+		for _, input := range broken {
+			_, err := applyImageOverride([]byte(input), "factory.talos.dev/installer/abc:v1.13.0")
+			if err == nil {
+				t.Errorf("expected an error on broken YAML input %q (no space after colon), got none", input)
+			}
+		}
+	})
+
+	t.Run("matches image: with bare colon (empty value, valid YAML)", func(t *testing.T) {
+		// `image:` followed by end-of-line is a YAML key with
+		// nil value — valid YAML. The regex MUST still match
+		// so --image can populate the empty preset slot.
+		got, err := applyImageOverride([]byte("image:\n"), "factory.talos.dev/installer/abc:v1.13.0")
+		if err != nil {
+			t.Fatalf("expected the empty-value form to be rewritable, got: %v", err)
+		}
+
+		if !bytes.Contains(got, []byte(`image: "factory.talos.dev/installer/abc:v1.13.0"`)) {
+			t.Errorf("empty-value form should be rewritten by --image, got:\n%s", got)
+		}
+	})
+
 	t.Run("supports unquoted, single-quoted, and trailing-comment styles", func(t *testing.T) {
 		styles := []struct {
 			name string
@@ -315,6 +347,71 @@ func TestUpdateTalmLibraryChartRejectsImageFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--image") {
 		t.Errorf("error must name --image so the user can act on it, got: %v", err)
+	}
+}
+
+// TestValidateImageRefShape_RejectsMalformed pins the shape check
+// that runs before any --image value reaches the preset rewrite.
+// Catches operator typos (::malformed, no-slash:tag, trailing
+// separator) at command-parse time, instead of leaving a corrupt
+// values.yaml that fails deep inside configloader on the next
+// `talm template` / `talm apply`.
+func TestValidateImageRefShape_RejectsMalformed(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want bool
+	}{
+		{"empty colon-prefix", "::malformed", false},
+		{"leading colon", ":foo/bar:tag", false},
+		{"leading at", "@sha256:abc", false},
+		{"leading slash", "/foo/bar:tag", false},
+		{"trailing colon", "ghcr.io/foo/bar:", false},
+		{"trailing slash", "ghcr.io/foo/bar/", false},
+		{"trailing at", "ghcr.io/foo/bar@", false},
+		{"no slash separator", "no-slash:tag", false},
+		{"slash but no tag and no digest", "ghcr.io/foo/bar", false},
+		{"slash with empty colon at end", "ghcr.io/foo/bar:", false},
+		{"valid tagged ref", "ghcr.io/siderolabs/installer:v1.13.0", true},
+		{"valid digest pin sha256", "ghcr.io/foo/bar@sha256:abc123def456", true},
+		{"valid digest pin sha512", "ghcr.io/foo/bar@sha512:0123456789abcdef", true},
+		{"valid factory ref", "factory.talos.dev/installer/abcd1234:v1.13.0", true},
+		{"valid registry with port", "registry.local:5000/foo/installer:v1.12.6", true},
+		{"valid cozystack ref", "ghcr.io/cozystack/cozystack/talos:v1.12.6", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateImageRefShape(tc.ref)
+			if tc.want && err != nil {
+				t.Errorf("validateImageRefShape(%q) = %v, want nil", tc.ref, err)
+			}
+
+			if !tc.want && err == nil {
+				t.Errorf("validateImageRefShape(%q) = nil, want error", tc.ref)
+			}
+		})
+	}
+}
+
+// TestValidateImageOverride_RejectsMalformedAtPresetLevel pins the
+// integration: malformed --image values are surfaced as a hint-
+// bearing error from validateImageOverride too, BEFORE the preset
+// existence check (so the user sees the malformed-ref signal even
+// on a typo'd preset name).
+func TestValidateImageOverride_RejectsMalformedAtPresetLevel(t *testing.T) {
+	preset := map[string]string{
+		"good/values.yaml": "image: \"original\"\n",
+		"good/Chart.yaml":  "name: good\n",
+	}
+
+	err := validateImageOverride(preset, "good", "::malformed")
+	if err == nil {
+		t.Fatal("expected an error on malformed --image")
+	}
+
+	if !strings.Contains(err.Error(), "malformed") {
+		t.Errorf("error should cite the offending value, got: %v", err)
 	}
 }
 

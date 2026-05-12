@@ -743,6 +743,13 @@ func TestNoWorkflowLeakageInRepoSource(t *testing.T) {
 		"address review",
 		"in-flight rebase",
 		"rebase notes",
+		// Private operator identifiers — test stand hostnames,
+		// home-directory paths, internal cluster names. These are
+		// reproducibility context that belongs in chat / memory,
+		// not in published artefacts. Add new entries when a new
+		// stand name or username surfaces.
+		"dev17",
+		"lexfrei",
 	}
 	scanExt := map[string]bool{
 		".go":   true,

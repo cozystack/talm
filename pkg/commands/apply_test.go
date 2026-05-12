@@ -737,7 +737,7 @@ func TestCosiPreflightContext_StripsPluralAndAttachesSingular(t *testing.T) {
 	const node = testNodeAddrA
 	in := client.WithNodes(context.Background(), node)
 
-	out, err := cosiPreflightContext(in)
+	out, _, err := cosiPreflightContext(in)
 	if err != nil {
 		t.Fatalf("cosiPreflightContext: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestCosiPreflightContext_StripsPluralAndAttachesSingular(t *testing.T) {
 // that apid would route to the wrong target.
 func TestCosiPreflightContext_LeavesNoMetadataAlone(t *testing.T) {
 	in := context.Background()
-	out, err := cosiPreflightContext(in)
+	out, _, err := cosiPreflightContext(in)
 	if err != nil {
 		t.Fatalf("cosiPreflightContext: %v", err)
 	}
@@ -782,7 +782,7 @@ func TestCosiPreflightContext_LeavesNoMetadataAlone(t *testing.T) {
 // this helper exists to prevent on the single-node case.
 func TestCosiPreflightContext_RejectsMultiNodeCtx(t *testing.T) {
 	in := client.WithNodes(context.Background(), "a", "b")
-	_, err := cosiPreflightContext(in)
+	_, _, err := cosiPreflightContext(in)
 	if err == nil {
 		t.Fatal("expected error for multi-node outgoing ctx, got nil")
 	}
