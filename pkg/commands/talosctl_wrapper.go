@@ -92,6 +92,30 @@ var rootShadowedPersistentFlags = map[string]struct{}{
 	"siderov1-keys-dir": {},
 }
 
+// renameFlagShorthand clones an upstream flag with its shorthand
+// replaced by `newShorthand`. Every pflag.Flag metadata field —
+// including ShorthandDeprecated, which controls upstream's deprecation
+// warning behaviour — is mirrored so downstream consumers that
+// introspect the wrapped flag observe the same shape as the original.
+// Value is intentionally NOT deep-copied: the parser must write to
+// upstream's variable so the wrapped RunE (assigned from upstream)
+// can still read its own state.
+func renameFlagShorthand(flag *pflag.Flag, newShorthand string) *pflag.Flag {
+	return &pflag.Flag{
+		Name:                flag.Name,
+		Usage:               flag.Usage,
+		Value:               flag.Value,
+		DefValue:            flag.DefValue,
+		Changed:             flag.Changed,
+		NoOptDefVal:         flag.NoOptDefVal,
+		Deprecated:          flag.Deprecated,
+		Hidden:              flag.Hidden,
+		Shorthand:           newShorthand,
+		ShorthandDeprecated: flag.ShorthandDeprecated,
+		Annotations:         flag.Annotations,
+	}
+}
+
 // propagatePersistentFlags mirrors the upstream command's persistent
 // flags onto the wrapped command's PersistentFlags so cobra's
 // mergePersistentFlags walks them through to wrapped children at
@@ -107,19 +131,7 @@ func propagatePersistentFlags(cmd, wrappedCmd *cobra.Command) {
 		}
 
 		if flag.Shorthand == "f" {
-			renamed := &pflag.Flag{
-				Name:        flag.Name,
-				Usage:       flag.Usage,
-				Value:       flag.Value,
-				DefValue:    flag.DefValue,
-				Changed:     flag.Changed,
-				NoOptDefVal: flag.NoOptDefVal,
-				Deprecated:  flag.Deprecated,
-				Hidden:      flag.Hidden,
-				Shorthand:   "F",
-				Annotations: flag.Annotations,
-			}
-			wrappedCmd.PersistentFlags().AddFlag(renamed)
+			wrappedCmd.PersistentFlags().AddFlag(renameFlagShorthand(flag, "F"))
 
 			return
 		}
@@ -159,20 +171,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 
 		// If this flag has shorthand 'f', we need to change it to 'F'
 		if flag.Shorthand == "f" {
-			// Create a copy with new shorthand
-			newFlag := &pflag.Flag{
-				Name:        flag.Name,
-				Usage:       flag.Usage,
-				Value:       flag.Value,
-				DefValue:    flag.DefValue,
-				Changed:     flag.Changed,
-				NoOptDefVal: flag.NoOptDefVal, // Important for bool flags to work without '='
-				Deprecated:  flag.Deprecated,
-				Hidden:      flag.Hidden,
-				Shorthand:   "F", // Change shorthand from 'f' to 'F'
-				Annotations: flag.Annotations,
-			}
-			wrappedCmd.Flags().AddFlag(newFlag)
+			wrappedCmd.Flags().AddFlag(renameFlagShorthand(flag, "F"))
 		} else {
 			wrappedCmd.Flags().AddFlag(flag)
 		}
