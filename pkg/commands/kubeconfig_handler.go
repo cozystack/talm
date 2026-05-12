@@ -170,11 +170,18 @@ Otherwise, kubeconfig will be written to PWD.`
 
 		return nil
 	}
-	// Set custom Args validation: allow no args by default, but allow args when --login is set
+	// Set custom Args validation: allow no args by default, but allow
+	// args when --login is set. The error message describes the
+	// wrapper's actual contract (default writes to project root;
+	// --login redirects to the system kubeconfig) instead of the
+	// previous misleading wording about "--login to pass arguments".
 	wrappedCmd.Args = func(cmd *cobra.Command, args []string) error {
 		loginFlagValue, _ := cmd.Flags().GetBool("login")
 		if !loginFlagValue && len(args) > 0 {
-			return errors.New("kubeconfig command does not accept arguments (use --login flag to pass arguments)")
+			return errors.WithHint(
+				errors.New("talm kubeconfig writes to project root by default; positional path is not consumed in this mode"),
+				"to write to a specific path, pass --login /your/path (the positional argument is honoured under --login); --login with no positional defaults to ~/.kube/config (the system kubeconfig)",
+			)
 		}
 
 		return nil

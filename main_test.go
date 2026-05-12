@@ -182,6 +182,41 @@ func TestLoadConfig_EmptyApplyTimeoutResolvesDefault(t *testing.T) {
 	}
 }
 
+// TestRegisterRootFlags_NodesHasNoShorthand pins that talm's
+// root `--nodes` does NOT claim the `-n` shorthand. With `-n`
+// registered as the alias for `--nodes`, the global captures any
+// `-n <value>` an operator types — `talm get hostnames -n network
+// --nodes $NODE --endpoints $NODE` quietly parses `network` as a
+// second node entry, then fails inside the gRPC name resolver with
+// "produced zero addresses". Operators who type `-n namespace`
+// (kubectl muscle memory) now get a clean cobra "flag -n not
+// defined" error — loud refusal instead of silent
+// misinterpretation. The long form `--nodes` keeps working.
+// Upstream talosctl does not register `-n` for `--namespace` on
+// any wrapped subcommand (image's PersistentFlags --namespace and
+// get's local --namespace are both shorthand-free), so the change
+// closes a shadow trap without introducing an inherited-alias gap.
+func TestRegisterRootFlags_NodesHasNoShorthand(t *testing.T) {
+	// registerRootFlags writes default empty strings back through
+	// the cobra/pflag StringVar bindings into commands.GlobalArgs
+	// and commands.Config, which are package-level mutables.
+	// snapshotConfigState (defined above) saves+restores them so
+	// other tests aren't poisoned.
+	snapshotConfigState(t)
+
+	cmd := &cobra.Command{Use: "talm-test"}
+	registerRootFlags(cmd)
+
+	flag := cmd.PersistentFlags().Lookup("nodes")
+	if flag == nil {
+		t.Fatal("expected --nodes to be registered, got nil")
+	}
+
+	if flag.Shorthand != "" {
+		t.Errorf("--nodes shorthand: got %q, want empty (otherwise it shadows upstream `-n / --namespace`)", flag.Shorthand)
+	}
+}
+
 func TestSkipConfigCommands(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -57,7 +57,7 @@ The command works by:
 3. Gracefully rolling out the new CAs to all nodes
 4. Updating local configs (talosconfig, secrets.yaml, kubeconfig)
 
-IMPORTANT: You must specify exactly ONE control-plane node via --endpoints/-e or --nodes/-n
+IMPORTANT: You must specify exactly ONE control-plane node via --endpoints/-e or --nodes
 flags, or through a single config file (-f). The node must be a control-plane node.
 
 By default, both Talos API CA and Kubernetes API CA are rotated. Use --talos=false
@@ -92,6 +92,18 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 	originalPreRunE := wrappedCmd.PreRunE
 
 	wrappedCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		// Populate GlobalArgs.Nodes from upstream's per-class node
+		// flags (--init-node / --control-plane-nodes / --worker-nodes)
+		// BEFORE chaining the original PreRunE. See
+		// populateNodesFromPerClassFlags godoc for the chain-order
+		// rationale (upstream WithClient guard reads from
+		// taloscommands.GlobalArgs after the wrapper's sync; populating
+		// after the sync leaves upstream blind to the per-class lists).
+		// Upstream rotate-ca's contract is "exactly one CP node" — the
+		// multi-node guard below catches the case where the populated
+		// list ends up with more than one entry.
+		populateNodesFromPerClassFlags(cmd)
+
 		// Run original PreRunE first (processes modeline, syncs GlobalArgs, etc.)
 		if originalPreRunE != nil {
 			if err := originalPreRunE(cmd, args); err != nil {
@@ -110,7 +122,7 @@ The command runs in dry-run mode by default. Use --dry-run=false to perform actu
 		if len(GlobalArgs.Nodes) > 1 {
 			return errors.WithHint(
 				errors.Newf("rotate-ca requires exactly one control-plane node, but %d nodes were provided", len(GlobalArgs.Nodes)),
-				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one node via --nodes or a single config file",
+				"the rotate-ca command coordinates CA rotation across the entire cluster from a single control-plane node; specify only one node via --nodes, --control-plane-nodes with a single IP, or a single config file",
 			)
 		}
 

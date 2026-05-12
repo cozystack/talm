@@ -90,7 +90,7 @@ floatingIP: ""
 
 Gather node information:
 ```bash
-talm -n 192.0.2.4 -e 192.0.2.4 template -t templates/controlplane.yaml -i > nodes/node1.yaml
+talm --nodes 192.0.2.4 -e 192.0.2.4 template -t templates/controlplane.yaml -i > nodes/node1.yaml
 ```
 
 Edit `nodes/node1.yaml` file:
