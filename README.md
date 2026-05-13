@@ -192,6 +192,8 @@ Upgrade node:
 talm upgrade -f nodes/node1.yaml
 ```
 
+`talm upgrade` resolves the target installer image from `values.yaml::image` (the cluster-wide knob). To pick the new version, bump `values.yaml::image` and re-run `talm upgrade -f nodes/<name>.yaml`; there is no need to re-template the node files first. Pass `--image <ref>` to override per-invocation (e.g. for an experimental installer build); the flag wins over the `values.yaml` lookup.
+
 Show diff:
 ```bash
 talm apply -f nodes/node1.yaml --dry-run

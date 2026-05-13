@@ -370,6 +370,24 @@ func TestValidatePostUpgradeReconcileWindow_PositiveAccepted(t *testing.T) {
 	}
 }
 
+// TestWrapUpgradeCommand_LongDocumentsImageResolution pins the
+// operator-facing description of where the upgrade target image
+// comes from. `talm upgrade --help` must explain the
+// values.yaml → --image override chain so operators don't have to
+// read the source. Without this pin a doc-removal refactor would
+// silently revert the upgrade flow to "you have to guess where
+// --image came from".
+func TestWrapUpgradeCommand_LongDocumentsImageResolution(t *testing.T) {
+	cmd := &cobra.Command{Use: upgradeCmdName}
+	wrapUpgradeCommand(cmd, func(_ *cobra.Command, _ []string) error { return nil })
+
+	for _, want := range []string{"values.yaml", "--image"} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("upgrade Long must name %q in the image-resolution explanation; got:\n%s", want, cmd.Long)
+		}
+	}
+}
+
 // TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE
 // pins fail-fast semantics on the reconcile-window flag: a zero or
 // negative value must reject BEFORE the talosctl upgrade RPC fires.
