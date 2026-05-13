@@ -203,6 +203,66 @@ func TestContract_NetworkMultidoc_BondRendersBondConfig(t *testing.T) {
 	assertContains(t, out, "miimon: 100")
 }
 
+// TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig
+// pins the empty-slaves guardrail in the cozystack preset. Talos's
+// link controller can auto-create a bond stub in COSI link state
+// before any operator configuration enslaves physical NICs to it;
+// the master link carries a `bondMaster` spec, but no other link
+// has `slaveKind: bond` + `masterIndex` pointing at it. Without
+// the guardrail, `talm.discovered.bond_slaves` returns an empty
+// list and the renderer emits `BondConfig{name: bond0,
+// links: <empty>}` — Talos validates the document on apply and
+// rejects with `at least one link must be specified`. The fix is
+// to skip the bond emission entirely when slaves is empty: a
+// discovered bond without enslaved links is a stub, not a
+// user-configured bond.
+//
+// The test also pins a positive-shape invariant: eth0 (the
+// non-enslaved physical link from the fixture) must still surface
+// as a LinkConfig with its address. A future regression where the
+// empty-slaves guard accidentally swallows ALL link emission would
+// pass the negative assertions alone; the positive checks pin
+// "skip the bond stub, keep the rest of the link graph".
+func TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig(t *testing.T) {
+	out := renderCozystackWith(t, emptyBondTopologyLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if strings.Contains(out, "kind: BondConfig") {
+		t.Errorf("empty-slaves bond must NOT emit BondConfig (Talos rejects it on apply with 'at least one link must be specified'); got:\n%s", out)
+	}
+
+	if strings.Contains(out, "name: bond0") {
+		t.Errorf("empty-slaves bond's master link should not surface as a config document; got:\n%s", out)
+	}
+
+	// Positive-shape pin: eth0 (non-enslaved, has an address) must
+	// still render as a LinkConfig.
+	assertContains(t, out, "kind: LinkConfig")
+	assertContains(t, out, "name: eth0")
+	assertContains(t, out, "192.168.1.100/24")
+}
+
+// TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig_Generic
+// is the generic-preset counterpart to the cozystack pin. The
+// preset's bond emission shape is identical to cozystack's
+// (charts/generic/templates/_helpers.tpl) and exhibits the same
+// empty-slaves leak — the guardrail is applied in both presets
+// and the contract is pinned in both.
+func TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig_Generic(t *testing.T) {
+	out := renderGenericWith(t, emptyBondTopologyLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+
+	if strings.Contains(out, "kind: BondConfig") {
+		t.Errorf("generic preset: empty-slaves bond must NOT emit BondConfig; got:\n%s", out)
+	}
+
+	if strings.Contains(out, "name: bond0") {
+		t.Errorf("generic preset: bond stub should not surface as a config document; got:\n%s", out)
+	}
+}
+
 // Contract: bond slaves never appear as standalone LinkConfig
 // documents. configurable_link_names filters them out via spec.slaveKind.
 func TestContract_NetworkMultidoc_BondSlavesNotEmittedAsLinkConfig(t *testing.T) {

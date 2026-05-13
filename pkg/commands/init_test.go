@@ -459,6 +459,76 @@ func TestValidateImageOverride(t *testing.T) {
 // redundant validateFileExists call was dropped — the gate now lives
 // only inside writeSecureToDestination, and this test would fail if
 // that inner check were ever removed too.
+
+// TestResolveTalosconfigEndpoints_GlobalNonEmpty_UsesGlobal pins
+// that when the operator passes --endpoints on talm init, the
+// talosconfig generated for the new project carries those
+// endpoints in its context, NOT a hardcoded loopback. Without
+// this contract, init writes a talosconfig with
+// `endpoints: - 127.0.0.1` and the operator's --endpoints flag
+// is silently discarded.
+func TestResolveTalosconfigEndpoints_GlobalNonEmpty_UsesGlobal(t *testing.T) {
+	t.Parallel()
+
+	got := resolveTalosconfigEndpoints([]string{"10.0.80.201"})
+
+	if len(got) != 1 || got[0] != "10.0.80.201" {
+		t.Errorf("non-empty --endpoints must propagate to talosconfig; got %v, want [10.0.80.201]", got)
+	}
+}
+
+// TestResolveTalosconfigEndpoints_GlobalEmpty_UsesLoopbackFallback
+// pins the fallback shape: when --endpoints is omitted the
+// generated talosconfig still needs a non-empty endpoints list
+// (yaml schema requirement), so we seed the loopback placeholder.
+// The operator edits it to a real endpoint after init.
+func TestResolveTalosconfigEndpoints_GlobalEmpty_UsesLoopbackFallback(t *testing.T) {
+	t.Parallel()
+
+	got := resolveTalosconfigEndpoints(nil)
+	if len(got) != 1 || got[0] != defaultLocalEndpoint {
+		t.Errorf("empty --endpoints must fall back to defaultLocalEndpoint; got %v, want [%s]", got, defaultLocalEndpoint)
+	}
+}
+
+// TestResolveTalosconfigEndpoints_ReturnsCopy pins that the
+// returned slice is not aliased with the caller's slice. Without
+// this, downstream mutation of the talosconfig's endpoints would
+// also mutate the operator-visible GlobalArgs.Endpoints between
+// init runs in a single process (which the test harness exercises).
+func TestResolveTalosconfigEndpoints_ReturnsCopy(t *testing.T) {
+	t.Parallel()
+
+	input := []string{"10.0.80.201"}
+
+	got := resolveTalosconfigEndpoints(input)
+	got[0] = "mutated"
+
+	if input[0] == "mutated" {
+		t.Errorf("returned slice must be a copy; mutating it also mutated the input (aliased)")
+	}
+}
+
+// TestResolveTalosconfigEndpoints_MultipleEndpoints pins that all
+// supplied endpoints propagate (StringSlice flag accepts repeated
+// or comma-separated values). Operators with a HA cluster may
+// pass multiple --endpoints on init.
+func TestResolveTalosconfigEndpoints_MultipleEndpoints(t *testing.T) {
+	t.Parallel()
+
+	got := resolveTalosconfigEndpoints([]string{"10.0.80.201", "10.0.80.202", "10.0.80.203"})
+	if len(got) != 3 {
+		t.Fatalf("multi-endpoint input must all propagate; got %v", got)
+	}
+
+	want := []string{"10.0.80.201", "10.0.80.202", "10.0.80.203"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("endpoint[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestWriteSecretsBundleToFile_StillRefusesOverwrite(t *testing.T) {
 	forceOrig := initCmdFlags.force
 	rootOrig := Config.RootDir

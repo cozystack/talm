@@ -81,6 +81,31 @@ const (
 	reportVerbUpdated = "Updated"
 )
 
+// resolveTalosconfigEndpoints picks the endpoint list to embed in
+// the generated talosconfig's context. If the operator passed
+// --endpoints, those values propagate; otherwise we seed the
+// loopback placeholder so the rendered context is yaml-valid (a
+// talosconfig context with empty endpoints fails downstream
+// client construction). The operator edits the placeholder to a
+// real endpoint after init if they did not supply --endpoints.
+//
+// Earlier versions hardcoded defaultLocalEndpoint at the
+// assignment site and silently discarded the operator's
+// --endpoints flag; the helper centralises the resolution so a
+// future caller (e.g. talosconfig regenerate flow) inherits the
+// same shape.
+//
+// Returns a fresh slice so callers mutating the talosconfig field
+// don't alias the operator-visible GlobalArgs.Endpoints across
+// init invocations in the same process.
+func resolveTalosconfigEndpoints(globalEndpoints []string) []string {
+	if len(globalEndpoints) > 0 {
+		return append([]string(nil), globalEndpoints...)
+	}
+
+	return []string{defaultLocalEndpoint}
+}
+
 // initCmdFlags is the package-level flag struct backing the init
 // subcommand; cobra binds Flags() entries directly to these fields,
 // which forces a global. The global also exposes the flag values to
@@ -595,7 +620,7 @@ var initCmd = &cobra.Command{
 				return errors.Wrap(err, "generating talos config bundle")
 			}
 
-			configBundle.TalosConfig().Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
+			configBundle.TalosConfig().Contexts[clusterName].Endpoints = resolveTalosconfigEndpoints(GlobalArgs.Endpoints)
 
 			data, err := yaml.Marshal(configBundle.TalosConfig())
 			if err != nil {

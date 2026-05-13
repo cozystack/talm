@@ -245,6 +245,18 @@ mtu: {{ $link.spec.mtu }}
 {{- else if eq $kind "bond" }}
 {{- $bondMaster := $link.spec.bondMaster }}
 {{- $slaves := fromJsonArray (include "talm.discovered.bond_slaves" $link.spec.index) }}
+{{- if not $slaves }}
+{{- /* Talos's link controller can auto-create a bond stub in COSI
+       link state before any operator configuration enslaves
+       physical NICs to it: the master link carries a bondMaster
+       spec but no other link has slaveKind: bond + masterIndex
+       pointing at it. Emitting BondConfig with empty `links:`
+       produces a document Talos rejects on apply ("at least one
+       link must be specified"). Treat empty-slaves as not-a-
+       user-bond and skip the document. An operator who intends
+       a bond must declare its slaves via a per-node body overlay;
+       until then the discovered stub is not promoted to config. */ -}}
+{{- else }}
 ---
 apiVersion: v1alpha1
 kind: BondConfig
@@ -285,6 +297,7 @@ routes:
 {{- end }}
 {{- if $link.spec.mtu }}
 mtu: {{ $link.spec.mtu }}
+{{- end }}
 {{- end }}
 {{- else if eq $kind "vlan" }}
 {{- $parentLinkName := include "talm.discovered.parent_link_name" $linkName }}
