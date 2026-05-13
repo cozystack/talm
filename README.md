@@ -14,7 +14,7 @@ While developing Talm, we aimed to achieve the following goals:
 
 - **GitOps Friendly**: The patches generated do not contain sensitive data, allowing them to be stored in Git in an unencrypted, open format. For scenarios requiring complete configurations, the `--full` option allows the obtain a complete config that can be used for matchbox and other solutions.
 
-- **Simplicity of Use**: You no longer need to pass connection options for each specific server; they are saved along with the templating results into a separate file. This allows you to easily apply one or multiple files in batch using a syntax similar to `kubectl apply -f node1.yaml -f node2.yaml`.
+- **Simplicity of Use**: You no longer need to pass connection options for each specific server; they are saved along with the templating results into a separate file. Per-node configuration sits in a single modeline-annotated `nodes/<name>.yaml`; the first `-f` file is the anchor and any subsequent `-f` files stack onto its rendered config as side-patches (see "Apply with side-patches" below).
 
 - **Compatibility with talosctl**: We strive to maintain compatibility with the upstream project in patches and configurations. The configurations you obtain can be used with the official tools like talosctl and Omni.
 
@@ -215,6 +215,31 @@ talm template -f nodes/node1.yaml -I
 > **Idempotent applies.** Repeated `talm apply` runs against an already-configured node do not duplicate entries. Before the strategic merge runs, the engine prunes from the body every primitive-list entry the rendered template already carries (e.g. certSANs, nameservers, validSubnets). For object arrays the upstream patcher merges by identity (machine.network.interfaces by `interface:` or `deviceSelector:`, vlans by `vlanId:`, apiServer admissionControl by `name:`), the prune descends into matched pairs and dedupes the inner primitive lists too — so re-applying after `talm template -I` does not double interface addresses, vlan addresses, or admission-control exemption namespaces. For object arrays without an upstream identity merge (extraVolumes, kernel.modules, wireguard.peers, ...), body items that deep-equal a rendered counterpart are dropped, covering the dominant full-restate case. Fields tagged `merge:"replace"` upstream are passed through verbatim — pruning them would let the upstream replace silently drop the rendered entries on a partial edit. This covers v1alpha1 root paths `cluster.network.podSubnets`, `cluster.network.serviceSubnets`, `cluster.apiServer.auditPolicy`, and the typed `NetworkRuleConfig` paths `ingress` and `portSelector.ports`.
 >
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply the same overlay: its output is the rendered template plus the modeline and the auto-generated warning, byte-identical to what the template alone would produce. Routing it through the patcher would drop every YAML comment (including the modeline) and re-sort keys, breaking downstream commands that read the file back. Use `apply --dry-run` if you want to preview the exact bytes that will be sent to the node.
+
+## Apply with side-patches
+
+`talm apply -f` accepts a chain of files. The FIRST `-f` is the **anchor** — it must carry a `# talm: nodes=[…], templates=[…]` modeline and live under a `talm init`'d project (Chart.yaml + secrets.yaml). Any subsequent `-f` files are **side-patches**: they are merged in order on top of the anchor's rendered config, and a single `ApplyConfiguration` is issued per node carrying the composed result.
+
+```bash
+# Single node file (anchor only):
+talm apply -f nodes/cp01.yaml
+
+# Side-patch stacked on top — useful for one-shot overlays
+# (debug kubelet flags, temporary cert SANs, mode=staged drills):
+talm apply -f nodes/cp01.yaml -f /tmp/debug-kubelet.yaml
+```
+
+Side-patches do not need to live under the project root; the first file anchors detection. Reversing the order is an error — the first file must be the rooted anchor.
+
+If you were relying on the previous "apply N independent node files" shape (`talm apply -f n1.yaml -f n2.yaml -f n3.yaml` triggering three separate applies), invoke `talm apply` once per node file instead:
+
+```bash
+for n in nodes/*.yaml; do talm apply -f "$n"; done
+```
+
+The current shape rejects this misuse loudly: if any of the subsequent `-f` files carries its own `# talm: …` modeline, the apply errors out before any RPC fires with a hint pointing at the shell-loop pattern above. Stripping the modeline turns a file into a legitimate side-patch.
+
+Side-patches with a non-empty body are restricted to **single-node anchors**. The same body cannot be distinguished from per-node fields (hostname, address, VIP) versus cluster-wide knobs (NTP servers, KubeProxy mode) by static inspection, and stamping per-node fields across N machines is the original foot-gun the per-node-body guard was designed to prevent. If your anchor's `nodes=[…]` lists more than one target and your side-patch is non-empty, talm rejects the apply early with a hint pointing at the per-file shell loop. For cluster-wide overlays on multi-node anchors, fold the overlay into `values.yaml` or templates rather than passing it as a side-patch; for per-node overrides, generate per-node files via `talm template -I` and feed them into the per-file shell loop.
 
 ## Using talosctl commands
 

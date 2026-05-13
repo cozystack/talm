@@ -25,6 +25,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/engine"
+	"github.com/cozystack/talm/pkg/modeline"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -45,6 +46,16 @@ const parentDir = ".."
 // rendering options block and any test asserting against the field
 // share a single canonical value.
 const applyCommandName = "talm apply"
+
+// roleAnchor and roleSidePatch label the role of a config file in
+// the apply chain for operator-facing error messages
+// (rejectMultiNodeOverlayFiles). Hoisted to constants so goconst
+// stays clean across the applyCmd.Long block, which mentions the
+// "anchor" concept several times in operator-facing prose.
+const (
+	roleAnchor    = "anchor"
+	roleSidePatch = "side-patch"
+)
 
 //nolint:gochecknoglobals // cobra command flag struct, idiomatic for cobra-based CLIs
 var applyCmdFlags struct {
@@ -74,8 +85,28 @@ var applyCmdFlags struct {
 var applyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Apply config to a Talos node",
-	Long:  ``,
-	Args:  cobra.NoArgs,
+	Long: `Apply rendered configuration to a Talos node.
+
+Multi-file invocation (anchor + side-patches, per #184): the FIRST -f file
+is the anchor — it must carry a "# talm: nodes=[…], templates=[…]" modeline
+and lives under a project root (Chart.yaml + secrets.yaml). Subsequent -f
+files are side-patches stacked on top of the anchor's rendered config in
+the order they appear; each is merged via the same overlay mechanism the
+anchor's node body uses. A single ApplyConfiguration is issued per node
+with the composed result.
+
+Examples:
+
+  # Single node file (anchor only):
+  talm apply -f nodes/cp01.yaml
+
+  # Stacked side-patches (e.g. one-shot debug overlay):
+  talm apply -f nodes/cp01.yaml -f /tmp/debug-kubelet.yaml
+
+  # Side-patches do NOT need to live under the project root; the
+  # first file anchors detection. Reversing the order is an error
+  # (the orphan path has no project to anchor on).`,
+	Args: cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("talos-version") {
 			applyCmdFlags.talosVersion = Config.TemplateOptions.TalosVersion
@@ -132,16 +163,22 @@ func apply() error {
 		return err
 	}
 
-	for _, configFile := range expandedFiles {
-		err = applyOneFile(configFile)
-		if err != nil {
-			return err
-		}
-
-		resetGlobalArgsBetweenFiles(applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs)
+	// Pre-#184: each -f file ran through applyOneFile in turn, with
+	// each iteration producing its own ApplyConfiguration. For a
+	// chain like `-f node.yaml -f side-patch.yaml` that meant the
+	// second apply OVERWROTE the first — Talos replaces the whole
+	// MachineConfig per call. Per #184 the first file anchors the
+	// project root and any subsequent files are side-patches stacked
+	// on top of the first file's rendered config; the result is a
+	// single ApplyConfiguration per node carrying the composed
+	// bundle. Multiple modelined node files (the historical "apply
+	// to N nodes in one command" idiom) is still supported via the
+	// first file's modeline carrying `nodes=[…]`.
+	if len(expandedFiles) == 0 {
+		return nil
 	}
 
-	return nil
+	return applyOneFile(expandedFiles[0], expandedFiles[1:])
 }
 
 // resetGlobalArgsBetweenFiles wipes the per-file GlobalArgs.Nodes /
@@ -176,50 +213,230 @@ func resetGlobalArgsBetweenFiles(nodesFromArgs, endpointsFromArgs bool) {
 	}
 }
 
-// applyOneFile dispatches a single config file through either the
-// template-rendering path (when its modeline references templates)
-// or the direct-patch path (otherwise). Splitting the per-file work
-// out of the outer apply loop keeps the cognitive complexity of
-// either half within the linter's gate.
-func applyOneFile(configFile string) error {
+// applyOneFile dispatches the apply pipeline for the anchor
+// configFile (file[0] of the -f chain) and an optional ordered list
+// of sidePatches (file[1:]). The anchor MUST be modelined when
+// sidePatches are present — side-patches are stacked on top of the
+// rendered config, which requires the chart templates from the
+// anchor's modeline. Single-file invocations (no side-patches)
+// retain the pre-#184 dispatch: modelined → template path,
+// non-modelined → direct-patch path.
+//
+// Stack semantics (#184): the anchor's chart + body + each
+// sidePatch in order produces ONE composed config per node; one
+// ApplyConfiguration call is issued. Pre-#184 looped each file
+// independently, so the second apply overwrote the first.
+func applyOneFile(configFile string, sidePatches []string) error {
+	// Reject modelined files in the side-patch slots before any
+	// dispatch decisions. The apply chain treats file[0] as the
+	// anchor and file[1:] as bytes-level patches stacked onto the
+	// anchor's render — if a side-patch carries its own modeline,
+	// its nodes/templates/endpoints are silently ignored because
+	// MergeFileAsPatch treats `# talm: …` as a YAML comment.
+	// Operators expecting per-file independent applies (the
+	// kubectl-style multi-node shape) would silently target only
+	// the first file's nodes; gate that here so the misuse is
+	// loud, with a hint pointing at the correct per-file loop.
+	if err := rejectModelinedSidePatches(sidePatches); err != nil {
+		return err
+	}
+
+	hasModeline, modelineErr := fileHasTalmModeline(configFile)
+	// Malformed modeline (typo in keys, bad JSON value, non-comment
+	// line before the modeline) MUST surface to the operator —
+	// silently routing onto the direct-patch path here would hide
+	// the real cause and produce a misleading "no nodes" hint later.
+	// Only the "no `# talm:` line in file" case (ErrModelineNotFound)
+	// is allowed to fall through as a side-patch-shaped input.
+	if modelineErr != nil {
+		return errors.Wrapf(modelineErr, "parsing modeline in %s", configFile)
+	}
+
+	// Resolve secrets.yaml path relative to project root if not absolute
+	withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
+
+	if !hasModeline {
+		if len(sidePatches) > 0 {
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("first -f file %s lacks a modeline; side-patches require a modelined anchor", configFile),
+				"the first -f file in a chain must carry a `# talm: nodes=[…], templates=[…]` modeline so talm knows what to render before stacking side-patches on top",
+			)
+		}
+
+		// Targets may come from --nodes OR from the talosconfig
+		// context (resolved inside applyOneFileDirectPatchMode via
+		// client.GetConfigContext().Nodes). Defer the "no nodes
+		// anywhere" check to the apply path itself so the
+		// talosconfig-default flow stays reachable.
+		return applyOneFileDirectPatchMode(configFile, withSecretsPath)
+	}
+
+	// Modelined anchor: parse modeline, populate GlobalArgs, then
+	// dispatch into template-mode (chart render + body + side-patches)
+	// or direct-patch-mode (no templates declared).
+	resetGlobalArgsBetweenFiles(applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs)
+
 	modelineTemplates, err := processModelineAndUpdateGlobals(configFile, applyCmdFlags.nodesFromArgs, applyCmdFlags.endpointsFromArgs, true)
 	if err != nil {
 		return err
 	}
-	// Resolve secrets.yaml path relative to project root if not absolute
-	withSecretsPath := ResolveSecretsPath(applyCmdFlags.withSecrets)
 
 	if len(modelineTemplates) > 0 {
-		return applyOneFileTemplateMode(configFile, modelineTemplates, withSecretsPath)
+		return applyOneFileTemplateMode(configFile, sidePatches, modelineTemplates, withSecretsPath)
+	}
+
+	if len(sidePatches) > 0 {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("anchor %s declares no templates; side-patches require chart rendering", configFile),
+			"add `templates=[\"templates/<name>.yaml\"]` to the first file's modeline so the chain has a base config to stack onto",
+		)
 	}
 
 	return applyOneFileDirectPatchMode(configFile, withSecretsPath)
 }
 
+// fileHasTalmModeline classifies configFile into one of three
+// shapes by attempting to parse its modeline:
+//
+//   - (true, nil)  — file has a well-formed `# talm: …` modeline
+//   - (false, nil) — file has no `# talm:` line at all (the
+//     side-patch input shape — caller routes to direct-patch)
+//   - (false, err) — file has a modeline candidate but parsing it
+//     failed (typo in keys, bad JSON value, non-comment YAML
+//     before the modeline). The caller surfaces err to the
+//     operator so the real cause is visible.
+//
+// Pre-fix this returned a bare bool and swallowed all errors,
+// silently routing typoed modelines onto the direct-patch path
+// where the operator saw a misleading "no nodes" hint instead of
+// "parsing modeline: invalid JSON".
+func fileHasTalmModeline(configFile string) (bool, error) {
+	_, _, err := modeline.FindAndParseModeline(configFile)
+	if err == nil {
+		return true, nil
+	}
+
+	if errors.Is(err, modeline.ErrModelineNotFound) {
+		return false, nil
+	}
+
+	// The caller (applyOneFile) wraps this with the configFile
+	// path; FindAndParseModeline already attaches WithHint at its
+	// boundary, so wrapping again here would double-message.
+	return false, err //nolint:wrapcheck // forwarded verbatim; caller wraps with configFile context
+}
+
+// rejectMultiNodeOverlayFiles scans the anchor and every side-patch
+// for a per-node body overlay (hostname, address, VIP, machine
+// identifier) when the apply targets more than one node. The
+// anchor's overlay check is the original guard against an
+// operator pointing one node file at N nodes; the side-patch
+// check is the same guard extended to the chain. A side-patch is
+// stamped identically onto every node in the chain, so a per-node
+// field inside it produces the same N-machines-same-hostname
+// footgun the anchor check was added to prevent.
+func rejectMultiNodeOverlayFiles(configFile string, sidePatches, nodes []string) error {
+	candidates := append([]string{configFile}, sidePatches...)
+	for _, path := range candidates {
+		hasOverlay, err := engine.NodeFileHasOverlay(path)
+		if err != nil {
+			return errors.Wrapf(err, "checking %q for per-node body overlay", path)
+		}
+
+		if !hasOverlay {
+			continue
+		}
+
+		role := roleAnchor
+		if path != configFile {
+			role = roleSidePatch
+		}
+		//nolint:wrapcheck // sentinel constructed in-place; WithHintf attaches operator guidance
+		return errors.WithHintf(
+			errors.Newf("%s %q would be stamped onto %d nodes (%v) but carries a non-empty per-node body", role, path, len(nodes), nodes),
+			"split %q into one file per node, or remove the per-node fields if you want the file applied uniformly across each",
+			path,
+		)
+	}
+
+	return nil
+}
+
+// rejectModelinedSidePatches scans the side-patch slots of an
+// apply chain (file[1:] of `talm apply -f anchor -f sideA -f sideB`)
+// and rejects the chain when any side-patch carries its own
+// modeline. Operators familiar with `kubectl apply -f *.yaml`
+// often pass multiple modelined node files expecting independent
+// applies — but the new chain semantics treat file[1:] as
+// bytes-level patches stacked onto the anchor's render. A side-
+// patch's `# talm: …` line is just a YAML comment to
+// MergeFileAsPatch, so its nodes/templates/endpoints would be
+// silently dropped while its body got merged into the anchor's
+// targets. This guard surfaces that misuse loudly with a hint
+// pointing at the per-file shell loop, which is the correct shape
+// for the multi-node-apply pattern.
+//
+// A malformed modeline in a side-patch slot also surfaces — the
+// operator should fix the typo regardless of whether they intended
+// the file as anchor or side-patch.
+func rejectModelinedSidePatches(sidePatches []string) error {
+	for _, path := range sidePatches {
+		hasModeline, modelineErr := fileHasTalmModeline(path)
+		if modelineErr != nil {
+			return errors.Wrapf(modelineErr, "parsing modeline in side-patch %s", path)
+		}
+
+		if hasModeline {
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("side-patch %s carries its own modeline; the apply chain treats only the first -f file as the anchor and stacks subsequent files as side-patches", path),
+				"to apply multiple modelined node files independently, run one apply per file (e.g. `for f in nodes/*.yaml; do talm apply -f $f; done`); to use this file as a side-patch on the current anchor, strip its `# talm: …` line",
+			)
+		}
+	}
+
+	return nil
+}
+
 // applyOneFileTemplateMode runs the template-rendering apply path for
-// a single configFile: renders templates per node, overlays the node
-// file body, and ApplyConfigurations the result. See
-// applyTemplatesPerNode for why the loop is mandatory.
-func applyOneFileTemplateMode(configFile string, modelineTemplates []string, withSecretsPath string) error {
+// a single rooted configFile and an optional chain of sidePatches.
+// Per node: renders templates, overlays the node body, then stacks
+// every sidePatch in order via engine.MergeFileAsPatch — a single
+// ApplyConfiguration is issued per node with the final composed
+// config. Empty sidePatches reproduces the single-file shape. See
+// applyTemplatesPerNode for the per-node loop.
+func applyOneFileTemplateMode(configFile string, sidePatches, modelineTemplates []string, withSecretsPath string) error {
 	opts := buildApplyRenderOptions(modelineTemplates, withSecretsPath)
 
 	nodes := append([]string(nil), GlobalArgs.Nodes...)
-	//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-	fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, nodes, GlobalArgs.Endpoints)
+	// Elide the `side-patches=` segment in the single-file case so
+	// the conventional path's progress line stays uncluttered. The
+	// dominant invocation shape is `talm apply -f nodes/<name>.yaml`
+	// without side-patches; reporting `side-patches=[]` on every line
+	// was visible noise without operator value.
+	if len(sidePatches) == 0 {
+		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
+		fmt.Printf("- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
+	} else {
+		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
+		fmt.Printf("- talm: file=%s, side-patches=[%s], nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(sidePatches, ","), strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
+	}
 
 	applyClosure := buildApplyClosure()
 
 	if applyCmdFlags.insecure {
 		openClient := openClientPerNodeMaintenance(applyCmdFlags.certFingerprints, WithClientMaintenance)
 
-		return applyTemplatesPerNode(opts, configFile, nodes, openClient, engine.Render, applyClosure)
+		return applyTemplatesPerNode(opts, configFile, sidePatches, nodes, openClient, engine.Render, applyClosure)
 	}
 
 	return withApplyClientBare(func(parentCtx context.Context, c *client.Client) error {
 		resolved := resolveAuthTemplateNodes(nodes, c)
 		openClient := openClientPerNodeAuth(parentCtx, c)
 
-		return applyTemplatesPerNode(opts, configFile, resolved, openClient, engine.Render, applyClosure)
+		return applyTemplatesPerNode(opts, configFile, sidePatches, resolved, openClient, engine.Render, applyClosure)
 	})
 }
 
@@ -295,6 +512,32 @@ func buildApplyClosure() applyFunc {
 // slice length — see cosiPreflightContext for the auth path's
 // workaround that has to scope ctx back to "node" before calling the
 // same COSI preflight).
+// resolveDirectPatchTargetNodes resolves the per-node target list
+// for the direct-patch apply path. Order of precedence: --nodes
+// (GlobalArgs.Nodes) first, falling back to the active talosconfig
+// context's Nodes slice. Returns an operator-facing error when
+// both sources are empty — the direct-patch path has no modeline
+// to read targets from, so a missing --nodes AND a context with
+// no Nodes leaves nowhere to send the apply.
+func resolveDirectPatchTargetNodes(c *client.Client, configFile string) ([]string, error) {
+	targetNodes := append([]string(nil), GlobalArgs.Nodes...)
+	if len(targetNodes) == 0 {
+		if cfg := c.GetConfigContext(); cfg != nil {
+			targetNodes = append(targetNodes, cfg.Nodes...)
+		}
+	}
+
+	if len(targetNodes) == 0 {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return nil, errors.WithHint(
+			errors.Newf("no nodes to target for %s", configFile),
+			"the file lacks a `# talm: nodes=[…]` modeline, no --nodes flag was passed, and the active talosconfig context carries no nodes; pass --nodes explicitly or supply a modelined node file",
+		)
+	}
+
+	return targetNodes, nil
+}
+
 func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 	opts := buildApplyPatchOptions(withSecretsPath)
 	patches := []string{"@" + configFile}
@@ -318,19 +561,13 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 	}
 
 	return withApplyClient(func(ctx context.Context, c *client.Client) error {
-		// wrapWithNodeContext fills ctx via client.WithNodes from
-		// talosconfig when --nodes is omitted, but does not mutate
-		// GlobalArgs.Nodes. Mirror its resolution here so the log line
-		// and the per-node preflight loop see the actual targets.
-		targetNodes := append([]string(nil), GlobalArgs.Nodes...)
-		if len(targetNodes) == 0 {
-			if cfg := c.GetConfigContext(); cfg != nil {
-				targetNodes = append(targetNodes, cfg.Nodes...)
-			}
+		targetNodes, err := resolveDirectPatchTargetNodes(c, configFile)
+		if err != nil {
+			return err
 		}
 
 		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-		fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s\n", configFile, targetNodes, GlobalArgs.Endpoints)
+		fmt.Printf("- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(targetNodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
 
 		read := cosiVersionReader(c)
 
@@ -544,6 +781,7 @@ type openClientFunc func(node string, action func(ctx context.Context, c *client
 func applyTemplatesPerNode(
 	opts engine.Options,
 	configFile string,
+	sidePatches []string,
 	nodes []string,
 	openClient openClientFunc,
 	render renderFunc,
@@ -560,26 +798,20 @@ func applyTemplatesPerNode(
 	// pin. Replaying it across multiple targets would stamp the same
 	// value onto every machine, so reject this combination early and
 	// ask the user to split the file. Modeline-only files (no body)
-	// are fine — they just carry the target list.
+	// are fine — they just carry the target list. Side-patches are
+	// subject to the same rule: they are stacked identically onto
+	// every node, so a per-node field inside a side-patch is the
+	// same multi-node-stamp footgun as a per-node field inside the
+	// anchor.
 	if len(nodes) > 1 {
-		hasOverlay, err := engine.NodeFileHasOverlay(configFile)
-		if err != nil {
-			return errors.Wrapf(err, "checking %q for per-node body overlay", configFile)
-		}
-
-		if hasOverlay {
-			//nolint:wrapcheck // sentinel constructed in-place; WithHintf attaches operator guidance
-			return errors.WithHintf(
-				errors.Newf("node file %q targets %d nodes (%v) but carries a non-empty per-node body", configFile, len(nodes), nodes),
-				"split %q into one file per node, or remove the per-node fields if you want the rendered template alone applied to each",
-				configFile,
-			)
+		if err := rejectMultiNodeOverlayFiles(configFile, sidePatches, nodes); err != nil {
+			return err
 		}
 	}
 
 	for _, node := range nodes {
 		err := openClient(node, func(ctx context.Context, c *client.Client) error {
-			return renderMergeAndApply(ctx, c, opts, configFile, render, apply)
+			return renderMergeAndApply(ctx, c, opts, configFile, sidePatches, render, apply)
 		})
 		if err != nil {
 			return errors.Wrapf(err, "node %s", node)
@@ -729,9 +961,14 @@ func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
 }
 
 // renderMergeAndApply is the per-node body shared by every apply mode.
+// sidePatches is the chain of additional -f files stacked on top of
+// the rooted configFile (#184). Each is merged in order via
+// engine.MergeFileAsPatch; the result is a single composed config
+// applied with one ApplyConfiguration call per node. Empty slice
+// (single -f file) reproduces the pre-#184 single-merge shape.
 //
 //nolint:gocritic // opts taken by value to mirror applyTemplatesPerNode's test-injection signature
-func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, render renderFunc, apply applyFunc) error {
+func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, sidePatches []string, render renderFunc, apply applyFunc) error {
 	rendered, err := render(ctx, c, opts)
 	if err != nil {
 		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
@@ -744,6 +981,13 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 	merged, err := engine.MergeFileAsPatch(rendered, configFile)
 	if err != nil {
 		return errors.Wrapf(err, "merging node file %q as patch", configFile)
+	}
+
+	for _, sidePatch := range sidePatches {
+		merged, err = engine.MergeFileAsPatch(merged, sidePatch)
+		if err != nil {
+			return errors.Wrapf(err, "merging side-patch %q onto rendered config", sidePatch)
+		}
 	}
 
 	return apply(ctx, c, merged)
@@ -882,7 +1126,7 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 
 func init() {
 	applyCmd.Flags().BoolVarP(&applyCmdFlags.insecure, "insecure", "i", false, "apply using the insecure (encrypted with no auth) maintenance service")
-	applyCmd.Flags().StringSliceVarP(&applyCmdFlags.configFiles, "file", "f", nil, "specify config files or patches in a YAML file (can specify multiple)")
+	applyCmd.Flags().StringSliceVarP(&applyCmdFlags.configFiles, "file", "f", nil, "node config files / patches (`.yaml` / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere (#184).")
 	applyCmd.Flags().StringVar(&applyCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	applyCmd.Flags().StringVar(&applyCmdFlags.withSecrets, "with-secrets", "", "use a secrets file generated using 'gen secrets'")
 	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")

@@ -380,7 +380,7 @@ func TestApplyTemplatesPerNode_LoopsOncePerNodeWithSingleNodeContext(t *testing.
 		return nil
 	}
 
-	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
 
@@ -425,7 +425,7 @@ func TestApplyTemplatesPerNode_NeverBatchesNodes(t *testing.T) {
 		return nil
 	}
 
-	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil, want, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
 	if renderCount != len(want) {
@@ -462,16 +462,65 @@ machine:
 		return nil
 	}
 
-	err := applyTemplatesPerNode(engine.Options{}, configFile,
+	err := applyTemplatesPerNode(engine.Options{}, configFile, nil,
 		[]string{testNodeAddrA, testNodeAddrB},
 		fakeAuthOpenClient(context.Background()), render, apply)
 	if err == nil {
 		t.Fatal("expected an error for multi-node + non-empty body, got nil")
 	}
 	msg := err.Error()
-	for _, want := range []string{"node file", "2 nodes", "per-node body"} {
+	for _, want := range []string{"anchor", "2 nodes", "per-node body"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error message %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// TestApplyTemplatesPerNode_MultiNodeWithSidePatchOverlayIsRejected
+// pins the extension of the per-node-body guard to the side-patch
+// slot: a chain like `apply -f modeline-only.yaml -f side.yaml`
+// targeting N>1 nodes, where side.yaml carries a per-node field
+// (hostname, address, VIP), must be rejected — the side-patch is
+// stamped identically onto every node so a per-node field inside
+// it produces the same "all N machines named the same hostname"
+// footgun the anchor check was added to prevent.
+func TestApplyTemplatesPerNode_MultiNodeWithSidePatchOverlayIsRejected(t *testing.T) {
+	dir := t.TempDir()
+
+	// Anchor is modeline-only (no per-node body) — passes the
+	// anchor check by itself.
+	anchor := filepath.Join(dir, "anchor.yaml")
+	if err := os.WriteFile(anchor, []byte(`# talm: nodes=["10.0.0.1","10.0.0.2"]`+"\n"), 0o644); err != nil {
+		t.Fatalf("write anchor: %v", err)
+	}
+
+	// Side-patch carries a per-node field. Pre-extension this
+	// slipped through the guard and got stamped onto every node.
+	side := filepath.Join(dir, "side.yaml")
+	if err := os.WriteFile(side, []byte("machine:\n  network:\n    hostname: only-valid-for-one-node\n"), 0o644); err != nil {
+		t.Fatalf("write side: %v", err)
+	}
+
+	render := func(_ context.Context, _ *client.Client, _ engine.Options) ([]byte, error) {
+		t.Fatal("render must not be called when the side-patch overlay guard trips")
+		return nil, nil
+	}
+	apply := func(_ context.Context, _ *client.Client, _ []byte) error {
+		t.Fatal("apply must not be called when the side-patch overlay guard trips")
+		return nil
+	}
+
+	err := applyTemplatesPerNode(engine.Options{}, anchor, []string{side},
+		[]string{testNodeAddrA, testNodeAddrB},
+		fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
+		t.Fatal("expected error: side-patch with per-node body must be rejected on a multi-node chain")
+	}
+
+	msg := err.Error()
+	for _, want := range []string{"side-patch", "2 nodes", "per-node body"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q must mention %q", msg, want)
 		}
 	}
 }
@@ -498,7 +547,7 @@ func TestApplyTemplatesPerNode_MultiNodeEmptyBodyIsAllowed(t *testing.T) {
 		return nil
 	}
 
-	if err := applyTemplatesPerNode(engine.Options{}, configFile,
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil,
 		[]string{testNodeAddrA, testNodeAddrB},
 		fakeAuthOpenClient(context.Background()), render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
@@ -527,7 +576,7 @@ func TestApplyTemplatesPerNode_NoNodesIsAnError(t *testing.T) {
 		return nil
 	}
 
-	err := applyTemplatesPerNode(engine.Options{}, configFile, nil, fakeAuthOpenClient(context.Background()), render, apply)
+	err := applyTemplatesPerNode(engine.Options{}, configFile, nil, nil, fakeAuthOpenClient(context.Background()), render, apply)
 	if err == nil {
 		t.Fatal("expected an error for empty nodes list, got nil")
 	}
@@ -589,7 +638,7 @@ func TestApplyTemplatesPerNode_MaintenanceModeOpensFreshClientPerNode(t *testing
 		return nil
 	}
 
-	if err := applyTemplatesPerNode(engine.Options{}, configFile, want, openClient, render, apply); err != nil {
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil, want, openClient, render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
 	if !slices.Equal(clientOpenedFor, want) {
@@ -717,7 +766,7 @@ func TestApplyTemplatesPerNode_AuthModeUsesPluralNodesMetadataKey(t *testing.T) 
 	apply := func(_ context.Context, _ *client.Client, _ []byte) error { return nil }
 
 	openClient := openClientPerNodeAuth(context.Background(), nil)
-	if err := applyTemplatesPerNode(engine.Options{}, configFile, []string{node}, openClient, render, apply); err != nil {
+	if err := applyTemplatesPerNode(engine.Options{}, configFile, nil, []string{node}, openClient, render, apply); err != nil {
 		t.Fatalf("applyTemplatesPerNode: %v", err)
 	}
 }
