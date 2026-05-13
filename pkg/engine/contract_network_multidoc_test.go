@@ -263,6 +263,64 @@ func TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig_Generic(t *t
 	}
 }
 
+// TestContract_NetworkMultidoc_BondWithoutSlaves_WithVIP_SkipsBondConfig
+// pins the empty-slaves guardrail against the VIP-active code path.
+// Field report (#9327 / #9351): an operator on v0.27.0 saw an empty
+// BondConfig emitted "only when VIP is in use" — the existing
+// TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig pins
+// the no-VIP shape, so a hidden VIP-conditional branch could still
+// emit BondConfig{links: <empty>} without breaking the existing
+// contract. This test exercises the same empty-bond fixture with
+// floatingIP set, which activates the Layer2VIPConfig / floatingIP-
+// strip branches above the bond emission. The contract is identical:
+// no `kind: BondConfig` in the output, the bond stub is skipped.
+//
+// Operator UX guarantee: the Layer2VIPConfig document must still be
+// emitted (the VIP-link selector picks eth0 because the VIP shares
+// its subnet), and eth0 must still surface as a LinkConfig — the
+// VIP path must not collateral-damage the rest of the link graph.
+func TestContract_NetworkMultidoc_BondWithoutSlaves_WithVIP_SkipsBondConfig(t *testing.T) {
+	out := renderCozystackWith(t, emptyBondTopologyLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.168.1.50",
+	})
+
+	if strings.Contains(out, "kind: BondConfig") {
+		t.Errorf("empty-slaves bond must NOT emit BondConfig even when floatingIP activates the VIP path; got:\n%s", out)
+	}
+
+	if strings.Contains(out, "name: bond0") {
+		t.Errorf("empty-slaves bond's master link should not surface as a config document under the VIP path; got:\n%s", out)
+	}
+
+	// Positive-shape pin: the VIP path must still emit its
+	// Layer2VIPConfig (eth0 carries 192.168.1.100/24, so the VIP
+	// 192.168.1.50 lands on eth0), and eth0 itself must still
+	// render as a LinkConfig with its address.
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, "kind: LinkConfig")
+	assertContains(t, out, "name: eth0")
+}
+
+// TestContract_NetworkMultidoc_BondWithoutSlaves_WithVIP_SkipsBondConfig_Generic
+// is the generic-preset counterpart. Both presets share the empty-
+// slaves guard at the bond emission site; both must hold the
+// guarantee under the VIP-active code path too.
+func TestContract_NetworkMultidoc_BondWithoutSlaves_WithVIP_SkipsBondConfig_Generic(t *testing.T) {
+	out := renderGenericWith(t, emptyBondTopologyLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.168.1.50",
+	})
+
+	if strings.Contains(out, "kind: BondConfig") {
+		t.Errorf("generic preset: empty-slaves bond must NOT emit BondConfig under the VIP path; got:\n%s", out)
+	}
+
+	if strings.Contains(out, "name: bond0") {
+		t.Errorf("generic preset: bond stub should not surface as a config document under the VIP path; got:\n%s", out)
+	}
+}
+
 // Contract: bond slaves never appear as standalone LinkConfig
 // documents. configurable_link_names filters them out via spec.slaveKind.
 func TestContract_NetworkMultidoc_BondSlavesNotEmittedAsLinkConfig(t *testing.T) {
