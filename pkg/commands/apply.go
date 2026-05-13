@@ -1141,5 +1141,16 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted; cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.)")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 
+	// Shell completion for `talm apply` flags. `--file` returns the
+	// modelined-yaml files under <root>/nodes/ via completeNodeFiles
+	// — these are the canonical anchor inputs. The operator-typed
+	// `-f <TAB>` lands on the curated list rather than every yaml
+	// in CWD. ValidArgsFunction is NOT wired because applyCmd
+	// declares cobra.NoArgs, which suppresses positional completion
+	// in cobra's __complete path; wiring it would pin dead surface.
+	_ = applyCmd.RegisterFlagCompletionFunc("mode", completeApplyMode)
+	_ = applyCmd.RegisterFlagCompletionFunc("file", completeNodeFiles)
+	_ = applyCmd.RegisterFlagCompletionFunc("with-secrets", completeYAMLFiles)
+
 	addCommand(applyCmd)
 }

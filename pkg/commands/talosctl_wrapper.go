@@ -72,14 +72,14 @@ const rotateCACmdName = "rotate-ca"
 //
 //nolint:gochecknoglobals // package-level map keyed by name; cheap O(1) lookup in the propagation hot path.
 var rootShadowedPersistentFlags = map[string]struct{}{
-	talosconfigName: {},
-	"root":          {},
-	"context":       {},
-	"nodes":         {},
-	"endpoints":     {},
-	"cluster":       {},
-	"skip-verify":   {},
-	"version":       {},
+	talosconfigName:   {},
+	"root":            {},
+	"context":         {},
+	flagNameNodes:     {},
+	flagNameEndpoints: {},
+	"cluster":         {},
+	"skip-verify":     {},
+	"version":         {},
 	// siderov1-keys-dir is registered by upstream addCommand into
 	// taloscommands.GlobalArgs.SideroV1KeysDir, but talm does not
 	// model that auth path and never populates the field. If we

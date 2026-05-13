@@ -482,6 +482,16 @@ func init() {
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.offline, "offline", "", false, "disable gathering information and lookup functions")
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
+	// Shell completion for `talm template` flags. `--file` uses the
+	// modelined-yaml lister (same as apply); other yaml-shaped flags
+	// fall back to the generic extension filter. ValidArgsFunction
+	// is NOT wired because templateCmd declares cobra.NoArgs, which
+	// suppresses positional completion in cobra's __complete path.
+	_ = templateCmd.RegisterFlagCompletionFunc("file", completeNodeFiles)
+	_ = templateCmd.RegisterFlagCompletionFunc("values", completeYAMLFiles)
+	_ = templateCmd.RegisterFlagCompletionFunc("template", completeYAMLFiles)
+	_ = templateCmd.RegisterFlagCompletionFunc("with-secrets", completeYAMLFiles)
+
 	addCommand(templateCmd)
 }
 

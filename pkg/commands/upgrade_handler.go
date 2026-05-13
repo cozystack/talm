@@ -99,6 +99,13 @@ upgrade flow.`
 	wrappedCmd.Flags().DurationVar(&upgradeCmdFlags.postUpgradeReconcileWindow, "post-upgrade-reconcile-window", defaultPostUpgradeReconcileWindow,
 		"how long to wait after upgrade returns before re-reading the running version; widen for slow hardware / large image pulls")
 
+	// Shell completion for `talm upgrade --file`: returns modelined
+	// yaml files under <root>/nodes/. ValidArgsFunction is NOT
+	// wired because upstream's upgrade command declares no
+	// positional args; cobra's __complete path suppresses
+	// ValidArgsFunction when the arg-constraint is NoArgs.
+	_ = wrappedCmd.RegisterFlagCompletionFunc("file", completeNodeFiles)
+
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Fail-fast on a bad --post-upgrade-reconcile-window BEFORE
 		// any talosctl upgrade RPC fires. A zero / negative value
