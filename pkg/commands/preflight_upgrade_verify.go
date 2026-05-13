@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"
@@ -28,10 +29,11 @@ const postUpgradeVersionMismatchHint = "two hypotheses produce this symptom: " +
 	"(1) Talos auto-rolled back after the new partition failed its boot readiness check — " +
 	"cross-vendor upgrades (e.g. cozystack-bundled image -> vanilla siderolabs installer) " +
 	"drop bundled extensions and trigger this. " +
-	"(2) The node is slower than the 90s reconcile window — large image pulls or cold " +
-	"hardware can exceed it. Re-run `talm get version` after a minute to distinguish: if " +
-	"the version updated, the node was just slow; if it's still the old version, the " +
-	"rollback case is real. Pass --skip-post-upgrade-verify to bypass."
+	"(2) The node is slower than the configured reconcile window — large image pulls or cold " +
+	"hardware can exceed it. Widen via --post-upgrade-reconcile-window or re-run " +
+	"`talm get version` after a minute to distinguish: if the version updated, the node " +
+	"was just slow; if it's still the old version, the rollback case is real. " +
+	"Pass --skip-post-upgrade-verify to bypass."
 
 // verifyPostUpgradeVersion is the Phase 2C gate: after talosctl upgrade
 // returns, re-read the node's runtime.Version COSI resource and compare
@@ -49,6 +51,7 @@ func verifyPostUpgradeVersion(
 	ctx context.Context,
 	read versionReader,
 	targetImage string,
+	reconcileWindow time.Duration,
 	w io.Writer,
 ) error {
 	target := parseTargetVersion(targetImage)
@@ -108,7 +111,7 @@ func verifyPostUpgradeVersion(
 
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHint(
-		errors.Newf("post-upgrade: requested upgrade to %s but running version is %s — either Talos auto-rolled back, or the node is still booting beyond the 90s window", target, running),
+		errors.Newf("post-upgrade: requested upgrade to %s but running version is %s — either Talos auto-rolled back, or the node is still booting beyond the configured reconcile window (%s)", target, running, reconcileWindow),
 		postUpgradeVersionMismatchHint,
 	)
 }

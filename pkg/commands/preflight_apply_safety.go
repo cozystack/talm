@@ -113,6 +113,14 @@ func preflightValidateResources(
 	}
 
 	findings := applycheck.ValidateRefs(refs, snapshot)
+
+	netAddrFindings, err := applycheck.WalkNetAddrFindings(rendered)
+	if err != nil {
+		return errors.Wrap(err, "pre-flight: walking rendered MachineConfig for net-addr fields")
+	}
+
+	findings = append(findings, netAddrFindings...)
+
 	if len(findings) == 0 {
 		return nil
 	}
@@ -173,6 +181,7 @@ func previewDrift(
 	rendered []byte,
 	nodeID string,
 	w io.Writer,
+	showSecrets bool,
 ) error {
 	current, ok, err := read(ctx)
 	if err != nil {
@@ -182,7 +191,7 @@ func previewDrift(
 	}
 
 	if !ok {
-		_, _ = fmt.Fprintln(w, "talm:", maintenanceConnectionMessage)
+		_, _ = fmt.Fprintf(w, "%stalm: %s\n", nodePrefix(nodeID), maintenanceConnectionMessage)
 
 		return nil
 	}
@@ -194,7 +203,7 @@ func previewDrift(
 		return nil
 	}
 
-	printDriftPreview(w, headerWithNode("talm: drift preview", nodeID), changes)
+	printDriftPreview(w, headerWithNode("talm: drift preview", nodeID), changes, showSecrets)
 
 	return nil
 }
@@ -238,6 +247,7 @@ func verifyAppliedState(
 	sent []byte,
 	nodeID string,
 	w io.Writer,
+	showSecrets bool,
 ) error {
 	onNode, ok, err := read(ctx)
 	if err != nil {
@@ -249,7 +259,7 @@ func verifyAppliedState(
 	}
 
 	if !ok {
-		_, _ = fmt.Fprintln(w, "talm:", maintenanceConnectionMessage)
+		_, _ = fmt.Fprintf(w, "%stalm: %s\n", nodePrefix(nodeID), maintenanceConnectionMessage)
 
 		return nil
 	}
@@ -264,7 +274,7 @@ func verifyAppliedState(
 		return nil
 	}
 
-	printDriftPreview(w, headerWithNode("talm: post-apply divergence", nodeID), changes)
+	printDriftPreview(w, headerWithNode("talm: post-apply divergence", nodeID), changes, showSecrets)
 
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHint(
@@ -277,7 +287,7 @@ func verifyAppliedState(
 // entries are dropped from the per-line listing but counted in the
 // trailing summary so the reader can confirm the diff against expected
 // scope.
-func printDriftPreview(w io.Writer, header string, changes []applycheck.Change) {
+func printDriftPreview(w io.Writer, header string, changes []applycheck.Change, showSecrets bool) {
 	_, _ = fmt.Fprintln(w, header)
 
 	var adds, removes, updates, equals int
@@ -301,12 +311,19 @@ func printDriftPreview(w io.Writer, header string, changes []applycheck.Change) 
 
 		for j := range change.Fields {
 			f := &change.Fields[j]
-			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f))
+			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f, showSecrets))
 		}
 	}
 
 	_, _ = fmt.Fprintf(w, "talm: %d addition, %d removal, %d update, %d unchanged.\n", adds, removes, updates, equals)
 }
+
+// absentFieldValue is the rendering for a leaf field that does not
+// exist on one side of a FieldChange (HasOld=false or HasNew=false).
+// Hoisted so formatFieldValue and formatSecretFieldValue stay
+// byte-identical on the absent path — a future drift in either would
+// obscure add/remove vs rotate semantics in the drift preview.
+const absentFieldValue = "(absent)"
 
 // formatFieldChangeLine renders one FieldChange entry for the drift
 // preview. The default form is "path: old -> new"; the slice-vs-slice
@@ -316,12 +333,53 @@ func printDriftPreview(w io.Writer, header string, changes []applycheck.Change) 
 // surfaces correctly) and handles the equal-multiset reorder case
 // with an explicit "(reordered, N element(s))" line so the operator
 // isn't left wondering why an OpUpdate fired with no apparent change.
-func formatFieldChangeLine(f *applycheck.FieldChange) string {
-	if oldSlice, newSlice, ok := bothSlices(f); ok {
-		return formatSliceSetDiff(f.Path, oldSlice, newSlice)
+func formatFieldChangeLine(change *applycheck.FieldChange, showSecrets bool) string {
+	// Secret check runs BEFORE bothSlices so a secret-bearing path
+	// that happens to render as a slice (e.g. a future allowlist
+	// entry naming the array itself rather than a leaf element)
+	// still gets redacted instead of leaking the full element
+	// values through formatSliceSetDiff.
+	if !showSecrets && isSecretPath(change.Path) {
+		return fmt.Sprintf("%s: %s -> %s", change.Path, formatSecretFieldValue(change.HasOld, change.Old), formatSecretFieldValue(change.HasNew, change.New))
 	}
 
-	return fmt.Sprintf("%s: %s -> %s", f.Path, formatFieldValue(f.HasOld, f.Old), formatFieldValue(f.HasNew, f.New))
+	if oldSlice, newSlice, ok := bothSlices(change); ok {
+		return formatSliceSetDiff(change.Path, oldSlice, newSlice)
+	}
+
+	return fmt.Sprintf("%s: %s -> %s", change.Path, formatFieldValue(change.HasOld, change.Old), formatFieldValue(change.HasNew, change.New))
+}
+
+// formatSecretFieldValue is the redaction-aware counterpart of
+// formatFieldValue. Absent (HasX=false) reads as `(absent)`
+// unchanged so the operator can still distinguish add/remove from
+// rotation. A present non-string value renders via fmt.Sprintf with
+// the length tell so a number/bool rotation still surfaces as
+// "different" — preserving the rotation-detection promise that
+// motivated redactValue carrying len=N.
+//
+// Caveat: Go's fmt.Sprintf("%v", m) on a map[string]any iterates
+// keys in randomised order (deliberately, since Go 1.0). For
+// map-shaped secret values, two semantically-equal maps may render
+// as different-length strings (false positive: looks like a
+// rotation when nothing changed), and two unequal maps may
+// coincidentally collide on length (false negative: rotation
+// missed). The allowlist today contains no map-shaped entries; if
+// a future addition does, either canonicalise the map (sorted keys
+// before %v) or disclaim the rotation signal for that entry.
+func formatSecretFieldValue(has bool, value any) string {
+	if !has {
+		return absentFieldValue
+	}
+
+	if s, ok := value.(string); ok {
+		return redactValue(s)
+	}
+
+	// Non-string values: render the %v form's length so the
+	// operator still sees a rotation signal. Same shape as
+	// redactValue but without committing to "this was a string".
+	return redactValue(fmt.Sprintf("%v", value))
 }
 
 // bothSlices returns the two sides as []any when the FieldChange
@@ -449,7 +507,7 @@ func mustRenderFlow(items []any) string {
 // lists or nodeLabel maps.
 func formatFieldValue(has bool, value any) string {
 	if !has {
-		return "(absent)"
+		return absentFieldValue
 	}
 
 	switch value.(type) {

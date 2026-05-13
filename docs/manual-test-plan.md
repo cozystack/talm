@@ -184,6 +184,39 @@ Expected: each node renders / diffs independently; per-node gate output sections
 
 Expected: Phase 2B auto-skipped (staged config doesn't change ActiveID); output ends with `Staged configuration to be applied after the next reboot`.
 
+### C5. Drift preview redacts secret-bearing fields by default
+
+```bash
+# Rotate machine.token by editing secrets.yaml (or any allowlisted path) then:
+/tmp/talm-safety apply --dry-run -f nodes/node0.yaml
+```
+
+Expected: the drift preview line for `machine.token` reads `machine.token: ***redacted (len=N)*** -> ***redacted (len=M)***`. The literal `old-token-value` / `new-token-value` strings MUST NOT appear in stderr. Non-secret paths (e.g. `machine.network.hostname` if it changed) render verbatim.
+
+Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,aescbcEncryptionSecret,secretboxEncryptionSecret}`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `cluster.acceptedCAs[].key`, `machine.{token,ca.key}`, `machine.acceptedCAs[].key`) MUST redact. A regression that silently leaks a secret value into stderr is a security-class bug — verify the substring with `grep -F` against the captured output.
+
+### C6. Drift preview shows secrets with explicit opt-in
+
+```bash
+/tmp/talm-safety apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml
+```
+
+Expected: same drift preview as C5, but the secret paths render verbatim — no `***redacted***` sentinel. Operator-explicit bypass for debugging.
+
+Regression anchor: `--show-secrets-in-drift` is operator opt-in, never default. Verify by running `talm apply --help` and confirming the flag default is `false`.
+
+### C7. Phase 1 walker rejects malformed net-addr fields before the RPC
+
+When a rendered MachineConfig carries a malformed value in any of the new walker-covered fields, Phase 1 must block before the apply RPC fires:
+
+- `StaticHostConfig.name` not a parseable IP literal (the `name` field on this kind is the IP the hostnames map to — Talos's schema does not have a separate `address` field).
+- `NetworkRuleConfig.ingress[i].subnet` or `.except` not a parseable CIDR.
+- `WireguardConfig.peers[i].endpoint` not a parseable host:port.
+
+Hand-craft a chart that emits a bad value (e.g. `name: 999.999.0.1` on a `StaticHostConfig`, or `ingress: [{subnet: notacidr}]` on a `NetworkRuleConfig`, or `endpoint: notavalid:endpoint` on a Wireguard peer) and run `apply --dry-run`. Expected: Phase 1 emits a blocker citing the offending field path (`doc[N].name`, `doc[N].ingress[i].subnet` or `.except`, `doc[N].peers[i].endpoint`); exit non-zero before any RPC. Valid values (IPv4, IPv6, IPv6:port via `[host]:port`) pass through.
+
+Regression anchor: empty / omitted endpoint on a Wireguard peer is NOT a finding — peers without endpoints are listener-only remote peers. Verify a chart with `endpoint: ""` passes Phase 1.
+
 ## D. Apply (insecure / maintenance path)
 
 ### D1. Apply with chart that uses discovery
@@ -199,6 +232,21 @@ Expected: render fails because `lookup "disks"` / `lookup "links"` require auth.
 When a chart renders fully offline (no `lookup`), `talm apply -i` runs through to the gates. Phase 2A prints `drift verification unavailable on maintenance connection` and proceeds; Phase 2B same.
 
 **Regression anchor**: D2's offline-renderable behaviour is also covered by unit-level mocking — see `pkg/commands/preflight_apply_safety_test.go` for the in-process equivalent. Surface that file's tests in the manual suite when D2 is impractical to exercise live.
+
+### D3. Per-node prefix on the maintenance-connection warning
+
+On a multi-node insecure apply where every node hits the `ok=false` (maintenance) path, each per-node emission of the warning must carry the node identifier prefix so the operator can correlate which line came from which node:
+
+```bash
+/tmp/talm-safety apply -i \
+  --nodes 192.0.2.10,192.0.2.11,192.0.2.12 \
+  --endpoints 192.0.2.10,192.0.2.11,192.0.2.12 \
+  -f nodes/node0.yaml
+```
+
+Expected (per node): `node 192.0.2.10: talm: drift verification unavailable on maintenance connection`. The single-node case (empty `nodeID`, the implicit path) MUST still emit the bare `talm: drift verification unavailable on maintenance connection` line — no `node : ` garbage prefix.
+
+Regression anchor: a refactor that always-prefixes (`node : talm: ...` on single-node) is a UX regression. The `nodePrefix("")` helper must collapse to empty for the bare-line single-node case.
 
 ## E. Upgrade
 
@@ -220,6 +268,26 @@ Expected: events stream from BOOTING through `post check passed`. Node returns t
 ```
 
 Expected: `error validating installer image ... not found`. Talos itself catches this; talm passes through the error.
+
+### E3. Configurable post-upgrade reconcile window
+
+```bash
+# Help-text surface — confirms the flag is registered with the 90s default.
+/tmp/talm-safety upgrade --help | grep -A1 post-upgrade-reconcile-window
+
+# Custom widened window (slow hardware / large image pulls).
+/tmp/talm-safety upgrade --post-upgrade-reconcile-window=180s \
+  --image ghcr.io/siderolabs/installer:v1.13.0 \
+  --stage -f nodes/node0.yaml
+
+# Rejection of non-positive values.
+/tmp/talm-safety upgrade --post-upgrade-reconcile-window=0s \
+  -f nodes/node0.yaml
+```
+
+Expected for the help line: flag listed with `default 1m30s`. Expected for the 180s run: stderr emits `post-upgrade verify: waiting 3m0s for the node to finish booting...` — Go's `time.Duration.String()` renders `180 * time.Second` as `3m0s` deterministically, not `180s`. Expected for the `0s` rejection: error with a hint mentioning "positive duration".
+
+Regression anchor: the version-mismatch hint emitted on a Phase 2C blocker MUST NOT contain the literal string `90s` — operators passing a custom window would see contradictory advice. The hint should reference "the configured reconcile window (`--post-upgrade-reconcile-window`)" instead.
 
 ## F. CA rotation
 
@@ -765,6 +833,32 @@ TALOSCONFIG=$PWD/talosconfig /tmp/talm-safety apply --dry-run \
 ```
 
 Expected: same as native `--talosconfig $PWD/talosconfig`. Phase 2A drift preview runs normally.
+
+### M6. Secret redaction false-positive guard (intentional rotation)
+
+When an operator deliberately rotates a secret (e.g. `cluster.token` via `talm init --update`), the drift preview must render both sides as `***redacted (len=N)***` — same shape as C5. The control case lives here: confirm a "rotation" of a non-secret-shaped path adjacent to the allowlist (`cluster.tokenExtras`, `cluster.acceptedCAsExtras`, or a synthetic test path like `machine.network.hostname`) renders verbatim.
+
+Expected: paths matching `cluster.token` → redacted; paths matching `cluster.tokenExtras` → verbatim. The path-segment-aware matcher must not false-positive on string-prefix overlap.
+
+Regression anchor: a future regression to substring matching (`strings.HasPrefix(path, "cluster.token")`) would silently redact `cluster.tokenExtras` and other operator-visible fields that share a prefix. Verify by inspecting a chart with both shapes side-by-side.
+
+### M7. Net-addr walker boundary cases
+
+Walk the net-addr walker (C7) on the full boundary set:
+
+- `StaticHostConfig.name: 2001:db8::1` — valid IPv6, passes.
+- `StaticHostConfig.name: 192.0.2.999` — IPv4 with octet >255, blocks.
+- `StaticHostConfig` with no `name` field — passes (Talos rejects at RPC with a clearer message about required fields).
+- `NetworkRuleConfig.ingress: [{subnet: 192.0.2.0/24}, {subnet: 2001:db8::/32}]` — mixed IPv4 + IPv6 CIDRs, both pass.
+- `NetworkRuleConfig.ingress: [{subnet: 192.0.2.0/24}, {subnet: notacidr}]` — one blocker per malformed entry; the count must equal exactly one.
+- `NetworkRuleConfig.ingress: [{subnet: 192.0.2.0/24, except: notacidr}]` — `except` validated alongside `subnet`; malformed `except` blocks even when `subnet` is valid.
+- `WireguardConfig.peers[].endpoint: "[2001:db8::1]:51820"` — bracketed IPv6:port, passes.
+- `WireguardConfig.peers[].endpoint: ""` — listener-only peer, passes.
+- `WireguardConfig.peers[].endpoint: example.invalid:51820` — hostname:port, blocks (hostnames must already be resolved in the rendered config).
+
+Expected: per-entry findings count exactly, valid forms produce zero findings, and the per-finding `Reason` cites the field path with the bracket-normalised index (`peers[1].endpoint`, not `peers[].endpoint`).
+
+Regression anchor: the no-overlap unit test `TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers` pins the dispatch-map disjointness contract. A future entry that lands in BOTH `multidocHandlers` and `multidocNetAddrHandlers` produces double findings — verify via the unit suite before manual smokes.
 
 ## Sanity-check block
 

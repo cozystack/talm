@@ -192,6 +192,7 @@ up: true
 		desired,
 		"",
 		buf,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -217,6 +218,7 @@ func TestPreviewDrift_InsecurePath_DegradesGracefully(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		buf,
+		false,
 	)
 	if err != nil {
 		t.Errorf("previewDrift on insecure path should not block, got err=%v", err)
@@ -237,6 +239,7 @@ func TestVerifyAppliedState_Match_NoError(t *testing.T) {
 		sent,
 		"",
 		&bytes.Buffer{},
+		false,
 	)
 	if err != nil {
 		t.Errorf("verifyAppliedState should accept matching configs, got err=%v", err)
@@ -272,6 +275,7 @@ up: false
 		sent,
 		"",
 		buf,
+		false,
 	)
 	if err == nil {
 		t.Fatal("verifyAppliedState should block on divergence, got nil error")
@@ -297,6 +301,7 @@ func TestVerifyAppliedState_ReaderError_Blocks(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		&bytes.Buffer{},
+		false,
 	)
 	if err == nil {
 		t.Fatal("expected error on reader failure, got nil")
@@ -317,6 +322,7 @@ func TestVerifyAppliedState_InsecurePath_NoBlock(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		buf,
+		false,
 	)
 	if err != nil {
 		t.Errorf("verifyAppliedState on insecure path should not block, got err=%v", err)
@@ -477,7 +483,7 @@ func TestPrintDriftPreview_SliceSetDiff_RemovesDuplicate(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if !strings.Contains(out, "removed [127.0.0.1]") {
@@ -513,7 +519,7 @@ func TestPrintDriftPreview_SliceSetDiff_AddOnly(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if !strings.Contains(out, "added [192.0.2.5]") {
@@ -547,7 +553,7 @@ func TestPrintDriftPreview_SliceSetDiff_ReorderOnly(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if !strings.Contains(out, "reordered") {
@@ -585,6 +591,7 @@ machine:
 		desired,
 		"192.0.2.10",
 		buf,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -629,6 +636,7 @@ up: false
 		sent,
 		"192.0.2.11",
 		buf,
+		false,
 	)
 	if err == nil {
 		t.Fatal("expected divergence to surface as an error")
@@ -665,6 +673,7 @@ machine:
 		desired,
 		"",
 		buf,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -698,7 +707,7 @@ func TestPrintDriftPreview_SliceFlowStyle_AbsentOnOneSide(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if strings.Contains(out, "[127.0.0.1 192.0.2.5]") {
@@ -735,7 +744,7 @@ func TestPrintDriftPreview_MapFieldChange_RendersFlowStyle(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if strings.Contains(out, "map[role:control-plane]") {
@@ -768,7 +777,7 @@ func TestPrintDriftPreview_ScalarFieldChange_StaysInline(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes)
+	printDriftPreview(buf, "drift:", changes, false)
 
 	out := buf.String()
 	if !strings.Contains(out, "cozy.local -> cozy.example") {
@@ -867,5 +876,298 @@ func TestShouldRunPostApplyVerify_RespectsModeAndDryRun(t *testing.T) {
 				t.Errorf("shouldRunPostApplyVerify(mode=%v, dry=%v, skip=%v) = %v, want %v", tc.mode, tc.dry, tc.skip, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPreviewDrift_MaintenanceMessage_CarriesNodePrefix pins the
+// per-node prefix on the maintenance-connection warning emitted by
+// previewDrift when the reader returns ok=false. The drift / divergence
+// headers already disambiguate per node via headerWithNode; the
+// maintenance line lagged behind, producing identical bare warnings on
+// every node in a multi-node insecure apply with no way for the
+// operator to tell which node each line came from. Mirrors
+// TestPreviewDrift_MultiNode_HeaderCarriesNodeID — same expectation
+// shape, different emission site.
+func TestPreviewDrift_MaintenanceMessage_CarriesNodePrefix(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	err := previewDrift(
+		context.Background(),
+		stubMachineConfigReader(nil, false, nil),
+		[]byte(renderedV1_12Multidoc),
+		"192.0.2.10",
+		buf,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("previewDrift on insecure path should not block, got err=%v", err)
+	}
+
+	want := "node 192.0.2.10: talm: " + maintenanceConnectionMessage
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("non-empty nodeID must prefix the maintenance-connection line; want substring %q, got:\n%s", want, buf.String())
+	}
+}
+
+// TestVerifyAppliedState_MaintenanceMessage_CarriesNodePrefix is the
+// Phase 2B counterpart of TestPreviewDrift_MaintenanceMessage_CarriesNodePrefix.
+// Multi-node apply hits both previewDrift (Phase 2A) and
+// verifyAppliedState (Phase 2B) in the same loop, so both maintenance
+// emissions need the same per-node disambiguation.
+func TestVerifyAppliedState_MaintenanceMessage_CarriesNodePrefix(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	err := verifyAppliedState(
+		context.Background(),
+		stubMachineConfigReader(nil, false, nil),
+		[]byte(renderedV1_12Multidoc),
+		"192.0.2.11",
+		buf,
+		false,
+	)
+	if err != nil {
+		t.Errorf("verifyAppliedState on insecure path should not block, got err=%v", err)
+	}
+
+	want := "node 192.0.2.11: talm: " + maintenanceConnectionMessage
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("non-empty nodeID must prefix the maintenance-connection line; want substring %q, got:\n%s", want, buf.String())
+	}
+}
+
+// TestPreflightValidateResources_NetAddrFinding_Blocks pins the
+// Phase 1 integration of WalkNetAddrFindings: a rendered config with
+// a malformed WireguardConfig peer endpoint must block before the
+// apply RPC. Without this pin, the walker could regress to "called
+// but findings discarded" while the unit tests in pkg/applycheck/
+// keep passing.
+func TestPreflightValidateResources_NetAddrFinding_Blocks(t *testing.T) {
+	t.Parallel()
+
+	snapshot := applycheck.HostSnapshot{
+		Links: []string{"eth0", "eth1"},
+		Disks: []applycheck.DiskInfo{{DevPath: "/dev/sda"}},
+	}
+
+	rendered := []byte(`version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+---
+apiVersion: v1alpha1
+kind: WireguardConfig
+name: wg-broken
+peers:
+  - publicKey: ZZZ
+    endpoint: notavalid:endpoint
+`)
+
+	buf := &bytes.Buffer{}
+	err := preflightValidateResources(
+		context.Background(),
+		stubLinksDisksReader(snapshot, true),
+		rendered,
+		buf,
+	)
+	if err == nil {
+		t.Fatal("expected malformed Wireguard peer endpoint to block Phase 1, got nil")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "WireguardConfig.peers[0].endpoint") {
+		t.Errorf("preflight output should cite the offending field path, got %q", out)
+	}
+}
+
+// TestPreflightValidateResources_NetAddrFinding_StaticHostConfig_Blocks
+// pins the Phase 1 integration of WalkNetAddrFindings for the
+// StaticHostConfig kind. Walker-level unit tests cover the handler
+// in isolation; this test exercises the full pipeline
+// preflightValidateResources -> applycheck.WalkNetAddrFindings ->
+// finding -> printFinding output -> Phase 1 blocker error. Without
+// this pin, a walker integration regression for StaticHostConfig
+// could pass walker unit tests while production silently no-ops.
+func TestPreflightValidateResources_NetAddrFinding_StaticHostConfig_Blocks(t *testing.T) {
+	t.Parallel()
+
+	snapshot := applycheck.HostSnapshot{
+		Links: []string{"eth0"},
+		Disks: []applycheck.DiskInfo{{DevPath: "/dev/sda"}},
+	}
+
+	rendered := []byte(`version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+---
+apiVersion: v1alpha1
+kind: StaticHostConfig
+name: 999.999.0.1
+hostnames:
+  - foo.example
+`)
+
+	buf := &bytes.Buffer{}
+	err := preflightValidateResources(
+		context.Background(),
+		stubLinksDisksReader(snapshot, true),
+		rendered,
+		buf,
+	)
+	if err == nil {
+		t.Fatal("expected malformed StaticHostConfig.name to block Phase 1, got nil")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "StaticHostConfig.name") {
+		t.Errorf("preflight output should cite the offending field path; got %q", out)
+	}
+
+	if !strings.Contains(out, "999.999.0.1") {
+		t.Errorf("preflight output should cite the offending value; got %q", out)
+	}
+}
+
+// TestPreflightValidateResources_NetAddrFinding_NetworkRuleConfig_Blocks
+// pins the Phase 1 integration for the NetworkRuleConfig kind.
+// Exercises both subnet and except validation paths through the
+// full pipeline. Two malformed entries (one bad subnet + one bad
+// except next to a valid subnet) must produce TWO blocker findings
+// with distinct path indices, so an operator with multiple typos
+// sees all of them in one Phase 1 pass.
+func TestPreflightValidateResources_NetAddrFinding_NetworkRuleConfig_Blocks(t *testing.T) {
+	t.Parallel()
+
+	snapshot := applycheck.HostSnapshot{
+		Links: []string{"eth0"},
+		Disks: []applycheck.DiskInfo{{DevPath: "/dev/sda"}},
+	}
+
+	rendered := []byte(`version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: rule-broken
+portSelector:
+  ports: [22]
+  protocol: tcp
+ingress:
+  - subnet: 192.0.2.0/24
+  - subnet: notacidr
+  - subnet: 10.0.0.0/24
+    except: 999.999.0.1/30
+`)
+
+	buf := &bytes.Buffer{}
+	err := preflightValidateResources(
+		context.Background(),
+		stubLinksDisksReader(snapshot, true),
+		rendered,
+		buf,
+	)
+	if err == nil {
+		t.Fatal("expected malformed NetworkRuleConfig ingress fields to block Phase 1, got nil")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "ingress[1].subnet") {
+		t.Errorf("preflight output should cite ingress[1].subnet (the malformed subnet); got %q", out)
+	}
+
+	if !strings.Contains(out, "ingress[2].except") {
+		t.Errorf("preflight output should cite ingress[2].except (the malformed except); got %q", out)
+	}
+
+	if strings.Contains(out, "ingress[0]") {
+		t.Errorf("ingress[0].subnet is valid (192.0.2.0/24) and must NOT be cited; got %q", out)
+	}
+}
+
+// TestPreflightValidateResources_NetAddrFinding_ValidPasses pins the
+// happy path of the new walker integration: a rendered config with
+// valid host:port endpoints (IPv4 and IPv6) must NOT block. Catches
+// the symmetric regression where the walker flags valid input as
+// malformed.
+func TestPreflightValidateResources_NetAddrFinding_ValidPasses(t *testing.T) {
+	t.Parallel()
+
+	snapshot := applycheck.HostSnapshot{
+		Links: []string{"eth0", "eth1"},
+		Disks: []applycheck.DiskInfo{{DevPath: "/dev/sda"}},
+	}
+
+	rendered := []byte(`version: v1alpha1
+machine:
+  type: controlplane
+  install:
+    disk: /dev/sda
+---
+apiVersion: v1alpha1
+kind: WireguardConfig
+name: wg-ok
+peers:
+  - publicKey: AAA
+    endpoint: 192.0.2.10:51820
+  - publicKey: BBB
+    endpoint: "[2001:db8::1]:51820"
+---
+apiVersion: v1alpha1
+kind: StaticHostConfig
+name: 192.0.2.20
+hostnames:
+  - host1.example
+`)
+
+	buf := &bytes.Buffer{}
+	err := preflightValidateResources(
+		context.Background(),
+		stubLinksDisksReader(snapshot, true),
+		rendered,
+		buf,
+	)
+	if err != nil {
+		t.Errorf("valid net-addr fields should pass Phase 1, got err=%v, output=%q", err, buf.String())
+	}
+}
+
+// TestPreviewDrift_MaintenanceMessage_EmptyNodeIDPreservesBareLine
+// pins the single-node UX regression guard: when nodeID is empty (the
+// implicit-single-node path), the maintenance line must stay bare —
+// no leading "node : " prefix. Without this pin, a prefix-always-on
+// implementation would produce "node : talm: ..." which is uglier
+// than today's bare output for the common single-node case.
+func TestPreviewDrift_MaintenanceMessage_EmptyNodeIDPreservesBareLine(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	err := previewDrift(
+		context.Background(),
+		stubMachineConfigReader(nil, false, nil),
+		[]byte(renderedV1_12Multidoc),
+		"",
+		buf,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("previewDrift on insecure path should not block, got err=%v", err)
+	}
+
+	out := buf.String()
+
+	want := "talm: " + maintenanceConnectionMessage
+	if !strings.Contains(out, want) {
+		t.Errorf("empty nodeID: maintenance-connection line must remain present; want substring %q, got:\n%s", want, out)
+	}
+
+	if strings.Contains(out, "node : ") {
+		t.Errorf("empty nodeID: must NOT produce 'node : ' prefix; got:\n%s", out)
 	}
 }

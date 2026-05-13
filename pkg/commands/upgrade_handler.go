@@ -28,19 +28,48 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// postUpgradeReconcileWindow is how long we wait after talosctl
-// upgrade returns before re-reading the running version. Talos
-// reboots and reaches "running" stage in well under a minute on
-// healthy hardware; auto-rollback adds ~30s on top of that. 90s
-// covers both paths with margin.
-const postUpgradeReconcileWindow = 90 * time.Second
+const (
+	// upgradeCmdName is the upstream cobra command name for the
+	// upgrade subcommand. Used by both the dispatch site and the
+	// per-command wrapper tests.
+	upgradeCmdName = "upgrade"
+
+	// defaultPostUpgradeReconcileWindow is how long we wait after
+	// talosctl upgrade returns before re-reading the running
+	// version. Talos reboots and reaches "running" stage in well
+	// under a minute on healthy hardware; auto-rollback adds ~30s
+	// on top of that. 90s covers both paths with margin. Operators
+	// with slow hardware widen via --post-upgrade-reconcile-window.
+	defaultPostUpgradeReconcileWindow = 90 * time.Second
+)
 
 // upgradeCmdFlags carries the talm-side flags layered on top of the
 // talosctl-derived upgrade command (set up in wrapUpgradeCommand).
 //
 //nolint:gochecknoglobals // command-scoped flag struct, mirrors applyCmdFlags pattern.
 var upgradeCmdFlags struct {
-	skipPostUpgradeVerify bool
+	skipPostUpgradeVerify      bool
+	postUpgradeReconcileWindow time.Duration
+}
+
+// validatePostUpgradeReconcileWindow rejects non-positive durations.
+// A zero or negative window would have the version-read loop run
+// while the node is still rebooting and surface a false "rollback"
+// verdict every time — far worse failure mode than a small range
+// check up front.
+//
+// Hint mentions "positive duration" verbatim so the boundary test
+// can pin the contract against future copy drift.
+func validatePostUpgradeReconcileWindow(window time.Duration) error {
+	if window <= 0 {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("--post-upgrade-reconcile-window must be a positive duration; got %s", window),
+			"pass a positive duration like 90s or 2m — the default is 90s",
+		)
+	}
+
+	return nil
 }
 
 // wrapUpgradeCommand adds special handling for upgrade command: extract image from config and set --image flag
@@ -50,7 +79,21 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
 		"skip the post-upgrade check that compares running Talos version against the target image's tag (Phase 2C; detects silent A/B rollback per #175)")
 
+	wrappedCmd.Flags().DurationVar(&upgradeCmdFlags.postUpgradeReconcileWindow, "post-upgrade-reconcile-window", defaultPostUpgradeReconcileWindow,
+		"how long to wait after upgrade returns before re-reading the running version; widen for slow hardware / large image pulls")
+
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		// Fail-fast on a bad --post-upgrade-reconcile-window BEFORE
+		// any talosctl upgrade RPC fires. A zero / negative value
+		// reaching the Phase 2C wait would fall through to the
+		// version-read loop while the node is still rebooting and
+		// always report 'rollback'. Worse — the upgrade itself has
+		// already executed by then; the operator's mistake gets
+		// validated after the partial state change. Validate first.
+		if err := validatePostUpgradeReconcileWindow(upgradeCmdFlags.postUpgradeReconcileWindow); err != nil {
+			return err
+		}
+
 		// Get config files from --file flag
 		var filesToProcess []string
 
@@ -249,6 +292,10 @@ func runPostUpgradeVersionVerify(parentCtx context.Context, image string) error 
 		parentCtx = context.Background()
 	}
 
+	if err := validatePostUpgradeReconcileWindow(upgradeCmdFlags.postUpgradeReconcileWindow); err != nil {
+		return err
+	}
+
 	return WithClient(func(ctx context.Context, c *client.Client) error {
 		ctxNodes := []string(nil)
 		if cfg := c.GetConfigContext(); cfg != nil {
@@ -257,7 +304,7 @@ func runPostUpgradeVersionVerify(parentCtx context.Context, image string) error 
 
 		nodes := resolveUpgradeTargetNodes(GlobalArgs.Nodes, ctxNodes)
 
-		return runPostUpgradeVersionVerifyInner(parentCtx, ctx, nodes, image, cosiVersionReader(c), postUpgradeReconcileWindow, os.Stderr)
+		return runPostUpgradeVersionVerifyInner(parentCtx, ctx, nodes, image, cosiVersionReader(c), upgradeCmdFlags.postUpgradeReconcileWindow, os.Stderr)
 	})
 }
 
@@ -317,7 +364,7 @@ func runPostUpgradeVersionVerifyInner(
 
 	for _, node := range nodes {
 		nodeCtx := client.WithNode(clientCtx, node)
-		if err := verifyPostUpgradeVersion(nodeCtx, read, image, stderr); err != nil {
+		if err := verifyPostUpgradeVersion(nodeCtx, read, image, reconcileWindow, stderr); err != nil {
 			perNodeErrs = append(perNodeErrs, errors.Wrapf(err, "node %s", node))
 		}
 	}
