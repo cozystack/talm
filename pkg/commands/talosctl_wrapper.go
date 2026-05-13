@@ -282,7 +282,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	}
 
 	// Special handling for upgrade command
-	if baseCmdName == "upgrade" {
+	if baseCmdName == upgradeCmdName {
 		wrapUpgradeCommand(wrappedCmd, originalRunE)
 	}
 

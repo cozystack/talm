@@ -19,6 +19,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/errors"
 )
@@ -109,6 +110,7 @@ func TestVerifyPostUpgradeVersion_Match_NoError(t *testing.T) {
 		context.Background(),
 		stubReader("v1.13.0", true),
 		"ghcr.io/siderolabs/installer:v1.13.0",
+		time.Millisecond,
 		buf,
 	)
 	if err != nil {
@@ -132,6 +134,7 @@ func TestVerifyPostUpgradeVersion_MinorMismatch_Blocks(t *testing.T) {
 		context.Background(),
 		stubReader("v1.12.6", true),
 		"ghcr.io/siderolabs/installer:v1.13.0",
+		time.Millisecond,
 		buf,
 	)
 	if err == nil {
@@ -159,6 +162,7 @@ func TestVerifyPostUpgradeVersion_PatchVersion_Match(t *testing.T) {
 		context.Background(),
 		stubReader("v1.12.6", true),
 		"ghcr.io/cozystack/cozystack/talos:v1.12.7",
+		time.Millisecond,
 		&bytes.Buffer{},
 	)
 	if err != nil {
@@ -189,6 +193,7 @@ func TestVerifyPostUpgradeVersion_UnparseableTag_Skip(t *testing.T) {
 				context.Background(),
 				stubReader("v1.12.6", true),
 				image,
+				time.Millisecond,
 				&bytes.Buffer{},
 			)
 			if err != nil {
@@ -219,6 +224,7 @@ func TestVerifyPostUpgradeVersion_ReaderConnectionRefused_NotSilent(t *testing.T
 		context.Background(),
 		stubReaderErr(errors.New("connection refused")),
 		"ghcr.io/siderolabs/installer:v1.13.0",
+		time.Millisecond,
 		buf,
 	)
 	if err == nil {
@@ -258,6 +264,7 @@ func TestVerifyPostUpgradeVersion_ReaderFails_SoftWarning_NoBlock(t *testing.T) 
 		context.Background(),
 		stubReader("", false),
 		"ghcr.io/siderolabs/installer:v1.13.0",
+		time.Millisecond,
 		buf,
 	)
 	if err != nil {
@@ -292,6 +299,7 @@ func TestVerifyPostUpgradeVersion_ReaderFails_BestEffort(t *testing.T) {
 		context.Background(),
 		stubReader("", false),
 		"ghcr.io/siderolabs/installer:v1.13.0",
+		time.Millisecond,
 		buf,
 	)
 	if err != nil {

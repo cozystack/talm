@@ -772,6 +772,68 @@ func TestCosiPreflightContext_LeavesNoMetadataAlone(t *testing.T) {
 	}
 }
 
+// TestCosiPreflightContext_NoMetadata_FallsBackToGlobalArgsNodes pins
+// the per-node prefix on the maintenance / insecure path. Maintenance
+// flow goes through openClientPerNodeMaintenance which mutates
+// GlobalArgs.Nodes to the singular target node but does NOT attach
+// outgoing-context metadata — apid's maintenance client reads node
+// from GlobalArgs directly. Without this fallback, cosiPreflightContext
+// would return nodeID="" on the insecure path even with --nodes set
+// explicitly, and the per-node prefix on the drift-preview /
+// maintenance-warning lines silently disappears.
+//
+// Surfaced by real-env testing: `talm apply -i --skip-resource-
+// validation` against a healthy node produced the bare line `talm:
+// drift verification unavailable on maintenance connection` instead
+// of the node-prefixed form. The unit suite passed cleanly with
+// that regression in place because the synthetic tests for
+// previewDrift call the function with an explicit nodeID arg —
+// they don't exercise the cosiPreflightContext → previewDrift
+// wiring.
+func TestCosiPreflightContext_NoMetadata_FallsBackToGlobalArgsNodes(t *testing.T) {
+	saved := append([]string(nil), GlobalArgs.Nodes...)
+
+	t.Cleanup(func() { GlobalArgs.Nodes = saved })
+
+	GlobalArgs.Nodes = []string{"192.0.2.10"}
+
+	in := context.Background()
+
+	_, nodeID, err := cosiPreflightContext(in)
+	if err != nil {
+		t.Fatalf("cosiPreflightContext: %v", err)
+	}
+
+	if nodeID != "192.0.2.10" {
+		t.Errorf("maintenance ctx with no outgoing metadata should fall back to GlobalArgs.Nodes[0]; got nodeID=%q, want %q", nodeID, "192.0.2.10")
+	}
+}
+
+// TestCosiPreflightContext_NoMetadata_MultipleGlobalArgsNodes_NoFallback
+// pins that the fallback is single-node-only. Multi-node maintenance
+// apply hits openClientPerNodeMaintenance once per node — by the time
+// cosiPreflightContext sees the call, GlobalArgs.Nodes is already
+// scoped to one element. If somehow a multi-element slice leaks
+// through here, falling back to GlobalArgs.Nodes[0] would silently
+// pick the first and hide the bug. Stay empty in that case so the
+// per-node prefix collapses to bare-line rather than wrong-line.
+func TestCosiPreflightContext_NoMetadata_MultipleGlobalArgsNodes_NoFallback(t *testing.T) {
+	saved := append([]string(nil), GlobalArgs.Nodes...)
+
+	t.Cleanup(func() { GlobalArgs.Nodes = saved })
+
+	GlobalArgs.Nodes = []string{"192.0.2.10", "192.0.2.11"}
+
+	_, nodeID, err := cosiPreflightContext(context.Background())
+	if err != nil {
+		t.Fatalf("cosiPreflightContext: %v", err)
+	}
+
+	if nodeID != "" {
+		t.Errorf("multi-element GlobalArgs.Nodes must NOT use fallback (per-node loop should have scoped to one already); got nodeID=%q, want empty", nodeID)
+	}
+}
+
 // TestCosiPreflightContext_RejectsMultiNodeCtx pins that a multi-
 // element plural slice surfaces as an explicit error rather than a
 // silent passthrough. applyTemplatesPerNode iterates one node at a

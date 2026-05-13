@@ -67,6 +67,7 @@ var applyCmdFlags struct {
 	skipResourceValidation bool
 	skipDriftPreview       bool
 	skipPostApplyVerify    bool
+	showSecretsInDrift     bool
 }
 
 //nolint:gochecknoglobals // cobra command, idiomatic for cobra-based CLIs
@@ -404,7 +405,7 @@ func runPreApplyGates(ctx context.Context, c *client.Client, rendered []byte, no
 		return nil
 	}
 
-	return previewDrift(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), rendered, nodeID, w)
+	return previewDrift(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), rendered, nodeID, w, applyCmdFlags.showSecretsInDrift)
 }
 
 // shouldRunDriftPreview is the testable predicate for Phase 2A
@@ -441,7 +442,7 @@ func runPostApplyGate(ctx context.Context, c *client.Client, sent []byte, nodeID
 		return nil
 	}
 
-	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w)
+	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w, applyCmdFlags.showSecretsInDrift)
 }
 
 // shouldRunPostApplyVerify is the testable predicate for runPostApplyGate.
@@ -670,8 +671,20 @@ func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClie
 // ctx through to a COSI call that apid will reject — the latter is
 // the exact silent no-op this helper exists to prevent.
 func cosiPreflightContext(ctx context.Context) (context.Context, string, error) {
+	//nolint:varnamelen // 'md' is the canonical short name for grpc metadata.MD across the codebase.
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
+		// Maintenance / insecure path: openClientPerNodeMaintenance
+		// pins the current node in GlobalArgs.Nodes but does not
+		// attach outgoing-context metadata (the maintenance client
+		// reads node directly from GlobalArgs). Fall back to the
+		// single-element GlobalArgs.Nodes so per-node-prefixed
+		// stderr lines (drift / divergence / maintenance warning)
+		// still disambiguate.
+		if len(GlobalArgs.Nodes) == 1 {
+			return ctx, GlobalArgs.Nodes[0], nil
+		}
+
 		return ctx, "", nil
 	}
 
@@ -881,6 +894,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands; see #172)")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted; cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.)")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 
 	addCommand(applyCmd)

@@ -17,10 +17,15 @@ package commands
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/errors"
+	"github.com/spf13/cobra"
 )
 
 // TestResolveUpgradeTargetNodes_CLINodesWin pins the resolution
@@ -258,5 +263,205 @@ func TestRunPostUpgradeVersionVerifyInner_NonEmptyNodes_WaitsAndVerifies(t *test
 
 	if !strings.Contains(buf.String(), "waiting") {
 		t.Errorf("non-empty path should print the 'waiting' line, got %q", buf.String())
+	}
+}
+
+// TestDefaultPostUpgradeReconcileWindow_Is90s pins back-compat for
+// #190: the upgrade flow defaulted to a hard-coded 90s wait before
+// the flag was introduced; the new --post-upgrade-reconcile-window
+// must register the same value as its default so operators who
+// never pass the flag observe byte-identical timing.
+func TestDefaultPostUpgradeReconcileWindow_Is90s(t *testing.T) {
+	t.Parallel()
+
+	if defaultPostUpgradeReconcileWindow != 90*time.Second {
+		t.Errorf("default reconcile window changed: got %s, want 90s — back-compat regression (#190)", defaultPostUpgradeReconcileWindow)
+	}
+}
+
+// TestUpgradeFlag_PostUpgradeReconcileWindow_Registered pins the
+// flag registration: wrapUpgradeCommand must register a
+// --post-upgrade-reconcile-window DurationVar with the 90s default,
+// so `talm upgrade --help` discoverably surfaces the tunable.
+func TestUpgradeFlag_PostUpgradeReconcileWindow_Registered(t *testing.T) {
+	t.Parallel()
+
+	cmd := &cobra.Command{Use: upgradeCmdName}
+	wrapUpgradeCommand(cmd, nil)
+
+	flag := cmd.Flag("post-upgrade-reconcile-window")
+	if flag == nil {
+		t.Fatal("--post-upgrade-reconcile-window must be registered by wrapUpgradeCommand")
+	}
+
+	if flag.DefValue != "1m30s" {
+		t.Errorf("flag default rendered as %q, want %q (DurationVar formats 90s as 1m30s)", flag.DefValue, "1m30s")
+	}
+
+	// Cobra auto-appends "(default <Value>)" to the rendered Usage
+	// line for any flag with a non-zero default. If the inline
+	// Usage string also carries "(default ...)", `--help` renders
+	// two confusing clauses. Pin that there is exactly one literal
+	// "(default" substring in the rendered line.
+	rendered := cmd.UsageString()
+
+	if count := strings.Count(rendered, "(default"); count != 1 {
+		t.Errorf("--post-upgrade-reconcile-window: rendered Usage has %d '(default' clauses; want exactly 1 (cobra auto-appends, inline Usage must not duplicate)", count)
+	}
+}
+
+// TestValidatePostUpgradeReconcileWindow_ZeroRejected pins the
+// non-positive-rejection contract. Passing 0s would emit
+// "waiting 0s for the node to finish booting..." and immediately
+// fall through to the version-read loop while Talos is still
+// rebooting — the test would always report "rollback" because
+// the old version is still running. Reject explicitly with a
+// hint pointing at sensible values.
+func TestValidatePostUpgradeReconcileWindow_ZeroRejected(t *testing.T) {
+	t.Parallel()
+
+	err := validatePostUpgradeReconcileWindow(0)
+	if err == nil {
+		t.Fatal("zero must be rejected — fall-through to version read while node is rebooting would always report rollback")
+	}
+
+	hints := errors.GetAllHints(err)
+
+	found := false
+
+	for _, h := range hints {
+		if strings.Contains(h, "positive duration") {
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("hint must mention 'positive duration' so operators see a recovery path; got hints: %v", hints)
+	}
+}
+
+// TestValidatePostUpgradeReconcileWindow_NegativeRejected is the
+// boundary partner of the zero case. A negative DurationVar value
+// (e.g. --post-upgrade-reconcile-window=-30s) parses fine via
+// pflag but is operationally nonsensical; the validation must
+// reject it with the same hint shape.
+func TestValidatePostUpgradeReconcileWindow_NegativeRejected(t *testing.T) {
+	t.Parallel()
+
+	err := validatePostUpgradeReconcileWindow(-30 * time.Second)
+	if err == nil {
+		t.Fatal("negative duration must be rejected")
+	}
+}
+
+// TestValidatePostUpgradeReconcileWindow_PositiveAccepted pins the
+// happy path: any positive duration (1 ms, 90 s, 10 m) is accepted.
+// Without this case the validator could regress to always-reject
+// and the failing-zero / failing-negative tests would still pass.
+func TestValidatePostUpgradeReconcileWindow_PositiveAccepted(t *testing.T) {
+	t.Parallel()
+
+	for _, d := range []time.Duration{time.Millisecond, 90 * time.Second, 10 * time.Minute} {
+		if err := validatePostUpgradeReconcileWindow(d); err != nil {
+			t.Errorf("positive duration %s must be accepted, got: %v", d, err)
+		}
+	}
+}
+
+// TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE
+// pins fail-fast semantics on the reconcile-window flag: a zero or
+// negative value must reject BEFORE the talosctl upgrade RPC fires.
+// Validating only inside Phase 2C (after the RPC) would mean an
+// operator's typo lands a partial upgrade before the validation
+// surfaces, then surfaces a 'rollback' hint that's actually 'you
+// passed 0s'.
+//
+// The test installs wrapUpgradeCommand with a sentinel originalRunE
+// that flips a boolean if invoked, sets the flag to 0s, runs RunE,
+// and asserts (1) error returned with the hint, (2) originalRunE
+// was NOT called.
+func TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE(t *testing.T) {
+	saved := upgradeCmdFlags.postUpgradeReconcileWindow
+
+	t.Cleanup(func() { upgradeCmdFlags.postUpgradeReconcileWindow = saved })
+
+	originalRunECalled := false
+	originalRunE := func(_ *cobra.Command, _ []string) error {
+		originalRunECalled = true
+
+		return nil
+	}
+
+	cmd := &cobra.Command{Use: upgradeCmdName}
+	wrapUpgradeCommand(cmd, originalRunE)
+
+	upgradeCmdFlags.postUpgradeReconcileWindow = 0
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected fail-fast on 0s reconcile window, got nil")
+	}
+
+	hints := errors.GetAllHints(err)
+
+	found := false
+
+	for _, h := range hints {
+		if strings.Contains(h, "positive duration") {
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("error must carry 'positive duration' hint; got hints: %v", hints)
+	}
+
+	if originalRunECalled {
+		t.Error("originalRunE (talosctl upgrade RPC) must NOT be invoked when reconcile-window validation rejects the flag — operator's typo would land a partial upgrade")
+	}
+}
+
+// TestReadmePostUpgradeVerify_NoHardcoded90s mirrors
+// TestPostUpgradeVersionMismatchHint_NoHardcoded90s for the
+// operator-facing README. The pre-#190 README claimed "waits 90s
+// for the node to finish booting"; after #190 the window is
+// operator-tunable via --post-upgrade-reconcile-window. The README
+// bullet must reference "the configured reconcile window" rather
+// than a literal 90s so an operator running with a custom window
+// does not read contradictory documentation. Pin the absence of
+// the literal so a future README edit re-introducing it fails this
+// test.
+func TestReadmePostUpgradeVerify_NoHardcoded90s(t *testing.T) {
+	t.Parallel()
+
+	readmePath := filepath.Join("..", "..", "README.md")
+
+	body, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Skipf("README.md not present at %s (likely a vendored source release without the repo layout): %v", readmePath, err)
+	}
+
+	if strings.Contains(string(body), "waits 90s") {
+		t.Errorf("README.md must not hardcode 'waits 90s' — the post-upgrade reconcile window is operator-tunable via --post-upgrade-reconcile-window; replace with 'the configured reconcile window (default 90s, tune via --post-upgrade-reconcile-window)'")
+	}
+}
+
+// TestPostUpgradeVersionMismatchHint_NoHardcoded90s catches future
+// drift in the hint text. The original const baked "90s reconcile
+// window" verbatim; with the new flag, operators running
+// --post-upgrade-reconcile-window=180s would see "the 90s reconcile
+// window" in the version-mismatch hint, which contradicts what
+// they typed on the command line. Pin the absence of the literal
+// "90s" so a future "helpful clarification" reintroducing it
+// fails this test.
+func TestPostUpgradeVersionMismatchHint_NoHardcoded90s(t *testing.T) {
+	t.Parallel()
+
+	if strings.Contains(postUpgradeVersionMismatchHint, "90s") {
+		t.Errorf("hint must not hardcode 90s — operators passing --post-upgrade-reconcile-window=<custom> see misleading copy; got: %q", postUpgradeVersionMismatchHint)
 	}
 }

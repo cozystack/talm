@@ -47,6 +47,29 @@ Run all matrix cells against the binary at `/tmp/talm-safety`. Use a 3-node Talo
 | Boundary case (exactly 11) | 11 links on the host, bad ref | First 10 inline + `... and 1 more` (the suffix fires at >10, not at >=10) |
 | Empty candidate set | Selector matches zero, no real candidates either (mock) | Hint says `<none>` rather than empty trailing space |
 
+### Net-addr field references
+
+The Phase 1 walker validates the syntactic shape of net-addr fields in three v1alpha1 multidoc kinds. Pure syntactic — no host snapshot — runs alongside the Ref-based walker via `multidocNetAddrHandlers`. Field names match the actual Talos `network` schema (see `siderolabs/talos/pkg/machinery/config/types/network/`).
+
+| Case | How to trigger | Expected |
+| --- | --- | --- |
+| Bad `StaticHostConfig.name` | `StaticHostConfig{name: 999.999.0.1, hostnames: [foo]}` — the `name` field carries the IP literal in this kind | Blocker "StaticHostConfig.name is not a valid IP literal" with hint listing IPv4/IPv6 examples |
+| Valid IPv4 / IPv6 | `name: 192.0.2.10` / `name: 2001:db8::1` | No finding |
+| Missing `name` | Omit the field | No finding (Talos rejects at RPC with a clearer required-field message) |
+| Hostname-shaped name | `name: example.invalid` | Blocker — `name` is required to be an IP literal, not a DNS name |
+| Bad `NetworkRuleConfig.ingress[i].subnet` | `ingress: [{subnet: notacidr}]` | Per-entry blocker citing `ingress[i].subnet` |
+| Bad `NetworkRuleConfig.ingress[i].except` | `ingress: [{subnet: 192.0.2.0/24, except: notacidr}]` | Blocker on `except` even when `subnet` is valid |
+| Bare IP without /N | `ingress: [{subnet: 192.0.2.10}]` | Blocker — schema is CIDR-shaped, not IP-shaped |
+| Valid CIDR mix | IPv4 + IPv6 CIDRs across `ingress[].subnet` | No findings |
+| Bad `WireguardConfig.peers[].endpoint` | One peer `endpoint: notavalid:endpoint` | Per-peer blocker citing `peers[i].endpoint` |
+| Valid IPv4:port | `endpoint: 192.0.2.10:51820` | No finding |
+| Valid bracketed IPv6:port | `endpoint: "[2001:db8::1]:51820"` | No finding |
+| Empty `endpoint` | `endpoint: ""` | No finding (peer is listener-only — this side does not initiate) |
+| Missing `endpoint` field | Omit the field | No finding |
+| Unknown multidoc kind | A new kind not in the dispatch map | No finding (Talos extensions / future kinds do not break the gate) |
+| Real-schema pin | `TestWalkNetAddrFindings_RealSchema_StaticHostConfig` / `..._NetworkRuleConfig` feed the actual schema shape (`name` carrying the IP, `ingress[].subnet/except` for CIDRs) — the walker fires on what Talos emits, not on a hand-crafted YAML the schema doesn't produce |
+| No-overlap pin | Adding a kind to both `multidocHandlers` AND `multidocNetAddrHandlers` | `TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers` fails — double-walking would produce duplicate findings |
+
 ### Opt-out
 
 | Case | Trigger | Expected |
@@ -78,7 +101,27 @@ Run all matrix cells against the binary at `/tmp/talm-safety`. Use a 3-node Talo
 | `--mode=staged` | `talm apply --mode=staged -f node.yaml` | Phase 2A runs (operator still wants to see what got staged) |
 | `--mode=try` | `talm apply --mode=try -f node.yaml` | Phase 2A runs (mirrors --mode=auto from the preview's perspective) |
 | Insecure path | `talm apply -i -f node.yaml` (where chart can render offline) | `talm: drift verification unavailable on maintenance connection`; no block |
+| Insecure path, multi-node | `talm apply -i --nodes a,b -f node.yaml` (each iteration through `openClientPerNodeMaintenance`) | Per-node-prefixed line `node a: talm: drift verification unavailable …` and `node b: talm: …` — disambiguation cohort over the maintenance-warning emission |
+| Insecure path, single node | `talm apply -i -f node.yaml` with single `--nodes` | Still gets `node X: talm: …` prefix because `cosiPreflightContext` falls back to `GlobalArgs.Nodes[0]` when there is no outgoing-context metadata |
+| Insecure path, empty nodeID | Unusual call shape with `GlobalArgs.Nodes` somehow empty | Bare `talm: drift verification unavailable …` line — never `node : …` garbage prefix |
 | `--skip-drift-preview` | Pass with any change | Preview suppressed entirely |
+
+### Secret-bearing field redaction
+
+The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`).
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Cluster secret rotation | Change `cluster.token` via `secrets.yaml` rotation | `cluster.token: ***redacted (len=N)*** -> ***redacted (len=M)***` — value never appears in stderr |
+| Machine token rotation | Change `machine.token` | Same shape; `machine.token: ***redacted (len=N)*** -> …` |
+| Array-indexed secret | Change `cluster.acceptedCAs[2].key` | Bracket-normalised match against `cluster.acceptedCAs[].key`; redacted |
+| Wireguard private key | Rotate `WireguardConfig.privateKey` | `privateKey: ***redacted (len=N)*** -> …` — bare path because the differ's flatten step does not prefix multidoc fields with the doc kind |
+| Wireguard pre-shared key | Rotate `peers[2].presharedKey` | Bracket-normalised; redacted |
+| Non-secret path | Change `machine.network.hostname` | Verbatim — operator-visible information is not redacted |
+| False-prefix guard | A non-secret path sharing a prefix (`cluster.tokenExtras`) | Verbatim — `isSecretPath` is path-segment exact, not substring prefix |
+| `--show-secrets-in-drift` | Pass with any secret rotation | Verbatim both sides on the secret line; sentinel never appears |
+| Non-string secret value | Hypothetical schema drift puts an int on a secret-bearing path | `***redacted (len=N)***` where N is the `%v` length; rotation signal survives non-string types (caveat: maps render with non-deterministic key order — disclaimed in the godoc) |
+| Slice-shaped secret path | Hypothetical future allowlist entry naming an array | Redacted via the secret check that runs BEFORE `bothSlices` — elements never leak through `formatSliceSetDiff` |
 
 ### Output pretty-print
 
@@ -126,6 +169,9 @@ On by default for `talm upgrade`. The gate fires after talosctl upgrade returns 
 | By-design unreachable | Reader returns `("", false, nil)` (cosiVersionReader does not produce this; reserved for future custom readers that need to surrender silently) | Soft warning line `post-upgrade verification skipped, could not read running version from the node`, no block. Distinguishable from the real-read-failure case via the err — three-valued contract makes the contract explicit |
 | Zero target nodes | `--nodes` empty and talosconfig context has no nodes either | Explanatory "skipped, no target nodes resolved" line (no silent no-op) |
 | Reconcile wait line | Any non-skipped run | "post-upgrade verify: waiting 1m30s for the node to finish booting..." printed up front so the operator's terminal isn't a mystery hang |
+| Configurable reconcile window | `talm upgrade --post-upgrade-reconcile-window=180s …` | "post-upgrade verify: waiting 3m0s for the node to finish booting..." — Go's `time.Duration.String()` renders 180s deterministically as `3m0s`. Hint copy references "the configured reconcile window (`--post-upgrade-reconcile-window`)" instead of the hardcoded "90s reconcile window" wording |
+| Window default | `talm upgrade --help` | Flag listed with `default 1m30s`; the const `defaultPostUpgradeReconcileWindow` preserves the previous hardcoded 90s for byte-identical back-compat |
+| Window non-positive | `talm upgrade --post-upgrade-reconcile-window=0s …` | Fail-fast error with hint mentioning "positive duration" — validation runs at the TOP of `wrapUpgradeCommand` RunE so the talosctl upgrade RPC never fires. Same shape for `-30s` (negative). Pinned by `TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE` which asserts the sentinel `originalRunE` stays uninvoked |
 
 ## Real-Talos validation
 
