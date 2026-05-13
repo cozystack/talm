@@ -202,9 +202,9 @@ func DetectProjectRootForFile(filePath string) (string, error) {
 }
 
 // ValidateAndDetectRootsForFiles resolves the project root for a
-// chain of `-f` files. Per #184, only the FIRST file anchors the
-// project root; subsequent files are loaded as patches without
-// re-running detection, so a chain like
+// chain of `-f` files. Only the FIRST file anchors the project
+// root; subsequent files are loaded as patches without re-running
+// detection, so a chain like
 // `talm apply -f nodes/cp01.yaml -f /tmp/side-patch.yaml`
 // is accepted — cp01.yaml carries the root, side-patch.yaml is
 // patched on top without needing its own Chart.yaml ancestor.
@@ -255,12 +255,12 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 
 func processModelineAndUpdateGlobals(configFile string, nodesFromArgs, endpointsFromArgs, overwrite bool) ([]string, error) {
 	// FindAndParseModeline accepts operator-authored comment / blank
-	// lines before the modeline (#178). Every workflow that consumes
-	// node files — apply, upgrade, template -I, completion, wrapped
-	// talosctl subcommands — must agree on file shape; the strict
-	// "first line must be modeline" rule of the old ReadAndParseModeline
-	// would silently break the apply / upgrade / talosctl path against
-	// files that template -I just produced.
+	// lines before the modeline. Every workflow that consumes node
+	// files — apply, upgrade, template -I, completion, wrapped
+	// talosctl subcommands — must agree on file shape; a strict
+	// "first line must be modeline" rule would silently break the
+	// apply / upgrade / talosctl path against files that
+	// template -I just produced.
 	_, modelineConfig, err := modeline.FindAndParseModeline(configFile)
 	if err != nil {
 		// Don't print the error here — cobra surfaces the wrapped

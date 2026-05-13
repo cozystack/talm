@@ -40,9 +40,9 @@ const postUpgradeVersionMismatchHint = "two hypotheses produce this symptom: " +
 // against the target version parsed from the installer image. Talos
 // auto-rolls back when a new boot fails its readiness check, but the
 // upgrade RPC has already acked — so success without verification is
-// false advertising. See cozystack/talm#175 for the reproduction
-// (cross-vendor installer image triggering an A/B rollback on a
-// 3-node OCI v1.12.6 stand).
+// false advertising. Reproducer: cross-vendor installer image
+// triggers an A/B rollback because the new partition fails its
+// boot readiness check; talosctl reports success regardless.
 //
 // Returns nil on match (or on best-effort read failure with --skip-* not
 // set; the caller decides). Returns a hint-bearing blocker on

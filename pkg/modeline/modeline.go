@@ -90,7 +90,7 @@ func ParseModeline(line string) (*Config, error) {
 // Returns the leading comment / blank lines verbatim (without trailing
 // `\n`), the parsed Config, and any error. `talm template -I` uses
 // the leading-lines return to preserve operator documentation when
-// the in-place rewrite overwrites the file (#178). Every other talm
+// the in-place rewrite overwrites the file. Every other talm
 // workflow that consumes node files (apply, upgrade, completion,
 // wrapped talosctl commands) calls this function too so the
 // file-shape contract is uniform across the surface.

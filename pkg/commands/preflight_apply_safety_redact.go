@@ -30,10 +30,9 @@ import (
 //     pre-shared keys.
 //  3. The path has a stable form in v1alpha1.
 //
-// Out of scope (matches the issue author's #189 scope): exhaustive
-// sweep over every Sensitive-marked field in the Talos v1alpha1
-// schema. The list grows issue-by-issue when an operator reports a
-// new leak; each addition should cite the symptom.
+// Out of scope: exhaustive sweep over every Sensitive-marked field
+// in the Talos v1alpha1 schema. The list grows when an operator
+// reports a new leak; each addition should cite the symptom.
 //
 // Bracket-normalisation lets array-indexed paths
 // (cluster.acceptedCAs[2].key) match the wildcard form

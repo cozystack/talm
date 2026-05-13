@@ -120,14 +120,14 @@ func completeNodeFiles(_ *cobra.Command, _ []string, toComplete string) ([]strin
 			continue
 		}
 
-		// FindAndParseModeline accepts leading operator comments per
-		// #178; using a strict first-line-only parser would hide
-		// files that `talm template -I` just produced from
-		// `talm apply <TAB>` / `talm upgrade <TAB>`. Both
-		// ErrModelineNotFound and malformed-modeline parse errors
-		// drop the candidate from the completion list — completion
-		// must not block on individual-file parse failures, and a
-		// malformed modeline is still not a useful tab target.
+		// FindAndParseModeline accepts leading operator comments;
+		// using a strict first-line-only parser would hide files
+		// that `talm template -I` just produced from `talm apply
+		// <TAB>` / `talm upgrade <TAB>`. Both ErrModelineNotFound
+		// and malformed-modeline parse errors drop the candidate
+		// from the completion list — completion must not block on
+		// individual-file parse failures, and a malformed modeline
+		// is still not a useful tab target.
 		if _, _, err := modeline.FindAndParseModeline(filepath.Join(root, path)); err != nil {
 			continue
 		}
@@ -139,14 +139,14 @@ func completeNodeFiles(_ *cobra.Command, _ []string, toComplete string) ([]strin
 }
 
 // CompleteTalosconfigNodes is the exported entry point for
-// completion of the root `--nodes` persistent flag (#170). main.go
-// wires it via cobra.RegisterFlagCompletionFunc.
+// completion of the root `--nodes` persistent flag. main.go wires
+// it via cobra.RegisterFlagCompletionFunc.
 //
 //nolint:gochecknoglobals // package-level var holding the closure produced by completeTalosconfigField; the alternative (per-call construction) re-allocates on every shell completion invocation.
 var CompleteTalosconfigNodes = completeTalosconfigField(flagNameNodes)
 
 // CompleteTalosconfigEndpoints is the exported entry point for
-// completion of the root `--endpoints` persistent flag (#170).
+// completion of the root `--endpoints` persistent flag.
 //
 //nolint:gochecknoglobals // see CompleteTalosconfigNodes.
 var CompleteTalosconfigEndpoints = completeTalosconfigField(flagNameEndpoints)

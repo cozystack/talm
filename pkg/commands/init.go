@@ -1281,8 +1281,8 @@ func init() {
 	initCmd.Flags().BoolVarP(&initCmdFlags.encrypt, "encrypt", "e", false, "encrypt all sensitive files (secrets.yaml, talosconfig, kubeconfig)")
 	initCmd.Flags().BoolVarP(&initCmdFlags.decrypt, "decrypt", "d", false, "decrypt all encrypted files (does not require preset)")
 
-	// Shell completion for `talm init --preset` (#170): preset names
-	// are baked in at build time via pkg/generated.
+	// Shell completion for `talm init --preset`: preset names are
+	// baked in at build time via pkg/generated.
 	_ = initCmd.RegisterFlagCompletionFunc("preset", completePresetNames)
 
 	addCommand(initCmd)

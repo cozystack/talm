@@ -101,7 +101,7 @@ type Change struct {
 // with different key ordering or whitespace produces the same Diff
 // output. Talos-mutated leaf fields (cert hashes etc.) currently land
 // as OpUpdate entries with FieldChange path pinpointing what differs;
-// an allowlist will be layered on later (see open question in #172).
+// an allowlist for Talos-mutated leaf fields will be layered on later.
 func Diff(current, desired []byte) ([]Change, error) {
 	currentDocs, err := parseDocs(current)
 	if err != nil {

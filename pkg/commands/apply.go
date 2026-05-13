@@ -87,9 +87,9 @@ var applyCmd = &cobra.Command{
 	Short: "Apply config to a Talos node",
 	Long: `Apply rendered configuration to a Talos node.
 
-Multi-file invocation (anchor + side-patches, per #184): the FIRST -f file
-is the anchor — it must carry a "# talm: nodes=[…], templates=[…]" modeline
-and lives under a project root (Chart.yaml + secrets.yaml). Subsequent -f
+Multi-file invocation (anchor + side-patches): the FIRST -f file is the
+anchor — it must carry a "# talm: nodes=[…], templates=[…]" modeline and
+live under a project root (Chart.yaml + secrets.yaml). Subsequent -f
 files are side-patches stacked on top of the anchor's rendered config in
 the order they appear; each is merged via the same overlay mechanism the
 anchor's node body uses. A single ApplyConfiguration is issued per node
@@ -163,17 +163,15 @@ func apply() error {
 		return err
 	}
 
-	// Pre-#184: each -f file ran through applyOneFile in turn, with
-	// each iteration producing its own ApplyConfiguration. For a
-	// chain like `-f node.yaml -f side-patch.yaml` that meant the
-	// second apply OVERWROTE the first — Talos replaces the whole
-	// MachineConfig per call. Per #184 the first file anchors the
-	// project root and any subsequent files are side-patches stacked
-	// on top of the first file's rendered config; the result is a
-	// single ApplyConfiguration per node carrying the composed
-	// bundle. Multiple modelined node files (the historical "apply
-	// to N nodes in one command" idiom) is still supported via the
-	// first file's modeline carrying `nodes=[…]`.
+	// Chain semantics: the first -f file anchors the project root
+	// and any subsequent files are side-patches stacked on top of
+	// the first file's rendered config; the result is a single
+	// ApplyConfiguration per node carrying the composed bundle.
+	// Talos replaces the whole MachineConfig per call, so per-file
+	// independent applies (as an earlier design did) would have the
+	// second apply overwrite everything the first wrote. Multiple
+	// nodes are still targetable from one invocation via the first
+	// file's modeline carrying `nodes=[…]`.
 	if len(expandedFiles) == 0 {
 		return nil
 	}
@@ -219,13 +217,15 @@ func resetGlobalArgsBetweenFiles(nodesFromArgs, endpointsFromArgs bool) {
 // sidePatches are present — side-patches are stacked on top of the
 // rendered config, which requires the chart templates from the
 // anchor's modeline. Single-file invocations (no side-patches)
-// retain the pre-#184 dispatch: modelined → template path,
-// non-modelined → direct-patch path.
+// dispatch by file shape: modelined → template path, non-modelined
+// → direct-patch path.
 //
-// Stack semantics (#184): the anchor's chart + body + each
-// sidePatch in order produces ONE composed config per node; one
-// ApplyConfiguration call is issued. Pre-#184 looped each file
-// independently, so the second apply overwrote the first.
+// Stack semantics: the anchor's chart + body + each sidePatch in
+// order produces ONE composed config per node; a single
+// ApplyConfiguration call is issued per node. Any design that
+// iterated each file as an independent apply would have the second
+// apply overwrite everything the first wrote, since Talos replaces
+// the whole MachineConfig per call.
 func applyOneFile(configFile string, sidePatches []string) error {
 	// Reject modelined files in the side-patch slots before any
 	// dispatch decisions. The apply chain treats file[0] as the
@@ -308,10 +308,11 @@ func applyOneFile(configFile string, sidePatches []string) error {
 //     before the modeline). The caller surfaces err to the
 //     operator so the real cause is visible.
 //
-// Pre-fix this returned a bare bool and swallowed all errors,
-// silently routing typoed modelines onto the direct-patch path
-// where the operator saw a misleading "no nodes" hint instead of
-// "parsing modeline: invalid JSON".
+// Distinguishing "no modeline" from "malformed modeline" is the
+// reason this helper exists. Returning a bare bool would conflate
+// the two, silently routing typoed modelines onto the direct-patch
+// path where the operator would see a misleading "no nodes" hint
+// instead of "parsing modeline: invalid JSON".
 func fileHasTalmModeline(configFile string) (bool, error) {
 	_, _, err := modeline.FindAndParseModeline(configFile)
 	if err == nil {
@@ -704,9 +705,9 @@ func shouldRunPostApplyVerify(mode machineapi.ApplyConfigurationRequest_Mode, dr
 		//
 		// Cost: AUTO applies that DON'T require a reboot lose their
 		// post-apply verify. Acceptable trade-off: the verify is
-		// default-off until the Talos-mutated-field allowlist lands
-		// (see #172), and an operator who needs verify-on-no-reboot
-		// can pass --mode=no-reboot explicitly.
+		// default-off pending a Talos-mutated-field allowlist, and
+		// an operator who needs verify-on-no-reboot can pass
+		// --mode=no-reboot explicitly.
 		machineapi.ApplyConfigurationRequest_AUTO:
 		return false
 	case machineapi.ApplyConfigurationRequest_NO_REBOOT:
@@ -960,12 +961,12 @@ func resolveAuthTemplateNodes(cliNodes []string, c *client.Client) []string {
 	return append([]string(nil), cfg.Nodes...)
 }
 
-// renderMergeAndApply is the per-node body shared by every apply mode.
-// sidePatches is the chain of additional -f files stacked on top of
-// the rooted configFile (#184). Each is merged in order via
+// renderMergeAndApply is the per-node body shared by every apply
+// mode. sidePatches is the chain of additional -f files stacked on
+// top of the rooted configFile. Each is merged in order via
 // engine.MergeFileAsPatch; the result is a single composed config
 // applied with one ApplyConfiguration call per node. Empty slice
-// (single -f file) reproduces the pre-#184 single-merge shape.
+// (single -f file) is a single-merge shape.
 //
 //nolint:gocritic // opts taken by value to mirror applyTemplatesPerNode's test-injection signature
 func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Options, configFile string, sidePatches []string, render renderFunc, apply applyFunc) error {
@@ -1126,7 +1127,7 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 
 func init() {
 	applyCmd.Flags().BoolVarP(&applyCmdFlags.insecure, "insecure", "i", false, "apply using the insecure (encrypted with no auth) maintenance service")
-	applyCmd.Flags().StringSliceVarP(&applyCmdFlags.configFiles, "file", "f", nil, "node config files / patches (`.yaml` / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere (#184).")
+	applyCmd.Flags().StringSliceVarP(&applyCmdFlags.configFiles, "file", "f", nil, "node config files / patches (`.yaml` / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere.")
 	applyCmd.Flags().StringVar(&applyCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	applyCmd.Flags().StringVar(&applyCmdFlags.withSecrets, "with-secrets", "", "use a secrets file generated using 'gen secrets'")
 	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
@@ -1137,7 +1138,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyCmdFlags.force, "force", false, "will overwrite existing files")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")
-	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands; see #172)")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands)")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted; cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.)")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 

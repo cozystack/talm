@@ -61,7 +61,7 @@ var templateCmd = &cobra.Command{
 	Long: `Render Talos configuration templates locally.
 
 Multi-file invocation note: unlike ` + "`talm apply`" + ` (where the first -f
-anchors and later -f files are stacked side-patches per #184),
+anchors and later -f files are stacked side-patches),
 ` + "`talm template -f a.yaml -f b.yaml -f c.yaml`" + ` renders each file
 independently driven by its own modeline. This is intentional —
 template's per-file render mirrors the "regenerate the artifact
@@ -190,8 +190,8 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 func templateOneFile(ctx context.Context, args []string, configFile string, firstFileProcessed *bool) error {
 	// FindAndParseModeline accepts operator-authored comment / blank
 	// lines before the modeline so `talm template -I` can preserve
-	// them on rewrite (#178). Anything other than `#`-prefixed
-	// comments or blanks before the modeline is still rejected.
+	// them on rewrite. Anything other than `#`-prefixed comments or
+	// blanks before the modeline is still rejected.
 	leadingComments, modelineConfig, err := modeline.FindAndParseModeline(configFile)
 	if err != nil {
 		return errors.Wrap(err, "modeline parsing failed")
@@ -250,7 +250,7 @@ func templateOneFile(ctx context.Context, args []string, configFile string, firs
 // can stay flat. leadingComments is the slice of operator-authored
 // `#`-prefixed / blank lines that lived above the modeline in the
 // source file; in-place mode prepends them to the rewritten file so
-// the operator's documentation survives the regeneration (#178).
+// the operator's documentation survives the regeneration.
 // Non in-place renders ignore leadingComments because the original
 // file is left untouched.
 func buildTemplateRunner(args []string, configFile string, leadingComments []string, firstFileProcessed *bool) func(ctx context.Context, c *client.Client) error {
@@ -499,7 +499,7 @@ func init() {
 // / blank lines that lived above the modeline in the source file
 // (returned by modeline.FindAndParseModeline) back at the top of
 // the rewritten output. Without this, `talm template -I` would
-// silently strip the leading comment block on every rewrite (#178).
+// silently strip the leading comment block on every rewrite.
 // Returns output unchanged when leading is empty (the conventional
 // case — modeline on line 1).
 func prependLeadingComments(leading []string, output string) string {

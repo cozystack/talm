@@ -154,7 +154,7 @@ diff /tmp/inplace-before.yaml nodes/node0.yaml
 cp /tmp/inplace-before.yaml nodes/node0.yaml  # restore
 ```
 
-Expected: `Updated.` on stdout. The rendered body replaces the previous body of the file — but **operator-authored comments above the modeline are preserved verbatim** (post-#178 behavior). Comments embedded in the YAML body still get overwritten, since `-I` re-renders the body and Helm has no way to round-trip user-edits made there.
+Expected: `Updated.` on stdout. The rendered body replaces the previous body of the file — but **operator-authored comments above the modeline are preserved verbatim**. Comments embedded in the YAML body still get overwritten, since `-I` re-renders the body and Helm has no way to round-trip user-edits made there.
 
 Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator note B\n# talm: ...\n<body>`. After `template -I -f nodes/node0.yaml`, the first two lines (`# Operator note A`, `# Operator note B`) MUST still be there, followed by the modeline, the talm-rendered warning header, then the body. Re-run idempotent: a second `template -I` keeps the same prefix structure — leading comments don't drift, multiply, or disappear.
 
@@ -636,11 +636,11 @@ Expected: every shell prints a script that parses (for bash/zsh syntax-check con
 /tmp/talm-safety template -f nodes/node0.yaml --set floatingIP=0700
 ```
 
-Expected: with the post-#163 chart, fails fast with `talm: floatingIP "0700" is not a valid IPv4 / IPv6 literal`. Pre-#163 chart silently renders an invalid VIP.
+Expected: with an IPv4-validating chart, fails fast with `talm: floatingIP "0700" is not a valid IPv4 / IPv6 literal`. A chart without the validation silently renders an invalid VIP.
 
 **Operator footgun**: `--set floatingIP=198.51.100.1` *may* be parsed as the float `198.51 × 100.1` by Helm's loose type-coercion. For IPs use `--set-string floatingIP="198.51.100.1"` or put it in `values.yaml`.
 
-Post-#182, `--set` emits a non-fatal warning to stderr when the RHS matches an IP-shaped or semver-shaped literal:
+`--set` emits a non-fatal warning to stderr when the RHS matches an IP-shaped or semver-shaped literal:
 
 ```bash
 /tmp/talm-safety template -f nodes/node0.yaml --set endpoint=10.0.0.1 2>&1 | grep "^talm:"
@@ -715,12 +715,12 @@ Expected: `warning: pre-flight: configured talosVersion=v1.13 is newer than the 
 
 ### K1-pre. Phase 2C version-verify catches silent rollback
 
-⚠️ Same destructive setup as K2, but the gate now does the work automatically. **Heads-up**: the target image lives in the node body (`nodes/<name>.yaml`'s `machine.install.image`), not in `values.yaml` — talm's upgrade wrapper reads it from the rendered config patch, not the chart values overlay (see #176).
+⚠️ Same destructive setup as K2, but the gate now does the work automatically. **Heads-up**: the upgrade wrapper resolves the target image from `values.yaml::image` (rendering the chart against current values), not from the rendered config that lives in `nodes/<name>.yaml`. Bump the image in `values.yaml` to trigger an intentionally-bad cross-vendor upgrade.
 
 Run an intentionally-bad cross-vendor upgrade and expect a hint-bearing blocker:
 
 ```bash
-sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' nodes/node0.yaml
+sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' values.yaml
 talm upgrade -f nodes/node0.yaml
 ```
 
@@ -797,7 +797,7 @@ Expected: no version-mismatch warning (chart contract matches running). Drift pr
 
 ### K5. Phase 2B on a heterogeneous cluster (mid-rollout)
 
-Between K2-step-1 (node0 upgraded) and K2-step-2 (node1 still on old version), Phase 1 still resolves `lookup "links"` (non-Sensitive COSI resource works on both versions). Phase 2A diffs against the specific node, so the cross-version state is per-node, not cluster-wide. Phase 2B (if enabled) compares against the bytes sent; expect cert-hash false-positives until the allowlist lands (see open question in #172).
+Between K2-step-1 (node0 upgraded) and K2-step-2 (node1 still on old version), Phase 1 still resolves `lookup "links"` (non-Sensitive COSI resource works on both versions). Phase 2A diffs against the specific node, so the cross-version state is per-node, not cluster-wide. Phase 2B (if enabled) compares against the bytes sent; expect cert-hash false-positives until the Talos-mutated-field allowlist lands.
 
 ## L. Extended diagnostics + service control
 

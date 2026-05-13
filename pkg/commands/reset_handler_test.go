@@ -37,11 +37,12 @@ func registerResetFlagsForTest(cmd *cobra.Command, wipeModeStore *string, labels
 	cmd.Flags().StringSliceVar(labelsStore, "system-labels-to-wipe", nil, "system disk partitions to wipe by label")
 }
 
-// TestWrapResetCommand_NoFlags_AppliesSafeDefault pins the headline
-// behaviour change for #185: when an operator runs `talm reset`
-// without choosing a wipe scope, the wrapper's PreRunE pre-populates
-// `--system-labels-to-wipe` with STATE,EPHEMERAL so the META
-// partition is preserved and the node self-recovers on reboot.
+// TestWrapResetCommand_NoFlags_AppliesSafeDefault pins the safe
+// default for `talm reset`: when an operator runs the command
+// without choosing a wipe scope, the wrapper's PreRunE
+// pre-populates `--system-labels-to-wipe` with STATE,EPHEMERAL so
+// the META partition is preserved and the node self-recovers on
+// reboot.
 //
 // `--wipe-mode` is intentionally left unchanged (still upstream's
 // default). The server-side reset codepath, when SystemPartitionsToWipe

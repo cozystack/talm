@@ -26,12 +26,12 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
 
-// TestApplyTemplatesPerNode_StacksSidePatches_SingleApplyPerNode pins
-// the #184 stack-semantics contract: when the operator passes
+// TestApplyTemplatesPerNode_StacksSidePatches_SingleApplyPerNode
+// pins the stack-semantics contract: when the operator passes
 // `talm apply -f anchor.yaml -f side1.yaml -f side2.yaml`, talm
 // must call ApplyConfiguration exactly ONCE per node with the
 // composed bundle, not three times where each later call
-// overwrites the earlier one. Pre-#184 the loop iterated each -f
+// overwrites the earlier one. An earlier design iterated each -f
 // file as an independent apply — Talos replaces the whole
 // MachineConfig per call, so the second/third apply silently
 // destroyed everything from the first.
@@ -97,7 +97,7 @@ func TestApplyTemplatesPerNode_StacksSidePatches_SingleApplyPerNode(t *testing.T
 	}
 
 	if len(applyBodies) != 1 {
-		t.Fatalf("apply must be called exactly once per node (the pre-#184 bug was N calls overwriting each other); got %d", len(applyBodies))
+		t.Fatalf("apply must be called exactly once per node (an earlier loop-per-file design called it N times, second apply overwriting the first); got %d", len(applyBodies))
 	}
 
 	final := string(applyBodies[0])
@@ -171,10 +171,10 @@ func TestApplyTemplatesPerNode_StacksSidePatches_LastWriterWins(t *testing.T) {
 }
 
 // TestApplyHelpText_DocumentsAnchorSidePatchContract pins that
-// `talm apply --help` surfaces the #184 multi-file contract:
-// first -f is the anchor (modelined, rooted), subsequent -f are
-// side-patches stacked on top. Operators reading --help should
-// not be surprised by the behaviour change from "batch independent
+// `talm apply --help` surfaces the multi-file contract: first -f
+// is the anchor (modelined, rooted), subsequent -f are side-
+// patches stacked on top. Operators reading --help should not be
+// surprised by the behaviour change from "batch independent
 // applies" to "stacked composition".
 func TestApplyHelpText_DocumentsAnchorSidePatchContract(t *testing.T) {
 	if !strings.Contains(applyCmd.Long, "side-patch") {

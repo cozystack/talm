@@ -100,8 +100,8 @@ func TestPropagatePersistentFlags_RenamesShorthandF(t *testing.T) {
 }
 
 // TestWrapTalosCommand_InheritsParentPersistentFlags pins the
-// structural contract behind #194: when an upstream parent registers
-// a persistent flag, every wrapped child must surface that flag in
+// structural contract: when an upstream parent registers a
+// persistent flag, every wrapped child must surface that flag in
 // its effective flag set. cobra's mergePersistentFlags walks the
 // wrapped parent's PersistentFlags() at parse time; if the wrapper
 // only copies LOCAL flags, persistent ones from the upstream parent
@@ -187,7 +187,7 @@ func TestWrapTalosCommand_RealImageListPropagatesNamespace(t *testing.T) {
 }
 
 // TestWrapCrashdumpCommand_PrepopulatesGlobalArgsNodes pins the
-// contract for #180: when crashdump's per-class node flags
+// contract: when crashdump's per-class node flags
 // (--init-node, --control-plane-nodes, --worker-nodes) are set
 // and GlobalArgs.Nodes is otherwise empty, the wrapper's PreRunE
 // populates GlobalArgs.Nodes from their union so the upstream
@@ -266,8 +266,8 @@ func TestWrapCrashdumpCommand_DoesNotShadowExistingNodes(t *testing.T) {
 }
 
 // TestWrapKubeconfigCommand_PositionalPathErrorMessageMatchesContract
-// pins the rewritten error message for #193. The previous wording
-// claimed `use --login flag to pass arguments`, which conflated two
+// pins the rewritten error message. The previous wording claimed
+// `use --login flag to pass arguments`, which conflated two
 // distinct things: --login switches the kubeconfig target between
 // local and system, it does not pass a positional path. The new
 // message describes what the wrapper actually does (default writes
@@ -333,8 +333,8 @@ func TestWrapKubeconfigCommand_PositionalPathErrorMessageMatchesContract(t *test
 }
 
 // TestWrapDmesgCommand_TailEqualsNumeric_RewritesError pins the
-// FlagErrorFunc cushion for #195. Upstream talosctl registers
-// --tail as a BoolVarP (toggling tail-mode for --follow), but
+// FlagErrorFunc cushion for `--tail=<n>` typo. Upstream talosctl
+// registers --tail as a BoolVarP (toggling tail-mode for --follow), but
 // operators' first instinct is tail(1)-style line count. `--tail=3`
 // trips pflag's ParseBool and surfaces a cryptic
 // 'strconv.ParseBool: parsing "3": invalid syntax' error.
@@ -401,8 +401,8 @@ func TestWrapDmesgCommand_TailEqualsNumeric_RewritesError(t *testing.T) {
 }
 
 // TestWrapTUICommand_NonTTY_RefusesWithHint pins the cushion for
-// #183 across BOTH wrapped interactive-only commands (dashboard,
-// edit). Each has a different upstream failure mechanism:
+// non-TTY invocations across BOTH wrapped interactive-only commands
+// (dashboard, edit). Each has a different upstream failure mechanism:
 // dashboard panics in tcell teardown, edit hangs in the kubectl
 // external-editor helper. The refusal here is the same shape for
 // both — clear cobra-surfaced error with operator-facing hint —

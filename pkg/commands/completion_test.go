@@ -290,7 +290,7 @@ func TestComplete_AnchorCommands_NoValidArgsFunction(t *testing.T) {
 
 // TestComplete_PositionalNodeFiles_IncludesFilesWithLeadingComments
 // pins that completion stays in sync with the modeline parser
-// relaxation (#178): a node file produced by `talm template -I`
+// relaxation: a node file produced by `talm template -I`
 // against a previously edited file carries a leading operator-
 // comment block above the modeline. Operators must still see it
 // in `talm apply <TAB>` / `talm upgrade <TAB>`. The dual-parser

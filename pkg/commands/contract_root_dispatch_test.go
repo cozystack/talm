@@ -375,7 +375,7 @@ func TestContract_DetectAndSetRoot_FromFileFlag(t *testing.T) {
 }
 
 // Contract: when -f points at files under DIFFERENT project roots,
-// the first file anchors the chain root (#184). The second file's
+// the first file anchors the chain root. The second file's
 // divergent root is no longer a failure — it is loaded as a patch
 // on top of the first file's project. This test pins the relaxed
 // contract; the previous strict-consistency rule was the same gate

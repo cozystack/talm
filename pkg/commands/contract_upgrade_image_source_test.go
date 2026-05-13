@@ -24,7 +24,7 @@ import (
 )
 
 // TestResolveUpgradeImageFromValues_ReadsImage pins the canonical
-// path for #176: `talm upgrade` reads its target installer image
+// path: `talm upgrade` reads its target installer image
 // from values.yaml (the source of truth for cluster-wide knobs),
 // not from the rendered node body. The previous implementation
 // called engine.FullConfigProcess on the node body and extracted

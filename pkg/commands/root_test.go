@@ -43,7 +43,7 @@ machine:
 // TestProcessModelineAndUpdateGlobals_AcceptsLeadingComments pins
 // that the modeline parser used by apply / upgrade / completion /
 // wrapped talosctl commands shares the same file-shape contract as
-// `talm template -I` (#178). Without this, a node file produced by
+// `talm template -I`. Without this, a node file produced by
 // the in-place rewrite — which preserves operator comments above
 // the modeline — would fail on the very next `talm apply -f` /
 // `talm upgrade -f` call against the same file.
@@ -70,7 +70,7 @@ func TestProcessModelineAndUpdateGlobals_AcceptsLeadingComments(t *testing.T) {
 
 	templates, err := processModelineAndUpdateGlobals(configFile, false, false, true)
 	if err != nil {
-		t.Fatalf("modeline parse must accept leading operator comments per #178; got error: %v", err)
+		t.Fatalf("modeline parse must accept leading operator comments; got error: %v", err)
 	}
 
 	if len(templates) != 1 || templates[0] != "templates/cp.yaml" {

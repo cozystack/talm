@@ -22,7 +22,7 @@ import (
 )
 
 // TestPrependLeadingComments_PreservesAllLines pins the canonical
-// in-place rewrite shape (#178): operator-authored `#`-prefixed
+// in-place rewrite shape: operator-authored `#`-prefixed
 // and blank lines that lived above the modeline in the source file
 // are re-emitted at the top of the regenerated content. Without
 // this guarantee, `talm template -I` silently strips operator

@@ -218,12 +218,12 @@ func TestContract_ValidateAndDetectRootsForFiles_SingleRoot(t *testing.T) {
 // inconsistent inputs (it cannot meaningfully merge two project
 // configs in one apply).
 // TestContract_ValidateAndDetectRootsForFiles_DifferentRoots_FirstFileWins
-// pins the post-#184 contract: the first `-f` file anchors the
-// project root; subsequent files in DIFFERENT roots are loaded as
-// patches without re-detecting. Pre-#184 the function loop-rejected
-// any divergence between filePaths[i] and filePaths[0]; that gate
-// was the same one blocking the side-patch use case (#184), so the
-// flip is the same change as for an outright-orphan second file.
+// pins the contract: the first `-f` file anchors the project root;
+// subsequent files in DIFFERENT roots are loaded as patches without
+// re-detecting. An earlier loop-rejected any divergence between
+// filePaths[i] and filePaths[0]; that gate was the same one
+// blocking the side-patch use case, so the flip is the same change
+// as for an outright-orphan second file.
 func TestContract_ValidateAndDetectRootsForFiles_DifferentRoots_FirstFileWins(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
@@ -251,7 +251,7 @@ func TestContract_ValidateAndDetectRootsForFiles_DifferentRoots_FirstFileWins(t 
 }
 
 // TestContract_ValidateAndDetectRootsForFiles_FirstRootedSecondOrphan_Accepted
-// pins the canonical side-patch case from #184: a rooted node file
+// pins the canonical side-patch case: a rooted node file
 // followed by a `-f /tmp/patch.yaml` outside any project. The first
 // file anchors the root, the orphan is loaded as a patch.
 func TestContract_ValidateAndDetectRootsForFiles_FirstRootedSecondOrphan_Accepted(t *testing.T) {
@@ -278,7 +278,7 @@ func TestContract_ValidateAndDetectRootsForFiles_FirstRootedSecondOrphan_Accepte
 
 	got, err := ValidateAndDetectRootsForFiles([]string{rootedFile, orphan})
 	if err != nil {
-		t.Fatalf("first-rooted + second-orphan must succeed under #184 contract; got error: %v", err)
+		t.Fatalf("first-rooted + second-orphan must succeed under the first-file-anchors contract; got error: %v", err)
 	}
 
 	wantRoot, _ := filepath.EvalSymlinks(root)

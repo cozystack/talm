@@ -286,9 +286,10 @@ func TestContract_InitRun_PreCheckListsAllConflicts(t *testing.T) {
 	}
 }
 
-// Contract: when os.Getwd() fails, PreRunE returns the wrapped error
-// rather than fail-open into the partial-overlay risk that #156 was
-// about.
+// Contract: when os.Getwd() fails, PreRunE returns the wrapped
+// error rather than fail-open into the partial-overlay risk where
+// init walks up the tree and writes preset files into the wrong
+// project root.
 //
 // Reproducer: chdir into a temp dir, remove that dir, then call PreRunE.
 // On Linux the kernel returns ENOENT from getcwd(2); the guard wraps it.

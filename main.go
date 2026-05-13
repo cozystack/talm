@@ -136,8 +136,8 @@ func Execute() error {
 		}
 
 		errorString := err.Error()
-		//nolint:godox // tracked as #153-followup; cobra validation returns plain fmt.Errorf without a typed error, requires substring matching until cobra ships sentinel errors.
-		// FIXME(#153-followup): cobra arg/flag validation returns plain
+		//nolint:godox // cobra validation returns plain fmt.Errorf without a typed error; substring matching is the only way to distinguish those from talm's own errors until cobra ships sentinel errors.
+		// FIXME: cobra arg/flag validation returns plain
 		// fmt.Errorf without a typed error; substring-matching the
 		// rendered message is the only way to distinguish those from
 		// our own errors today. Track a refactor to wrap cobra

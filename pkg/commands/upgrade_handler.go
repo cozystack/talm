@@ -94,7 +94,7 @@ node body's machine.install.image is no longer consulted by the
 upgrade flow.`
 
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
-		"skip the post-upgrade check that compares running Talos version against the target image's tag (Phase 2C; detects silent A/B rollback per #175)")
+		"skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)")
 
 	wrappedCmd.Flags().DurationVar(&upgradeCmdFlags.postUpgradeReconcileWindow, "post-upgrade-reconcile-window", defaultPostUpgradeReconcileWindow,
 		"how long to wait after upgrade returns before re-reading the running version; widen for slow hardware / large image pulls")
@@ -141,13 +141,12 @@ upgrade flow.`
 		}
 
 		// If config files are provided and --image flag is not set,
-		// resolve the upgrade target image from values.yaml. Pre-#176
-		// behaviour was engine.FullConfigProcess on the node body —
-		// which returned the image already baked into the LAST render,
-		// so bumping values.yaml::image had no effect until the
-		// operator re-ran `talm template`. values.yaml is the source
-		// of truth for cluster-wide knobs; the upgrade target now
-		// reads from there directly. Per-node image override remains
+		// resolve the upgrade target image from values.yaml.
+		// values.yaml is the source of truth for cluster-wide knobs;
+		// the upgrade target reads from there directly rather than
+		// re-extracting from a rendered node body (which would pin
+		// the image to whatever was templated last, ignoring later
+		// values.yaml bumps). Per-node image override remains
 		// possible by passing --image explicitly.
 		if len(filesToProcess) > 0 && !cmd.Flags().Changed("image") {
 			// Process modeline so GlobalArgs.Nodes / .Endpoints are
@@ -206,8 +205,8 @@ upgrade flow.`
 		}
 
 		// Phase 2C: post-upgrade version verify. Detects the silent
-		// auto-rollback case (#175): talosctl upgrade acks the RPC,
-		// Talos pulls + writes the new install, A/B boot fails its
+		// auto-rollback case: talosctl upgrade acks the RPC, Talos
+		// pulls + writes the new install, A/B boot fails its
 		// readiness check, Talos rolls back to the prior partition,
 		// and the operator's "successful" upgrade silently no-ops.
 		// Skip predicate documents the cases where this gate cannot

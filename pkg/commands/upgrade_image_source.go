@@ -23,12 +23,11 @@ import (
 )
 
 // resolveUpgradeImageFromValues reads the cluster-default installer
-// image from values.yaml. Per #176, values.yaml is the source of
-// truth for cluster-wide knobs; the upgrade target reads from there
-// directly instead of running engine.FullConfigProcess on the
-// rendered node body (which returned whatever image was baked into
-// the LAST `talm template` run, silently ignoring later values.yaml
-// edits).
+// image from values.yaml. values.yaml is the source of truth for
+// cluster-wide knobs; the upgrade target reads from there directly
+// instead of re-extracting from the rendered node body (which would
+// return whatever image was baked into the last `talm template`
+// run, silently ignoring later values.yaml edits).
 //
 // Per-node image override is still available via --image; the
 // resolver only fires when --image is unset.
