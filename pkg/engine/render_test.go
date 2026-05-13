@@ -823,6 +823,119 @@ func bondTopologyLookup() func(string, string, string) (map[string]any, error) {
 	}
 }
 
+// emptyBondTopologyLookup returns a LookupFunc emulating a bond
+// stub created by Talos 1.13's link controller before any operator
+// configuration enslaves physical NICs to it. The COSI link state
+// has a `bond0` master link with `kind: bond` and a `bondMaster`
+// spec, but no other link carries `slaveKind: bond` + `masterIndex`
+// pointing at it — so `talm.discovered.bond_slaves` returns an
+// empty list. Reused by the empty-slaves regression pin.
+func emptyBondTopologyLookup() func(string, string, string) (map[string]any, error) {
+	bondLink := map[string]any{
+		"metadata": map[string]any{"id": "bond0"},
+		"spec": map[string]any{
+			"kind":  "bond",
+			"index": 10,
+			"bondMaster": map[string]any{
+				"mode":           "802.3ad",
+				"xmitHashPolicy": "layer3+4",
+				"lacpRate":       "fast",
+				"miimon":         100,
+			},
+			"hardwareAddr": "aa:bb:cc:dd:ee:ff",
+			"busPath":      "pci-0000:00:1f.6",
+		},
+	}
+	// One physical link that is NOT enslaved — operator has not
+	// configured the bond yet. Carries an address so the route
+	// resolution still has somewhere to point.
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"hardwareAddr": "aa:bb:cc:dd:ee:00",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{bondLink, eth0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "eth0",
+					"address":  "192.168.1.100/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.1.100/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8", "1.1.1.1"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "bond0" {
+				return bondLink, nil
+			}
+
+			if id == "eth0" {
+				return eth0, nil
+			}
+
+			if id == "" {
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // vlanOnBondTopologyLookup returns a LookupFunc emulating a VLAN interface
 // stacked on top of a bond. Used by VLANConfig rendering tests.
 func vlanOnBondTopologyLookup() func(string, string, string) (map[string]any, error) {
