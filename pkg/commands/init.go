@@ -1176,7 +1176,11 @@ func updateTalmLibraryChart() error {
 
 		presetName, err = readChartYamlPreset()
 		if err != nil {
-			return errors.Wrap(err, "preset is required: use --preset flag or ensure Chart.yaml has a preset dependency")
+			// readChartYamlPreset already returns errors.WithHint("preset
+			// not found in Chart.yaml dependencies", "add a preset chart…");
+			// wrapping that again would double-message the operator with
+			// the same fact.
+			return err
 		}
 	}
 
