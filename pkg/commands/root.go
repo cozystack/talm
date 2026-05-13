@@ -248,7 +248,14 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 }
 
 func processModelineAndUpdateGlobals(configFile string, nodesFromArgs, endpointsFromArgs, overwrite bool) ([]string, error) {
-	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
+	// FindAndParseModeline accepts operator-authored comment / blank
+	// lines before the modeline (#178). Every workflow that consumes
+	// node files — apply, upgrade, template -I, completion, wrapped
+	// talosctl subcommands — must agree on file shape; the strict
+	// "first line must be modeline" rule of the old ReadAndParseModeline
+	// would silently break the apply / upgrade / talosctl path against
+	// files that template -I just produced.
+	_, modelineConfig, err := modeline.FindAndParseModeline(configFile)
 	if err != nil {
 		// Don't print the error here — cobra surfaces the wrapped
 		// return through stderr at the command level. Printing here

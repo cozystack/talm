@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/engine"
@@ -57,8 +58,16 @@ var templateCmdFlags struct {
 var templateCmd = &cobra.Command{
 	Use:   "template",
 	Short: "Render templates locally and display the output",
-	Long:  ``,
-	Args:  cobra.NoArgs,
+	Long: `Render Talos configuration templates locally.
+
+Multi-file invocation note: unlike ` + "`talm apply`" + ` (where the first -f
+anchors and later -f files are stacked side-patches per #184),
+` + "`talm template -f a.yaml -f b.yaml -f c.yaml`" + ` renders each file
+independently driven by its own modeline. This is intentional —
+template's per-file render mirrors the "regenerate the artifact
+beside the source" workflow, while apply's chain models "compose a
+single MachineConfig and apply it once".`,
+	Args: cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, _ []string) error {
 		templateCmdFlags.valueFiles = append(Config.TemplateOptions.ValueFiles, templateCmdFlags.valueFiles...)
 		templateCmdFlags.values = append(Config.TemplateOptions.Values, templateCmdFlags.values...)
@@ -179,7 +188,11 @@ func templateWithFiles(args []string) func(ctx context.Context, c *client.Client
 // mode. Splitting the per-file work out of templateWithFiles keeps
 // the outer function's cognitive complexity within the linter's gate.
 func templateOneFile(ctx context.Context, args []string, configFile string, firstFileProcessed *bool) error {
-	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
+	// FindAndParseModeline accepts operator-authored comment / blank
+	// lines before the modeline so `talm template -I` can preserve
+	// them on rewrite (#178). Anything other than `#`-prefixed
+	// comments or blanks before the modeline is still rejected.
+	leadingComments, modelineConfig, err := modeline.FindAndParseModeline(configFile)
 	if err != nil {
 		return errors.Wrap(err, "modeline parsing failed")
 	}
@@ -227,15 +240,20 @@ func templateOneFile(ctx context.Context, args []string, configFile string, firs
 		)
 	}
 
-	tmpl := buildTemplateRunner(args, configFile, firstFileProcessed)
+	tmpl := buildTemplateRunner(args, configFile, leadingComments, firstFileProcessed)
 
 	return runTemplate(ctx, tmpl)
 }
 
 // buildTemplateRunner returns the per-file render-and-emit closure.
 // Extracted so both templateOneFile and the dispatcher in runTemplate
-// can stay flat.
-func buildTemplateRunner(args []string, configFile string, firstFileProcessed *bool) func(ctx context.Context, c *client.Client) error {
+// can stay flat. leadingComments is the slice of operator-authored
+// `#`-prefixed / blank lines that lived above the modeline in the
+// source file; in-place mode prepends them to the rewritten file so
+// the operator's documentation survives the regeneration (#178).
+// Non in-place renders ignore leadingComments because the original
+// file is left untouched.
+func buildTemplateRunner(args []string, configFile string, leadingComments []string, firstFileProcessed *bool) func(ctx context.Context, c *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
 		output, err := generateOutput(ctx, c, args)
 		if err != nil {
@@ -243,7 +261,7 @@ func buildTemplateRunner(args []string, configFile string, firstFileProcessed *b
 		}
 
 		if templateCmdFlags.inplace {
-			return writeInplaceRendered(configFile, output)
+			return writeInplaceRendered(configFile, prependLeadingComments(leadingComments, output))
 		}
 
 		if *firstFileProcessed {
@@ -448,7 +466,7 @@ func canonicalizeInsideRootPath(templatePath, absTemplatePath, absRootDir, relPa
 
 func init() {
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.insecure, "insecure", "i", false, "template using the insecure (encrypted with no auth) maintenance service")
-	templateCmd.Flags().StringSliceVarP(&templateCmdFlags.configFiles, "file", "f", nil, "specify config files for in-place update (can specify multiple)")
+	templateCmd.Flags().StringSliceVarP(&templateCmdFlags.configFiles, "file", "f", nil, "node config files for in-place update (`.yaml` / `.yml`; shell completion narrows to these extensions). Each file's modeline drives the per-file render.")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.inplace, "in-place", "I", false, "re-template and update generated files in place (overwrite them)")
 	templateCmd.Flags().StringSliceVarP(&templateCmdFlags.valueFiles, "values", "", []string{}, "specify values in a YAML file (can specify multiple)")
 	templateCmd.Flags().StringSliceVarP(&templateCmdFlags.templateFiles, "template", "t", []string{}, "specify templates to render manifest from (can specify multiple)")
@@ -465,6 +483,29 @@ func init() {
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
 	addCommand(templateCmd)
+}
+
+// prependLeadingComments emits the operator-authored `#`-prefixed
+// / blank lines that lived above the modeline in the source file
+// (returned by modeline.FindAndParseModeline) back at the top of
+// the rewritten output. Without this, `talm template -I` would
+// silently strip the leading comment block on every rewrite (#178).
+// Returns output unchanged when leading is empty (the conventional
+// case — modeline on line 1).
+func prependLeadingComments(leading []string, output string) string {
+	if len(leading) == 0 {
+		return output
+	}
+
+	var b strings.Builder
+	for _, line := range leading {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+
+	b.WriteString(output)
+
+	return b.String()
 }
 
 // writeInplaceRendered writes the rendered template output over the

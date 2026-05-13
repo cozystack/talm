@@ -17,6 +17,15 @@ type Config struct {
 	Templates []string
 }
 
+// ErrModelineNotFound is the sentinel cause FindAndParseModeline
+// returns (wrapped with a hint) when the input file has no
+// `# talm: …` line at all. Distinct from "found but malformed":
+// callers route the not-found case onto a different path (e.g.
+// direct-patch in apply, "this isn't a modelined node file" in
+// completion) while malformed-modeline errors bubble up so the
+// operator sees their typo. Match with errors.Is.
+var ErrModelineNotFound = errors.New("modeline not found")
+
 // ParseModeline parses a modeline string and populates the Config structure.
 func ParseModeline(line string) (*Config, error) {
 	config := &Config{}
@@ -72,38 +81,114 @@ func ParseModeline(line string) (*Config, error) {
 	)
 }
 
-// ReadAndParseModeline reads the first line from a file and parses the modeline.
-func ReadAndParseModeline(filePath string) (*Config, error) {
+// FindAndParseModeline scans a file for the talm modeline, allowing
+// operator-authored comment lines (`^#`) and blank lines as a leading
+// prefix. The first non-comment, non-blank line must be the modeline
+// itself (`# talm: …`); arbitrary YAML or prose before the modeline
+// is rejected.
+//
+// Returns the leading comment / blank lines verbatim (without trailing
+// `\n`), the parsed Config, and any error. `talm template -I` uses
+// the leading-lines return to preserve operator documentation when
+// the in-place rewrite overwrites the file (#178). Every other talm
+// workflow that consumes node files (apply, upgrade, completion,
+// wrapped talosctl commands) calls this function too so the
+// file-shape contract is uniform across the surface.
+func FindAndParseModeline(filePath string) ([]string, *Config, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		//nolint:wrapcheck // cockroachdb/errors.WithHintf is the project's wrapping/hinting idiom
-		return nil, errors.WithHintf(
+		return nil, nil, errors.WithHintf(
 			errors.Wrap(err, "error opening config file"),
 			"check that %s exists and is readable", filePath,
 		)
 	}
 	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
-	if scanner.Scan() {
-		firstLine := scanner.Text()
+	var leading []string
 
-		return ParseModeline(firstLine)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trim := strings.TrimSpace(line)
+
+		// Blank line or a non-modeline comment: keep collecting.
+		if trim == "" || (strings.HasPrefix(trim, "#") && !strings.HasPrefix(trim, "# talm:")) {
+			leading = append(leading, line)
+
+			continue
+		}
+
+		// Modeline candidate.
+		if strings.HasPrefix(trim, "# talm:") {
+			config, parseErr := ParseModeline(line)
+			if parseErr != nil {
+				// ParseModeline already wraps + WithHint at its boundary.
+				return nil, nil, parseErr
+			}
+
+			return leading, config, nil
+		}
+
+		// First non-comment, non-blank line is not a modeline.
+		// Distinguish orphan (no modeline anywhere) from misplaced
+		// modeline (a `# talm:` line lives below YAML) via lookahead.
+		return nil, nil, classifyNoLeadingModeline(scanner, line)
 	}
 
-	err = scanner.Err()
-	if err != nil {
+	if scanErr := scanner.Err(); scanErr != nil {
 		//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom
-		return nil, errors.WithHint(
-			errors.Wrap(err, "error reading first line of config file"),
+		return nil, nil, errors.WithHint(
+			errors.Wrap(scanErr, "error reading config file"),
 			"file may be truncated or unreadable",
 		)
 	}
 
 	//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom
-	return nil, errors.WithHint(
-		errors.New("config file is empty"),
-		"per-node values file must start with a modeline like '# talm: nodes=[...]'",
+	return nil, nil, errors.WithHint(
+		ErrModelineNotFound,
+		"per-node values file must contain a `# talm: nodes=[…]` modeline; comments and blanks may precede it but at least one modeline must be present",
+	)
+}
+
+// classifyNoLeadingModeline picks between the "orphan" and
+// "misplaced modeline" outcomes when FindAndParseModeline has hit
+// a non-comment line without first seeing a `# talm:` modeline.
+// Scans the rest of the file: a later `# talm:` line means the
+// operator put the modeline below YAML (rejected with a clear
+// hint); no `# talm:` anywhere means the file is a legitimate
+// orphan (returned as ErrModelineNotFound so callers can route to
+// the side-patch / direct-patch path).
+func classifyNoLeadingModeline(scanner *bufio.Scanner, firstNonComment string) error {
+	for scanner.Scan() {
+		// Column-0 prefix only — the canonical modeline always
+		// sits at the very start of the line. Indented `# talm:`
+		// text inside a YAML body is an operator-authored
+		// comment (e.g. "# talm: see the modeline above for
+		// nodes/templates wiring"), NOT a misplaced modeline.
+		// TrimSpace-then-HasPrefix would false-positive on those
+		// and block legitimate node files.
+		if strings.HasPrefix(scanner.Text(), "# talm:") {
+			//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom
+			return errors.WithHint(
+				errors.Newf("modeline found below non-comment content: first non-comment line was %q", firstNonComment),
+				"the `# talm: …` modeline must precede any YAML content; only `#`-prefixed comments and blank lines may sit above it",
+			)
+		}
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom
+		return errors.WithHint(
+			errors.Wrap(scanErr, "error reading config file"),
+			"file may be truncated or unreadable",
+		)
+	}
+
+	//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom
+	return errors.WithHint(
+		ErrModelineNotFound,
+		"per-node values file must contain a `# talm: nodes=[…]` modeline; comments and blanks may precede it but at least one modeline must be present",
 	)
 }
 
