@@ -188,8 +188,17 @@ func regenerateTalosconfig() error {
 
 		fmt.Fprintf(os.Stderr, "Preserved endpoints and nodes from existing config\n")
 	} else {
-		// No old config, set default endpoint
-		newConfig.Contexts[clusterName].Endpoints = []string{defaultLocalEndpoint}
+		// No old config — seed the context's endpoint list from
+		// --endpoints if the operator supplied it, otherwise fall
+		// back to the loopback placeholder. Same shape and fallback
+		// rationale as the init flow (see resolveTalosconfigEndpoints
+		// in init.go): a context with empty endpoints fails
+		// downstream client construction, so the yaml must always
+		// have at least one entry. Without consulting GlobalArgs
+		// here, `talm talosconfig --endpoints X` on a project with
+		// no prior talosconfig would silently discard the operator's
+		// flag — the same bug class init had at the assignment site.
+		newConfig.Contexts[clusterName].Endpoints = resolveTalosconfigEndpoints(GlobalArgs.Endpoints)
 	}
 
 	// Marshal and write the new talosconfig
