@@ -148,7 +148,7 @@
        in the COSI addresses table must not leak verbatim into the
        legacy v1.11 machine.network.interfaces[].addresses block. */ -}}
 {{- $address := .spec.address | toString }}
-{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 }}
+{{- $validCidr := ge (cidrPrefixLen $address) 0 }}
 {{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) $validCidr }}
 {{- if not (hasPrefix (printf "%s/" $fipStr) $address) }}
 {{- $addresses = append $addresses $address }}
@@ -561,7 +561,7 @@ vlans:
        apply with a less-informative error than the chart could
        give. */ -}}
 {{- $address := .spec.address | toString -}}
-{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 -}}
+{{- $validCidr := ge (cidrPrefixLen $address) 0 -}}
 {{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) $validCidr -}}
 {{- $addresses = append $addresses $address -}}
 {{- end -}}
