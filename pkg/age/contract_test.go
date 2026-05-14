@@ -36,6 +36,7 @@ import (
 	"strings"
 	"testing"
 
+	cerrors "github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/age"
 	"gopkg.in/yaml.v3"
 )
@@ -178,6 +179,31 @@ func TestContract_Age_LoadKey_MissingFileErrors(t *testing.T) {
 	_, err := age.LoadKey(dir)
 	if err == nil {
 		t.Fatal("expected error for missing talm.key")
+	}
+}
+
+// TestContract_Age_LoadKey_MissingFileSurfacesRecoveryHint pins the
+// operator-facing recovery message attached to a missing talm.key.
+// Without the hint, operators see a raw "open talm.key: no such
+// file" stack-style line and assume it's a bug in talm. The hint
+// must name BOTH recovery paths: restore from backup, or re-run
+// `talm init` to regenerate (which writes new secrets — old
+// secrets.encrypted.yaml becomes undecryptable without the
+// original key).
+func TestContract_Age_LoadKey_MissingFileSurfacesRecoveryHint(t *testing.T) {
+	dir := t.TempDir() // no talm.key inside
+
+	_, err := age.LoadKey(dir)
+	if err == nil {
+		t.Fatal("expected error for missing talm.key")
+	}
+
+	hints := cerrors.GetAllHints(err)
+	joinedLower := strings.ToLower(strings.Join(hints, "\n"))
+	for _, want := range []string{"talm.key", "restore", "talm init"} {
+		if !strings.Contains(joinedLower, want) {
+			t.Errorf("missing-key hint must mention %q so operator knows the recovery path; got hints:\n%s", want, strings.Join(hints, "\n"))
+		}
 	}
 }
 

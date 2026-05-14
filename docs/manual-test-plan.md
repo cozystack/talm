@@ -98,6 +98,21 @@ Expected: clear error mentioning the missing key path.
 rm -rf /tmp/talm-init-test
 ```
 
+### A6a. `init --decrypt` without `talm.key` surfaces recovery hint
+
+```bash
+mkdir -p /tmp/talm-decrypt-test && cd /tmp/talm-decrypt-test
+/tmp/talm-safety init --preset cozystack --name test --endpoints 192.0.2.1
+mv talm.key /tmp/talm.key.backup
+/tmp/talm-safety init --decrypt
+mv /tmp/talm.key.backup talm.key  # restore for next run
+rm -rf /tmp/talm-decrypt-test
+```
+
+Expected: error `failed to decrypt secrets: load key: read key file: open <path>/talm.key: no such file or directory` followed by hint `talm.key is required to decrypt secrets.encrypted.yaml. Restore your backed-up key, or re-run \`talm init\` to regenerate (this writes new secrets — the old secrets.encrypted.yaml will not be decryptable without the original key).`
+
+Regression anchor: the hint must name BOTH recovery paths (restore from backup, re-run init to regenerate) AND include the warning that regeneration writes new secrets making the old encrypted secrets undecryptable. A regression that drops either path or the warning silently invites operators to "just run init again" without understanding the data-loss tradeoff.
+
 ### A8. `init --update` without `--preset` and without preset dep in Chart.yaml
 
 ```bash
