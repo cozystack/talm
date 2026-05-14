@@ -375,8 +375,12 @@ func TestContract_DetectAndSetRoot_FromFileFlag(t *testing.T) {
 }
 
 // Contract: when -f points at files under DIFFERENT project roots,
-// the function errors. Pinning the strict-consistency rule.
-func TestContract_DetectAndSetRoot_FilesInDifferentRootsError(t *testing.T) {
+// the first file anchors the chain root. The second file's
+// divergent root is no longer a failure — it is loaded as a patch
+// on top of the first file's project. This test pins the relaxed
+// contract; the previous strict-consistency rule was the same gate
+// blocking the side-patch case.
+func TestContract_DetectAndSetRoot_FilesInDifferentRoots_FirstFileWins(t *testing.T) {
 	withConfigSnapshot(t)
 
 	rootA := t.TempDir()
@@ -403,9 +407,14 @@ func TestContract_DetectAndSetRoot_FilesInDifferentRootsError(t *testing.T) {
 	}
 	withOSArgs(t, []string{fixtureBinaryName})
 
-	err := DetectAndSetRoot(cmd, nil)
-	if err == nil {
-		t.Fatal("expected error for files in different roots")
+	if err := DetectAndSetRoot(cmd, nil); err != nil {
+		t.Fatalf("first file must anchor the root; second file's divergent root must be ignored, got error: %v", err)
+	}
+
+	wantRoot, _ := filepath.EvalSymlinks(rootA)
+	gotRoot, _ := filepath.EvalSymlinks(Config.RootDir)
+	if gotRoot != wantRoot {
+		t.Errorf("Config.RootDir = %q, want %q (first file's project root)", gotRoot, wantRoot)
 	}
 }
 

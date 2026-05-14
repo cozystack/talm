@@ -282,7 +282,7 @@ func TestExtractExtraDocuments(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "issue #66 scenario - talos config with UserVolumeConfig",
+			name:      "talos config with UserVolumeConfig as second document",
 			patches:   []string{"machine:\n  type: worker\ncluster:\n  name: test\n---\napiVersion: v1alpha1\nkind: UserVolumeConfig\nname: databig"},
 			wantTalos: 1,
 			wantExtra: 1,

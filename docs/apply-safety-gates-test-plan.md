@@ -1,6 +1,6 @@
 # Apply-time safety gates: test plan
 
-A reference checklist for validating changes to the apply-time safety gates introduced in #172 / PR #173. Covers the contract tests that ship with the package plus the manual real-Talos validation steps that surface issues unit tests cannot.
+A reference checklist for validating changes to the apply-time safety gates. Covers the contract tests that ship with the package plus the manual real-Talos validation steps that surface issues unit tests cannot.
 
 ## Build under test
 
@@ -249,6 +249,6 @@ go vet ./...
 
 ## Known limitations / follow-ups
 
-- **Talos-mutated-field allowlist** (open in #172): Phase 2B reports cert hashes / timestamps as divergence today; the verify is off by default until an allowlist lands.
+- **Talos-mutated-field allowlist**: Phase 2B reports cert hashes / timestamps as divergence today; the verify is off by default until an allowlist lands.
 - **`talm upgrade` has no pre-upgrade gates** (Phase 2C runs *after*, not before): the upgrade flow wraps `talosctl upgrade` and doesn't route through `buildApplyClosure` / `applyOneFileDirectPatchMode`, so Phase 1 / Phase 2A do not run. Phase 2C (post-upgrade version verify) was added precisely to catch the silent-rollback class without that refactor. Full pre-upgrade gates would require reproducing the gate calls in `upgrade_handler.go` or refactoring the apply flow.
 - **Phase 1/2 on `--insecure`**: the safety gates can't run before the chart renders, and the chart's `lookup` calls need an authenticated COSI connection. Insecure path = effectively no gates today.

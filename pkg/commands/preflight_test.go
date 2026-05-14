@@ -147,7 +147,7 @@ func TestPreflightCheckTalosVersion(t *testing.T) {
 			wantHint:       true,
 		},
 		{
-			// Reproduction case from cozystack/talm#132: unset talosVersion + older node.
+			// Reproduction case: unset talosVersion + older node — the warning hint must still fire.
 			name:           "empty configured treated as current and warns",
 			configured:     "",
 			readerVersion:  "v1.11.6",

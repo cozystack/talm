@@ -1176,7 +1176,11 @@ func updateTalmLibraryChart() error {
 
 		presetName, err = readChartYamlPreset()
 		if err != nil {
-			return errors.Wrap(err, "preset is required: use --preset flag or ensure Chart.yaml has a preset dependency")
+			// readChartYamlPreset already returns errors.WithHint("preset
+			// not found in Chart.yaml dependencies", "add a preset chart…");
+			// wrapping that again would double-message the operator with
+			// the same fact.
+			return err
 		}
 	}
 
@@ -1276,6 +1280,10 @@ func init() {
 	initCmd.Flags().StringSliceVarP(&GlobalArgs.Endpoints, "endpoints", "", []string{}, "override default endpoints in Talos configuration")
 	initCmd.Flags().BoolVarP(&initCmdFlags.encrypt, "encrypt", "e", false, "encrypt all sensitive files (secrets.yaml, talosconfig, kubeconfig)")
 	initCmd.Flags().BoolVarP(&initCmdFlags.decrypt, "decrypt", "d", false, "decrypt all encrypted files (does not require preset)")
+
+	// Shell completion for `talm init --preset`: preset names are
+	// baked in at build time via pkg/generated.
+	_ = initCmd.RegisterFlagCompletionFunc("preset", completePresetNames)
 
 	addCommand(initCmd)
 	// Don't mark preset as required - it's validated in PreRunE based on --encrypt/--decrypt flags

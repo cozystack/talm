@@ -14,7 +14,7 @@ While developing Talm, we aimed to achieve the following goals:
 
 - **GitOps Friendly**: The patches generated do not contain sensitive data, allowing them to be stored in Git in an unencrypted, open format. For scenarios requiring complete configurations, the `--full` option allows the obtain a complete config that can be used for matchbox and other solutions.
 
-- **Simplicity of Use**: You no longer need to pass connection options for each specific server; they are saved along with the templating results into a separate file. This allows you to easily apply one or multiple files in batch using a syntax similar to `kubectl apply -f node1.yaml -f node2.yaml`.
+- **Simplicity of Use**: You no longer need to pass connection options for each specific server; they are saved along with the templating results into a separate file. Per-node configuration sits in a single modeline-annotated `nodes/<name>.yaml`; the first `-f` file is the anchor and any subsequent `-f` files stack onto its rendered config as side-patches (see "Apply with side-patches" below).
 
 - **Compatibility with talosctl**: We strive to maintain compatibility with the upstream project in patches and configurations. The configurations you obtain can be used with the official tools like talosctl and Omni.
 
@@ -176,9 +176,9 @@ cluster:
 >
 > 2. **Pre-apply drift preview** (`--skip-drift-preview` opt-out, default on). Reads the node's current MachineConfig via COSI and prints a `+`/`-`/`~`/`=` diff of what's about to change, keyed by `(kind, name)`. Informational only — never blocks. The `-` lines are the most useful: they surface stale documents from a previous apply that the new render no longer emits (e.g. an `eth1` LinkConfig lingering after a migration to `eth0`). Reading the current config requires the auth path — `MachineConfig` is a Sensitive COSI resource and is unreachable on the `--insecure` maintenance connection; the gate prints `drift verification unavailable on maintenance connection` (per-node-prefixed on multi-node insecure apply) and proceeds in that case. Secret-bearing field values (`cluster.token`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `machine.token` / `machine.ca.key`, the `cluster.acceptedCAs` / `machine.acceptedCAs` slices, `WireguardConfig.privateKey`, the `peers` slice carrying `presharedKey`s) are redacted by default — both sides render as `***redacted (len=N)***` so a rotation surfaces as different-length sentinels without leaking the value. Pass `--show-secrets-in-drift` to see the raw values verbatim (debugging only — disables the redaction for the run). **`--dry-run` runs this gate** — the diff is read-only and "show me what would change" is exactly the dry-run contract.
 >
-> 3. **Post-apply state verification** (`--skip-post-apply-verify` opt-out, **default off** until the Talos-mutated-field allowlist lands — see [#172](https://github.com/cozystack/talm/issues/172)). After `ApplyConfiguration` returns success, re-reads the on-node MachineConfig and structurally compares it against the bytes that were sent. Divergence blocks the apply chain with a per-document diff, primarily catching silent doc drops (Talos parser ignored an unknown field) and controller reverts. Disabled by default because Talos mutates a handful of leaf fields post-apply (cert hashes, timestamps) that would surface as false-positive divergence without an allowlist. The verify runs only on `--mode=no-reboot`. `--mode=staged`, `--mode=try`, `--mode=reboot`, and `--mode=auto` all skip the gate — each for a documented reason: staged stores rather than activates; try auto-rolls back; reboot kills the COSI connection mid-verify; auto is promoted by Talos to REBOOT internally when the change requires it, so the verify would race the reboot. `--dry-run` skips it too.
+> 3. **Post-apply state verification** (`--skip-post-apply-verify` opt-out, **default off** pending a Talos-mutated-field allowlist). After `ApplyConfiguration` returns success, re-reads the on-node MachineConfig and structurally compares it against the bytes that were sent. Divergence blocks the apply chain with a per-document diff, primarily catching silent doc drops (Talos parser ignored an unknown field) and controller reverts. Disabled by default because Talos mutates a handful of leaf fields post-apply (cert hashes, timestamps) that would surface as false-positive divergence without an allowlist. The verify runs only on `--mode=no-reboot`. `--mode=staged`, `--mode=try`, `--mode=reboot`, and `--mode=auto` all skip the gate — each for a documented reason: staged stores rather than activates; try auto-rolls back; reboot kills the COSI connection mid-verify; auto is promoted by Talos to REBOOT internally when the change requires it, so the verify would race the reboot. `--dry-run` skips it too.
 >
-> 4. **Post-upgrade version verify** (`--skip-post-upgrade-verify` opt-out, default on — the gate runs). After `talm upgrade` reports success, waits the configured reconcile window (default 90s; tune via `--post-upgrade-reconcile-window` for slow hardware / large image pulls) for the node to finish booting, then reads `runtime.Version` COSI and compares the running version's `(Major, Minor)` contract against the contract parsed from the target image tag. Point releases share a minor contract; cross-minor mismatch surfaces as a hint-bearing blocker. Catches the silent A/B rollback case where the upgrade RPC acks success but Talos rolled back to the previous partition (cross-vendor image, missing extensions, failed boot readiness check, slow boot exceeding the configured window). Best-effort surrender on digest-pinned images and unparseable tags. See [#175](https://github.com/cozystack/talm/issues/175) for the reproduction.
+> 4. **Post-upgrade version verify** (`--skip-post-upgrade-verify` opt-out, default on — the gate runs). After `talm upgrade` reports success, waits the configured reconcile window (default 90s; tune via `--post-upgrade-reconcile-window` for slow hardware / large image pulls) for the node to finish booting, then reads `runtime.Version` COSI and compares the running version's `(Major, Minor)` contract against the contract parsed from the target image tag. Point releases share a minor contract; cross-minor mismatch surfaces as a hint-bearing blocker. Catches the silent A/B rollback case where the upgrade RPC acks success but Talos rolled back to the previous partition (cross-vendor image, missing extensions, failed boot readiness check, slow boot exceeding the configured window). Best-effort surrender on digest-pinned images and unparseable tags.
 >
 > The skip flags don't suppress each other — pass them independently. On the `--insecure` (maintenance) path the gates are functionally unreachable for charts that drive discovery via `lookup` — those COSI lookups require an authenticated connection and the render itself errors before any gate runs. Charts that render fully offline (no `lookup` calls) reach the gates on `--insecure` as well, with the Phase 2 hooks degrading gracefully because the `MachineConfig` resource is Sensitive.
 
@@ -191,6 +191,8 @@ Upgrade node:
 ```bash
 talm upgrade -f nodes/node1.yaml
 ```
+
+`talm upgrade` resolves the target installer image from `values.yaml::image` (the cluster-wide knob). To pick the new version, bump `values.yaml::image` and re-run `talm upgrade -f nodes/<name>.yaml`; there is no need to re-template the node files first. Pass `--image <ref>` to override per-invocation (e.g. for an experimental installer build); the flag wins over the `values.yaml` lookup.
 
 Show diff:
 ```bash
@@ -213,6 +215,31 @@ talm template -f nodes/node1.yaml -I
 > **Idempotent applies.** Repeated `talm apply` runs against an already-configured node do not duplicate entries. Before the strategic merge runs, the engine prunes from the body every primitive-list entry the rendered template already carries (e.g. certSANs, nameservers, validSubnets). For object arrays the upstream patcher merges by identity (machine.network.interfaces by `interface:` or `deviceSelector:`, vlans by `vlanId:`, apiServer admissionControl by `name:`), the prune descends into matched pairs and dedupes the inner primitive lists too — so re-applying after `talm template -I` does not double interface addresses, vlan addresses, or admission-control exemption namespaces. For object arrays without an upstream identity merge (extraVolumes, kernel.modules, wireguard.peers, ...), body items that deep-equal a rendered counterpart are dropped, covering the dominant full-restate case. Fields tagged `merge:"replace"` upstream are passed through verbatim — pruning them would let the upstream replace silently drop the rendered entries on a partial edit. This covers v1alpha1 root paths `cluster.network.podSubnets`, `cluster.network.serviceSubnets`, `cluster.apiServer.auditPolicy`, and the typed `NetworkRuleConfig` paths `ingress` and `portSelector.ports`.
 >
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply the same overlay: its output is the rendered template plus the modeline and the auto-generated warning, byte-identical to what the template alone would produce. Routing it through the patcher would drop every YAML comment (including the modeline) and re-sort keys, breaking downstream commands that read the file back. Use `apply --dry-run` if you want to preview the exact bytes that will be sent to the node.
+
+## Apply with side-patches
+
+`talm apply -f` accepts a chain of files. The FIRST `-f` is the **anchor** — it must carry a `# talm: nodes=[…], templates=[…]` modeline and live under a `talm init`'d project (Chart.yaml + secrets.yaml). Any subsequent `-f` files are **side-patches**: they are merged in order on top of the anchor's rendered config, and a single `ApplyConfiguration` is issued per node carrying the composed result.
+
+```bash
+# Single node file (anchor only):
+talm apply -f nodes/cp01.yaml
+
+# Side-patch stacked on top — useful for one-shot overlays
+# (debug kubelet flags, temporary cert SANs, mode=staged drills):
+talm apply -f nodes/cp01.yaml -f /tmp/debug-kubelet.yaml
+```
+
+Side-patches do not need to live under the project root; the first file anchors detection. Reversing the order is an error — the first file must be the rooted anchor.
+
+If you were relying on the previous "apply N independent node files" shape (`talm apply -f n1.yaml -f n2.yaml -f n3.yaml` triggering three separate applies), invoke `talm apply` once per node file instead:
+
+```bash
+for n in nodes/*.yaml; do talm apply -f "$n"; done
+```
+
+The current shape rejects this misuse loudly: if any of the subsequent `-f` files carries its own `# talm: …` modeline, the apply errors out before any RPC fires with a hint pointing at the shell-loop pattern above. Stripping the modeline turns a file into a legitimate side-patch.
+
+Side-patches with a non-empty body are restricted to **single-node anchors**. The same body cannot be distinguished from per-node fields (hostname, address, VIP) versus cluster-wide knobs (NTP servers, KubeProxy mode) by static inspection, and stamping per-node fields across N machines is the original foot-gun the per-node-body guard was designed to prevent. If your anchor's `nodes=[…]` lists more than one target and your side-patch is non-empty, talm rejects the apply early with a hint pointing at the per-file shell loop. For cluster-wide overlays on multi-node anchors, fold the overlay into `values.yaml` or templates rather than passing it as a side-patch; for per-node overrides, generate per-node files via `talm template -I` and feed them into the per-file shell loop.
 
 ## Using talosctl commands
 
@@ -268,6 +295,22 @@ Querying disks map example:
 
 \- will return the system disk device name
 
+
+### `--set` vs `--set-string` for IP / version literals
+
+Helm's `--set` parser interprets dots in the right-hand side as YAML key nesting:
+
+```bash
+talm template --set endpoint=10.0.0.1   # parsed as: endpoint: {10: {0: {0: 1}}}
+```
+
+For IP addresses, CIDR blocks, or version strings, use `--set-string` to keep the value verbatim:
+
+```bash
+talm template --set-string endpoint=10.0.0.1   # parsed as: endpoint: "10.0.0.1"
+```
+
+`talm` warns on stderr when it detects an IP-, CIDR-, or version-shaped value in `--set` and points at `--set-string` as the fix. The warning is non-fatal — rendering proceeds with the (likely-broken) nested map so existing automation does not break. For values containing characters Helm's strvals treats specially (e.g. `=`, `,` inside the value, or content that should be opaque to all parsing), use `--set-literal` — it stores the entire RHS as a verbatim string without any escape interpretation.
 
 ## Encryption
 

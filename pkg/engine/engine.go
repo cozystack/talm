@@ -1692,6 +1692,13 @@ func loadValues(opts Options) (map[string]any, error) {
 		base = mergeMaps(base, currentMap)
 	}
 
+	// Screen --set values for IP / CIDR / version literals BEFORE
+	// strvals.ParseInto chews them. The parser interprets dots in
+	// the RHS as YAML key nesting, so `--set endpoint=10.0.0.1`
+	// produces `{endpoint: {10: {0: {0: 1}}}}` — silently corrupt
+	// config. The warning steers operators to --set-string.
+	screenSetValuesForCoercion(opts.Values)
+
 	// Parse and merge values from --set
 	for _, value := range opts.Values {
 		err := strvals.ParseInto(value, base)

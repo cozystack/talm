@@ -98,6 +98,23 @@ Expected: clear error mentioning the missing key path.
 rm -rf /tmp/talm-init-test
 ```
 
+### A8. `init --update` without `--preset` and without preset dep in Chart.yaml
+
+```bash
+mkdir -p /tmp/talm-update-test && cd /tmp/talm-update-test
+cat > Chart.yaml <<EOF
+apiVersion: v2
+name: empty-project
+version: 0.1.0
+dependencies: []
+EOF
+/tmp/talm-safety init --update
+```
+
+Expected: single-wrapped error with hint. Inner cause `preset not found in Chart.yaml dependencies` is surfaced verbatim with hint `add a preset chart (e.g. cozystack) to Chart.yaml dependencies or pass --preset`. No outer rewrap line like `preset is required: use --preset flag or ensure Chart.yaml has a preset dependency` — the rewrap was double-messaging the same condition before the fix.
+
+Regression anchor: `errors.GetAllHints(err)` (or `2>&1 | grep "^hint:"`) MUST still surface the inner `add a preset chart` hint after the unwrap. A regression that drops the hint along with the rewrap is a UX regression.
+
 **Regression anchor**: A6's error must reference the missing-key path explicitly. A bare `read key file: open ...: no such file or directory` with no follow-up hint is a UX regression — the operator should see a clear recovery path (`run \`talm init\` to generate a new key, or restore your backup`).
 
 ## B. Render / template
@@ -137,7 +154,9 @@ diff /tmp/inplace-before.yaml nodes/node0.yaml
 cp /tmp/inplace-before.yaml nodes/node0.yaml  # restore
 ```
 
-Expected: `Updated.` on stdout. The diff shows that the rendered body replaces the previous contents — **including any user-added comments**. This is by design (`-I` is rewrite, not merge), but operators often trip on it; note in your test report.
+Expected: `Updated.` on stdout. The rendered body replaces the previous body of the file — but **operator-authored comments above the modeline are preserved verbatim**. Comments embedded in the YAML body still get overwritten, since `-I` re-renders the body and Helm has no way to round-trip user-edits made there.
+
+Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator note B\n# talm: ...\n<body>`. After `template -I -f nodes/node0.yaml`, the first two lines (`# Operator note A`, `# Operator note B`) MUST still be there, followed by the modeline, the talm-rendered warning header, then the body. Re-run idempotent: a second `template -I` keeps the same prefix structure — leading comments don't drift, multiply, or disappear.
 
 ### B5. Render with stale chart preset
 
@@ -204,6 +223,77 @@ Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,a
 Expected: same drift preview as C5, but the secret paths render verbatim — no `***redacted***` sentinel. Operator-explicit bypass for debugging.
 
 Regression anchor: `--show-secrets-in-drift` is operator opt-in, never default. Verify by running `talm apply --help` and confirming the flag default is `false`.
+
+### C6a. Apply chain — first `-f` anchors project root, later `-f` files stack as side-patches
+
+```bash
+cat > /tmp/side-ntp.yaml <<'EOF'
+machine:
+  time:
+    servers:
+      - 2.example.test
+EOF
+/tmp/talm-safety apply --dry-run \
+  -f nodes/node0.yaml -f /tmp/side-ntp.yaml
+```
+
+Expected: progress line includes `side-patches=[/tmp/side-ntp.yaml]` alongside `nodes=[…]` and `endpoints=[…]`. Drift preview shows both the anchor's rendered config diff AND the side-patch's `machine.time.servers: added [2.example.test]` mutation. The side-patch is stacked via `engine.MergeFileAsPatch`; last writer wins on overlapping keys.
+
+Regression anchor: `/tmp/side-ntp.yaml` lives outside the project root. The first `-f` file (`nodes/node0.yaml`) is the SOLE anchor for root detection; later files don't get root-validated. Verify by reversing order — `apply --dry-run -f /tmp/side-ntp.yaml -f nodes/node0.yaml` should fail because the first file has no project root.
+
+### C6b. Non-modelined anchor with side-patches rejected with reorder hint
+
+```bash
+cat > nodes/orphan.yaml <<'EOF'
+machine: {}
+EOF
+/tmp/talm-safety apply --dry-run -f nodes/orphan.yaml -f /tmp/side-ntp.yaml
+```
+
+Expected: error `first -f file nodes/orphan.yaml lacks a modeline; side-patches require a modelined anchor` with hint that the first `-f` file must carry `# talm: nodes=[…], templates=[…]` so talm knows what to render before stacking. Note: the orphan file lives inside the project tree because the first `-f` file must have a Chart.yaml + secrets.yaml ancestor for root detection — see C6b-pre below for the root-detection failure mode.
+
+### C6b-pre. Anchor outside any project root is rejected at root detection
+
+```bash
+cat > /tmp/orphan.yaml <<'EOF'
+machine: {}
+EOF
+/tmp/talm-safety apply --dry-run -f /tmp/orphan.yaml
+```
+
+Expected: error `failed to detect project root for first file /tmp/orphan.yaml (Chart.yaml and secrets.yaml not found)` with hint `the first -f file anchors the project root; place it inside a talm init'd project, or reorder the -f chain so a rooted file comes first`. This gate fires BEFORE the modeline-vs-orphan dispatch, so any orphan placed outside a project root can never reach the direct-patch path.
+
+### C6c. Orphan file inside project root dispatches to direct-patch when context provides nodes
+
+```bash
+# Build a talosconfig with explicit nodes field
+cp talosconfig /tmp/talosconfig-with-nodes
+# (edit to add nodes: [...] under contexts.<active>.nodes — YAML or yq)
+/tmp/talm-safety apply --dry-run \
+  --talosconfig /tmp/talosconfig-with-nodes \
+  -f nodes/orphan.yaml
+```
+
+Expected: progress line `- talm: file=nodes/orphan.yaml, nodes=[…], endpoints=[…]` — targets resolved from the talosconfig context, no early "no nodes available" rejection. The dispatch reaches the direct-patch path (chart-render-with-orphan-as-patch). Note: the orphan must live inside the project tree to clear root detection (see C6b-pre).
+
+### C6d. Orphan file with no source for nodes fails late with three-way hint
+
+```bash
+# Same talosconfig but WITHOUT a nodes: field in the active context
+/tmp/talm-safety apply --dry-run \
+  --talosconfig /tmp/talosconfig-no-nodes \
+  -f nodes/orphan.yaml
+```
+
+Expected: `no nodes to target for nodes/orphan.yaml` with hint `the file lacks a # talm: nodes=[…] modeline, no --nodes flag was passed, and the active talosconfig context carries no nodes; pass --nodes explicitly or supply a modelined node file`. The hint must name all three sources so the operator knows which to populate.
+
+Regression anchor: the "no nodes" check fires AFTER the talosconfig context fallback runs, not before. A regression that re-introduces the early `len(GlobalArgs.Nodes) == 0` gate would block C6c silently.
+
+### C6e. Progress lines use comma-joined bracketed lists
+
+Inspect any apply progress line from C1, C3, C6a, C6c. Expect `nodes=[n1,n2,n3]` and `endpoints=[e1,e2]` — comma-joined, bracket-framed, no `[n1 n2 n3]` Go slice format artifact.
+
+Regression anchor: the format uses `strings.Join(slice, ",")` with surrounding brackets in the format string; `%s` or `%v` directly on a `[]string` produces the space-separated `[n1 n2 n3]` artifact and is a regression. Verify with a multi-node modeline (`# talm: nodes=["1.2.3.4","5.6.7.8"], ...`) → progress line shows `nodes=[1.2.3.4,5.6.7.8]`.
 
 ### C7. Phase 1 walker rejects malformed net-addr fields before the RPC
 
@@ -505,6 +595,25 @@ Expected: refuses with `FailedPrecondition: blockdevice "<dev>" is in use by dis
 
 ## I. Shell completion
 
+### I1a. Per-flag and positional completion
+
+Install bash completion:
+
+```bash
+/tmp/talm-safety completion bash > /tmp/talm-completion.bash
+source /tmp/talm-completion.bash
+```
+
+Then exercise each target. Each expectation below is a forward-looking check the operator runs interactively (or via `__complete <subcommand> <flag-value-or-positional> ""` for scripted assertions).
+
+- `talm init --preset <TAB>` → curated list including `cozystack`. Sourced from `pkg/generated/presets.go::AvailablePresets()`; no generic file completion.
+- `talm apply --mode <TAB>` → `auto`, `no-reboot`, `reboot`, `staged`, `try` (the apply-mode enum).
+- `talm apply --file <TAB>` → only `nodes/*.yaml` files that carry a valid `# talm: …` modeline. Non-modelined yaml files in the project tree do NOT surface. Same for `talm template --file <TAB>` and `talm upgrade --file <TAB>`.
+- `talm template --values <TAB>` / `--with-secrets <TAB>` → file completion narrowed to `.yaml` / `.yml` extensions (`ShellCompDirectiveFilterFileExt`).
+- `talm --nodes <TAB>` / `talm --endpoints <TAB>` → union of nodes / endpoints declared across every context in the active talosconfig.
+
+Regression anchor: positional completion (`talm apply <TAB>` without a flag) MUST NOT surface anything — apply / template / upgrade declare `cobra.NoArgs` so the positional slot is empty. A regression that wires `ValidArgsFunction` to a populated completer would silently re-introduce a dead-completion code path.
+
 ### I1. Generate completion for each shell
 
 ```bash
@@ -527,9 +636,23 @@ Expected: every shell prints a script that parses (for bash/zsh syntax-check con
 /tmp/talm-safety template -f nodes/node0.yaml --set floatingIP=0700
 ```
 
-Expected: with the post-#163 chart, fails fast with `talm: floatingIP "0700" is not a valid IPv4 / IPv6 literal`. Pre-#163 chart silently renders an invalid VIP.
+Expected: with an IPv4-validating chart, fails fast with `talm: floatingIP "0700" is not a valid IPv4 / IPv6 literal`. A chart without the validation silently renders an invalid VIP.
 
 **Operator footgun**: `--set floatingIP=198.51.100.1` *may* be parsed as the float `198.51 × 100.1` by Helm's loose type-coercion. For IPs use `--set-string floatingIP="198.51.100.1"` or put it in `values.yaml`.
+
+`--set` emits a non-fatal warning to stderr when the RHS matches an IP-shaped or semver-shaped literal:
+
+```bash
+/tmp/talm-safety template -f nodes/node0.yaml --set endpoint=10.0.0.1 2>&1 | grep "^talm:"
+# Expected: warning recommending --set-string for IP / version literals.
+/tmp/talm-safety template -f nodes/node0.yaml --set-string endpoint=10.0.0.1 2>&1 | grep "^talm:"
+# Expected: no warning emitted — operator opt-in to verbatim string.
+```
+
+Regression anchors:
+
+- Warning fires for IPv4 (`10.0.0.1`, `192.0.2.1/24`) and v-prefixed semver (`v1.2.3`, `v1.2`). Bare two-component decimals (`1.5`, `2.0`) and colon-separated literals (`00:11:22:33:44:55`) do NOT trigger — those aren't strvals-coerced footguns.
+- Warning is non-fatal — command still proceeds. A regression that turns it into a hard error would block legitimate `--set` flows.
 
 ### J0-2. `--set-literal` keeps dotted keys intact
 
@@ -592,12 +715,12 @@ Expected: `warning: pre-flight: configured talosVersion=v1.13 is newer than the 
 
 ### K1-pre. Phase 2C version-verify catches silent rollback
 
-⚠️ Same destructive setup as K2, but the gate now does the work automatically. **Heads-up**: the target image lives in the node body (`nodes/<name>.yaml`'s `machine.install.image`), not in `values.yaml` — talm's upgrade wrapper reads it from the rendered config patch, not the chart values overlay (see #176).
+⚠️ Same destructive setup as K2, but the gate now does the work automatically. **Heads-up**: the upgrade wrapper resolves the target image from `values.yaml::image` (rendering the chart against current values), not from the rendered config that lives in `nodes/<name>.yaml`. Bump the image in `values.yaml` to trigger an intentionally-bad cross-vendor upgrade.
 
 Run an intentionally-bad cross-vendor upgrade and expect a hint-bearing blocker:
 
 ```bash
-sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' nodes/node0.yaml
+sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' values.yaml
 talm upgrade -f nodes/node0.yaml
 ```
 
@@ -674,7 +797,7 @@ Expected: no version-mismatch warning (chart contract matches running). Drift pr
 
 ### K5. Phase 2B on a heterogeneous cluster (mid-rollout)
 
-Between K2-step-1 (node0 upgraded) and K2-step-2 (node1 still on old version), Phase 1 still resolves `lookup "links"` (non-Sensitive COSI resource works on both versions). Phase 2A diffs against the specific node, so the cross-version state is per-node, not cluster-wide. Phase 2B (if enabled) compares against the bytes sent; expect cert-hash false-positives until the allowlist lands (see open question in #172).
+Between K2-step-1 (node0 upgraded) and K2-step-2 (node1 still on old version), Phase 1 still resolves `lookup "links"` (non-Sensitive COSI resource works on both versions). Phase 2A diffs against the specific node, so the cross-version state is per-node, not cluster-wide. Phase 2B (if enabled) compares against the bytes sent; expect cert-hash false-positives until the Talos-mutated-field allowlist lands.
 
 ## L. Extended diagnostics + service control
 
@@ -790,7 +913,38 @@ echo "machine: {type: controlplane}" >> /tmp/_bad.yaml
 rm /tmp/_bad.yaml
 ```
 
-Expected: `error parsing JSON array for key nodes` with a hint about the expected syntax.
+Expected: `error parsing JSON array for key nodes` with a hint about the expected syntax. The error surfaces the modeline parse step — the file is NOT silently routed to direct-patch mode where the malformed modeline would be invisible.
+
+### M1a. Orphan file (no modeline) inside project root — classified as orphan, not malformed
+
+```bash
+echo "# operator note above plain YAML" > nodes/_orphan-commented.yaml
+echo "machine: {}" >> nodes/_orphan-commented.yaml
+/tmp/talm-safety apply --dry-run --nodes $NODE --endpoints $NODE -f nodes/_orphan-commented.yaml
+rm nodes/_orphan-commented.yaml
+```
+
+Expected: dispatch into direct-patch mode — progress line `- talm: file=nodes/_orphan-commented.yaml, nodes=[$NODE], endpoints=[$NODE]` followed by drift preview. NO "parsing modeline" error, NO "non-comment line found before modeline" error. The classifier (`FindAndParseModeline`) must distinguish "no `# talm:` line anywhere" (orphan, → `ErrModelineNotFound`) from "modeline present but parse failed" (malformed).
+
+Note: the orphan must live inside the project tree (e.g. under `nodes/`) so root detection finds the project's Chart.yaml / secrets.yaml. An orphan placed at `/tmp/` is rejected at root detection before the modeline classifier runs — see C6b-pre for that path.
+
+### M1b. Misplaced modeline (modeline below YAML) — rejected with a specific hint
+
+```bash
+cat > nodes/_misplaced.yaml <<'EOF'
+machine:
+  type: controlplane
+# talm: nodes=["1.2.3.4"], endpoints=["1.2.3.4"], templates=["templates/controlplane.yaml"]
+EOF
+/tmp/talm-safety apply --dry-run -f nodes/_misplaced.yaml
+rm nodes/_misplaced.yaml
+```
+
+Expected: error `modeline found below non-comment content: first non-comment line was "machine:"` with hint `the # talm: … modeline must precede any YAML content; only #-prefixed comments and blank lines may sit above it`. Distinct from both M1 (malformed value) and M1a (orphan).
+
+Regression anchor 1: the classifier lookahead must scan the entire file for a `# talm:` line before deciding orphan vs misplaced. A regression that returns `ErrModelineNotFound` on first non-comment encounter (without lookahead) would silently route misplaced-modeline files into direct-patch mode, hiding the operator error.
+
+Regression anchor 2: the lookahead is column-0-strict. An indented `# talm:` line inside a YAML body (e.g. `  # talm: see docs for nodes/templates wiring`) is operator-authored documentation, NOT a misplaced modeline; it MUST NOT trip the misplaced-modeline error. Verify by writing a node file with `  # talm: comment` indented under a YAML key and confirming the file routes to orphan / direct-patch mode rather than failing on misplaced-modeline.
 
 ### M2. Malformed patch (string-where-map)
 

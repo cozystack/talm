@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -347,6 +348,74 @@ func TestUpdateTalmLibraryChartRejectsImageFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--image") {
 		t.Errorf("error must name --image so the user can act on it, got: %v", err)
+	}
+}
+
+// TestInitUpdate_PresetNotFoundError_SingleWrapped pins that the
+// "preset not declared anywhere" error path for `talm init --update`
+// surfaces once, not twice. readChartYamlPreset already returns a
+// cockroachdb/errors.WithHint("preset not found in Chart.yaml
+// dependencies", "add a preset chart…"); wrapping that again with
+// errors.Wrap(err, "preset is required: use --preset flag or ensure
+// Chart.yaml has a preset dependency") double-messages the operator:
+// the rendered error becomes "preset is required: …: preset not
+// found in Chart.yaml dependencies" — same fact twice. The fix is to
+// return the inner error directly; its hint already covers both
+// recovery paths (add a preset dependency OR pass --preset).
+func TestInitUpdate_PresetNotFoundError_SingleWrapped(t *testing.T) {
+	imageOrig := initCmdFlags.image
+	presetOrig := initCmdFlags.preset
+	rootOrig := Config.RootDir
+	t.Cleanup(func() {
+		initCmdFlags.image = imageOrig
+		initCmdFlags.preset = presetOrig
+		Config.RootDir = rootOrig
+	})
+
+	initCmdFlags.image = ""
+	initCmdFlags.preset = ""
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+
+	// Chart.yaml carrying only the `talm` library dependency, no
+	// preset chart. readChartYamlPreset will iterate the deps and
+	// return its "preset not found" error.
+	chartYaml := "apiVersion: v2\nname: test\nversion: 0.1.0\n" +
+		"dependencies:\n" +
+		"  - name: talm\n" +
+		"    version: 0.1.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(chartYaml), 0o644); err != nil {
+		t.Fatalf("seed Chart.yaml: %v", err)
+	}
+
+	err := updateTalmLibraryChart()
+	if err == nil {
+		t.Fatal("expected --update without preset to error; got nil")
+	}
+
+	msg := err.Error()
+
+	// Double-wrap signature: the outer wrap text leaks into the
+	// rendered string. After the fix this substring is gone.
+	if strings.Contains(msg, "preset is required:") {
+		t.Errorf("error must be single-wrapped — found outer wrap text %q in:\n%s", "preset is required:", msg)
+	}
+
+	// The inner cause must survive untouched.
+	if !strings.Contains(msg, "preset not found in Chart.yaml dependencies") {
+		t.Errorf("error must surface the inner cause; got:\n%s", msg)
+	}
+
+	// The hint chain must still surface the recovery path.
+	hints := errors.GetAllHints(err)
+	if len(hints) == 0 {
+		t.Fatalf("expected at least one hint guiding the operator on how to declare a preset; got bare error:\n%s", msg)
+	}
+
+	combined := strings.Join(hints, "\n")
+	if !strings.Contains(combined, "add a preset chart") {
+		t.Errorf("hint chain must mention adding a preset chart (or equivalent recovery); got:\n%s", combined)
 	}
 }
 

@@ -201,44 +201,50 @@ func DetectProjectRootForFile(filePath string) (string, error) {
 	return DetectProjectRoot(fileDir)
 }
 
-// ValidateAndDetectRootsForFiles validates that all files belong to the same project root.
-// Returns the common root directory and an error if files belong to different roots.
+// ValidateAndDetectRootsForFiles resolves the project root for a
+// chain of `-f` files. Only the FIRST file anchors the project
+// root; subsequent files are loaded as patches without re-running
+// detection, so a chain like
+// `talm apply -f nodes/cp01.yaml -f /tmp/side-patch.yaml`
+// is accepted — cp01.yaml carries the root, side-patch.yaml is
+// patched on top without needing its own Chart.yaml ancestor.
+//
+// The first-file-anchors rule is ordering-dependent by design.
+// Reversing the chain (orphan first, rooted second) is rejected
+// with a hint that names the FIRST file and tells the operator to
+// reorder, not to move the file. Single-file orphans continue to
+// error out exactly as before.
+//
+// Wrapped talosctl subcommands (`talm dashboard -f …`,
+// `talm reset -f …`, `talm get -f …`) also call this through their
+// PreRunE chain. For them the "chain" notion isn't semantic — each
+// file is its own per-node modeline source — but the relaxed
+// first-file-anchors rule still applies: a cross-project chain that
+// would have errored before now silently pins Config.RootDir to
+// file[0]'s root. In practice operators don't mix files from
+// different projects in a single talosctl invocation; if they do,
+// EnsureTalosconfigPath downstream will use file[0]'s talosconfig.
 func ValidateAndDetectRootsForFiles(filePaths []string) (string, error) {
 	if len(filePaths) == 0 {
 		return "", nil
 	}
 
-	var commonRoot string
+	anchor := filePaths[0]
 
-	roots := make(map[string]bool)
-
-	for _, filePath := range filePaths {
-		fileRoot, err := DetectProjectRootForFile(filePath)
-		if err != nil {
-			return "", errors.Wrapf(err, "failed to detect root for file %s", filePath)
-		}
-
-		if fileRoot == "" {
-			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
-			return "", errors.WithHint(
-				errors.Newf("failed to detect project root for file %s (Chart.yaml and secrets.yaml not found)", filePath),
-				"run `talm init` at the project root, or move the file under an existing talm project",
-			)
-		}
-
-		roots[fileRoot] = true
-		if commonRoot == "" {
-			commonRoot = fileRoot
-		} else if commonRoot != fileRoot {
-			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
-			return "", errors.WithHint(
-				errors.Newf("files belong to different project roots: %s and %s", commonRoot, fileRoot),
-				"run the command separately for each project, or pass files from a single project root",
-			)
-		}
+	fileRoot, err := DetectProjectRootForFile(anchor)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to detect root for file %s", anchor)
 	}
 
-	return commonRoot, nil
+	if fileRoot == "" {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return "", errors.WithHint(
+			errors.Newf("failed to detect project root for first file %s (Chart.yaml and secrets.yaml not found)", anchor),
+			"the first -f file anchors the project root; place it inside a `talm init`'d project, or reorder the -f chain so a rooted file comes first",
+		)
+	}
+
+	return fileRoot, nil
 }
 
 // DetectRootForTemplate detects the project root for a template file path.
@@ -248,7 +254,14 @@ func DetectRootForTemplate(templatePath string) (string, error) {
 }
 
 func processModelineAndUpdateGlobals(configFile string, nodesFromArgs, endpointsFromArgs, overwrite bool) ([]string, error) {
-	modelineConfig, err := modeline.ReadAndParseModeline(configFile)
+	// FindAndParseModeline accepts operator-authored comment / blank
+	// lines before the modeline. Every workflow that consumes node
+	// files — apply, upgrade, template -I, completion, wrapped
+	// talosctl subcommands — must agree on file shape; a strict
+	// "first line must be modeline" rule would silently break the
+	// apply / upgrade / talosctl path against files that
+	// template -I just produced.
+	_, modelineConfig, err := modeline.FindAndParseModeline(configFile)
 	if err != nil {
 		// Don't print the error here — cobra surfaces the wrapped
 		// return through stderr at the command level. Printing here

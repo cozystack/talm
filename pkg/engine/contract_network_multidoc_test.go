@@ -265,8 +265,8 @@ func TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig_Generic(t *t
 
 // TestContract_NetworkMultidoc_BondWithoutSlaves_WithVIP_SkipsBondConfig
 // pins the empty-slaves guardrail against the VIP-active code path.
-// Field report (#9327 / #9351): an operator on v0.27.0 saw an empty
-// BondConfig emitted "only when VIP is in use" — the existing
+// Field report: an operator saw an empty BondConfig emitted "only
+// when VIP is in use" — the existing
 // TestContract_NetworkMultidoc_BondWithoutSlaves_SkipsBondConfig pins
 // the no-VIP shape, so a hidden VIP-conditional branch could still
 // emit BondConfig{links: <empty>} without breaking the existing

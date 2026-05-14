@@ -1193,7 +1193,7 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 // each carrying a default route. eth0 is in `table=main`, eth1 is in a non-main
 // table (e.g. an alternate routing table) and a third interface has a main-table
 // route that should be ignored once the first match is taken. Used to verify
-// `default_link_name_by_gateway` (#108) returns a single deterministic value
+// `default_link_name_by_gateway` returns a single deterministic value
 // rather than concatenating link names from every matching route.
 func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[string]any, error) {
 	eth0 := map[string]any{
@@ -1311,10 +1311,11 @@ func multiNicMultipleDefaultRoutesLookup() func(string, string, string) (map[str
 	}
 }
 
-// TestDefaultLinkByGatewayHelpers_MultiNIC is a regression test for #108.
-// When a node has multiple default routes (typical for DHCP on multi-NIC
-// machines), the helpers historically iterated all matches and concatenated
-// the outputs (e.g. `eth0eth1eth2`) and didn't filter by `table=main`.
+// TestDefaultLinkByGatewayHelpers_MultiNIC pins the deterministic
+// single-link result on multi-default-route nodes. When a node has
+// multiple default routes (typical for DHCP on multi-NIC machines),
+// an earlier helper iterated all matches and concatenated the
+// outputs (e.g. `eth0eth1eth2`) and didn't filter by `table=main`.
 // After the fix the helpers must:
 //   - filter routes by table=main
 //   - return exactly one value (the first matching route)
@@ -1346,10 +1347,10 @@ bus={{ include "talm.discovered.default_link_bus_by_gateway" . }}
 	assertNotContains(t, output, "eth2")
 }
 
-// secondaryNicLookup emulates a node with two physical NICs (eth0 primary
-// with a default route, eth1 storage with a static subnet route and no
-// default) plus a bond master link. Used to exercise the multi-NIC discovery
-// helpers added for #125.
+// secondaryNicLookup emulates a node with two physical NICs (eth0
+// primary with a default route, eth1 storage with a static subnet
+// route and no default) plus a bond master link. Exercises the
+// per-link multi-NIC discovery helpers.
 func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 	eth0 := map[string]any{
 		"metadata": map[string]any{"id": "eth0"},
@@ -1488,10 +1489,10 @@ func secondaryNicLookup() func(string, string, string) (map[string]any, error) {
 	}
 }
 
-// TestSecondaryNicHelpers covers the per-link helpers added for #125. They
-// expose every physical NIC (not just the primary one carrying the default
-// route) so user templates can configure secondary uplinks (e.g. storage
-// network on a control-plane).
+// TestSecondaryNicHelpers covers the per-link discovery helpers
+// that expose every physical NIC (not just the primary one carrying
+// the default route) so user templates can configure secondary
+// uplinks (e.g. storage network on a control-plane).
 func TestSecondaryNicHelpers(t *testing.T) {
 	const tmpl = `physical={{ include "talm.discovered.physical_link_names" . }}
 configurable={{ include "talm.discovered.configurable_link_names" . }}
@@ -1732,11 +1733,12 @@ func TestCozystackChartRendersIPv4GatewayOnDualStack(t *testing.T) {
 	})
 }
 
-// TestNetworkMultidoc_NoDiscovery is a regression test for #58. When discovery
-// returns no default route (offline render, isolated node, custom networking),
-// the multidoc cozystack template must NOT emit a LinkConfig/BondConfig/
-// VLANConfig/Layer2VIPConfig with empty `name:` — Talos v1.12 rejects such
-// documents with `[networking.os.device.interface] required`.
+// TestNetworkMultidoc_NoDiscovery pins the empty-name guard: when
+// discovery returns no default route (offline render, isolated
+// node, custom networking), the multidoc cozystack template must
+// NOT emit a LinkConfig/BondConfig/VLANConfig/Layer2VIPConfig with
+// empty `name:` — Talos v1.12 rejects such documents with
+// `[networking.os.device.interface] required`.
 func TestNetworkMultidoc_NoDiscovery(t *testing.T) {
 	output := renderChartTemplate(t, "../../charts/cozystack", "templates/controlplane.yaml", "v1.12")
 
@@ -2163,10 +2165,11 @@ func TestMultiDocLinkConfigCarriesMTU(t *testing.T) {
 	}
 }
 
-// TestNetworkLegacy_NoDiscovery is a regression test for #58 covering the
-// legacy (Talos < v1.12) path. The `interfaces:` key was unconditionally
-// emitted, producing either an empty list or a `- interface:` block with an
-// empty interface name when discovery found no default route. Either form
+// TestNetworkLegacy_NoDiscovery pins the empty-interface guard on
+// the legacy (Talos < v1.12) path. The `interfaces:` key was
+// unconditionally emitted, producing either an empty list or a
+// `- interface:` block with an empty interface name when discovery
+// found no default route. Either form
 // breaks Talos validation. After the fix, the template must skip both
 // `interfaces:` and the per-interface block entirely.
 func TestNetworkLegacy_NoDiscovery(t *testing.T) {

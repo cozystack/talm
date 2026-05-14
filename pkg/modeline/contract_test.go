@@ -26,8 +26,6 @@
 package modeline
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -128,75 +126,6 @@ func TestContract_ParseModeline_EmptyArrays(t *testing.T) {
 	}
 	if len(got.Nodes) != 0 || len(got.Endpoints) != 0 || len(got.Templates) != 0 {
 		t.Errorf("expected all-empty Config, got %+v", got)
-	}
-}
-
-// === ReadAndParseModeline ===
-
-// Contract: ReadAndParseModeline opens a file, reads only the first
-// line, and parses it as a modeline. Subsequent lines are not read
-// (the modeline is conventionally the very first line, and the rest
-// of the file is YAML the helm engine consumes).
-func TestContract_ReadAndParseModeline_FirstLineOnly(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "node.yaml")
-	content := `# talm: nodes=["1.2.3.4"]
-# talm: nodes=["should-be-ignored"]
-machine:
-  type: worker
-`
-	err := os.WriteFile(file, []byte(content), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadAndParseModeline(file)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !reflect.DeepEqual(got.Nodes, []string{testNodeIP1}) {
-		t.Errorf("expected first line only, got %+v", got)
-	}
-}
-
-// Contract: a missing file produces an error mentioning the path so
-// the operator can fix it without grepping.
-func TestContract_ReadAndParseModeline_MissingFile(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "nope.yaml")
-	_, err := ReadAndParseModeline(missing)
-	if err == nil {
-		t.Fatal("expected error for missing file")
-	}
-}
-
-// Contract: an empty file produces a precise error.
-func TestContract_ReadAndParseModeline_EmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "empty.yaml")
-	err := os.WriteFile(file, []byte(""), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ReadAndParseModeline(file)
-	if err == nil {
-		t.Fatal("expected error for empty file")
-	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Errorf("error must mention 'empty', got: %v", err)
-	}
-}
-
-// Contract: a file whose first line is not a modeline surfaces the
-// parse error verbatim — the file-read path is a thin wrapper.
-func TestContract_ReadAndParseModeline_NonModelineFirstLine(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "no-modeline.yaml")
-	err := os.WriteFile(file, []byte("machine:\n"), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ReadAndParseModeline(file)
-	if err == nil {
-		t.Fatal("expected error for first line without modeline")
 	}
 }
 

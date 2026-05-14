@@ -96,7 +96,9 @@ func TestFuncs(t *testing.T) {
 		expect: `[error unmarshaling JSON: while decoding JSON: json: cannot unmarshal object into Go value of type []interface {}]`,
 		vars:   `hello: world`,
 	}, {
-		// This should never result in a network lookup. Regression for #7955
+		// This should never result in a network lookup; lookup on an
+		// unconnected engine must return empty rather than attempt
+		// kubeapi discovery.
 		tpl:    `{{ lookup "v1" "Namespace" "" "unlikelynamespace99999999" }}`,
 		expect: `map[]`,
 		vars:   `["one", "two"]`,

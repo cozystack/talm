@@ -114,6 +114,14 @@ func registerRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
 	cmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
 	cmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
+
+	// Shell completion for root persistent flags. --nodes /
+	// --endpoints draw from the in-scope talosconfig contexts.
+	// --talosconfig is not wired here — talosconfig has no fixed
+	// extension and cobra's default file completion is already
+	// the right shape for picking the file by hand.
+	_ = cmd.RegisterFlagCompletionFunc("nodes", commands.CompleteTalosconfigNodes)
+	_ = cmd.RegisterFlagCompletionFunc("endpoints", commands.CompleteTalosconfigEndpoints)
 }
 
 func Execute() error {
@@ -128,8 +136,8 @@ func Execute() error {
 		}
 
 		errorString := err.Error()
-		//nolint:godox // tracked as #153-followup; cobra validation returns plain fmt.Errorf without a typed error, requires substring matching until cobra ships sentinel errors.
-		// FIXME(#153-followup): cobra arg/flag validation returns plain
+		//nolint:godox // cobra validation returns plain fmt.Errorf without a typed error; substring matching is the only way to distinguish those from talm's own errors until cobra ships sentinel errors.
+		// FIXME: cobra arg/flag validation returns plain
 		// fmt.Errorf without a typed error; substring-matching the
 		// rendered message is the only way to distinguish those from
 		// our own errors today. Track a refactor to wrap cobra

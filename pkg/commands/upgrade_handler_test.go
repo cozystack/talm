@@ -267,15 +267,15 @@ func TestRunPostUpgradeVersionVerifyInner_NonEmptyNodes_WaitsAndVerifies(t *test
 }
 
 // TestDefaultPostUpgradeReconcileWindow_Is90s pins back-compat for
-// #190: the upgrade flow defaulted to a hard-coded 90s wait before
-// the flag was introduced; the new --post-upgrade-reconcile-window
-// must register the same value as its default so operators who
-// never pass the flag observe byte-identical timing.
+// the --post-upgrade-reconcile-window default: the upgrade flow
+// defaulted to a hard-coded 90s wait before the flag was
+// introduced; the flag must register the same value as its default
+// so operators who never pass it observe byte-identical timing.
 func TestDefaultPostUpgradeReconcileWindow_Is90s(t *testing.T) {
 	t.Parallel()
 
 	if defaultPostUpgradeReconcileWindow != 90*time.Second {
-		t.Errorf("default reconcile window changed: got %s, want 90s — back-compat regression (#190)", defaultPostUpgradeReconcileWindow)
+		t.Errorf("default reconcile window changed: got %s, want 90s — back-compat regression", defaultPostUpgradeReconcileWindow)
 	}
 }
 
@@ -370,6 +370,24 @@ func TestValidatePostUpgradeReconcileWindow_PositiveAccepted(t *testing.T) {
 	}
 }
 
+// TestWrapUpgradeCommand_LongDocumentsImageResolution pins the
+// operator-facing description of where the upgrade target image
+// comes from. `talm upgrade --help` must explain the
+// values.yaml → --image override chain so operators don't have to
+// read the source. Without this pin a doc-removal refactor would
+// silently revert the upgrade flow to "you have to guess where
+// --image came from".
+func TestWrapUpgradeCommand_LongDocumentsImageResolution(t *testing.T) {
+	cmd := &cobra.Command{Use: upgradeCmdName}
+	wrapUpgradeCommand(cmd, func(_ *cobra.Command, _ []string) error { return nil })
+
+	for _, want := range []string{"values.yaml", "--image"} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("upgrade Long must name %q in the image-resolution explanation; got:\n%s", want, cmd.Long)
+		}
+	}
+}
+
 // TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE
 // pins fail-fast semantics on the reconcile-window flag: a zero or
 // negative value must reject BEFORE the talosctl upgrade RPC fires.
@@ -427,14 +445,12 @@ func TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE(t *te
 
 // TestReadmePostUpgradeVerify_NoHardcoded90s mirrors
 // TestPostUpgradeVersionMismatchHint_NoHardcoded90s for the
-// operator-facing README. The pre-#190 README claimed "waits 90s
-// for the node to finish booting"; after #190 the window is
-// operator-tunable via --post-upgrade-reconcile-window. The README
-// bullet must reference "the configured reconcile window" rather
-// than a literal 90s so an operator running with a custom window
-// does not read contradictory documentation. Pin the absence of
-// the literal so a future README edit re-introducing it fails this
-// test.
+// operator-facing README. An earlier copy claimed "waits 90s for
+// the node to finish booting"; the window is now operator-tunable
+// via --post-upgrade-reconcile-window, so the README must reference
+// "the configured reconcile window" rather than a literal 90s.
+// Pin the absence of the literal so a future README edit
+// re-introducing it fails this test.
 func TestReadmePostUpgradeVerify_NoHardcoded90s(t *testing.T) {
 	t.Parallel()
 

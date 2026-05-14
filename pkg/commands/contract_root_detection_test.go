@@ -24,7 +24,10 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/cockroachdb/errors"
 )
 
 // makeProjectRoot creates a `Chart.yaml` and `secrets.yaml` (the two
@@ -214,7 +217,14 @@ func TestContract_ValidateAndDetectRootsForFiles_SingleRoot(t *testing.T) {
 // commandline. talm refuses to apply a config built from
 // inconsistent inputs (it cannot meaningfully merge two project
 // configs in one apply).
-func TestContract_ValidateAndDetectRootsForFiles_DifferentRootsError(t *testing.T) {
+// TestContract_ValidateAndDetectRootsForFiles_DifferentRoots_FirstFileWins
+// pins the contract: the first `-f` file anchors the project root;
+// subsequent files in DIFFERENT roots are loaded as patches without
+// re-detecting. An earlier loop-rejected any divergence between
+// filePaths[i] and filePaths[0]; that gate was the same one
+// blocking the side-patch use case, so the flip is the same change
+// as for an outright-orphan second file.
+func TestContract_ValidateAndDetectRootsForFiles_DifferentRoots_FirstFileWins(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 	makeProjectRoot(t, rootA)
@@ -227,41 +237,113 @@ func TestContract_ValidateAndDetectRootsForFiles_DifferentRootsError(t *testing.
 	if err := os.WriteFile(fileB, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ValidateAndDetectRootsForFiles([]string{fileA, fileB})
-	if err == nil {
-		t.Fatal("expected error for files in different roots")
+
+	got, err := ValidateAndDetectRootsForFiles([]string{fileA, fileB})
+	if err != nil {
+		t.Fatalf("first file anchors root; second file's divergent root must be ignored, got error: %v", err)
+	}
+
+	wantRoot, _ := filepath.EvalSymlinks(rootA)
+	gotRoot, _ := filepath.EvalSymlinks(got)
+	if gotRoot != wantRoot {
+		t.Errorf("anchor root = %q, want %q (first file's project root wins)", gotRoot, wantRoot)
 	}
 }
 
-// Contract: a file whose directory has no Chart.yaml/secrets up the
-// tree at all is reported by name in the error so the operator can
-// see WHICH file failed root detection.
-func TestContract_ValidateAndDetectRootsForFiles_OrphanFileError(t *testing.T) {
+// TestContract_ValidateAndDetectRootsForFiles_FirstRootedSecondOrphan_Accepted
+// pins the canonical side-patch case: a rooted node file
+// followed by a `-f /tmp/patch.yaml` outside any project. The first
+// file anchors the root, the orphan is loaded as a patch.
+func TestContract_ValidateAndDetectRootsForFiles_FirstRootedSecondOrphan_Accepted(t *testing.T) {
 	root := t.TempDir()
 	makeProjectRoot(t, root)
 
-	// Orphan: file outside any project.
-	orphanDir := t.TempDir()
-	orphan := filepath.Join(orphanDir, "loose.yaml")
-	if err := os.WriteFile(orphan, []byte(""), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	rootedFile := filepath.Join(root, "node.yaml")
 	if err := os.WriteFile(rootedFile, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Note: this test passes only when $TMPDIR's ancestors do NOT
-	// happen to contain Chart.yaml + secrets.yaml. On a developer
-	// machine with such markers it would resolve to that. Skip if so.
-	got, _ := DetectProjectRootForFile(orphan)
-	if got != "" {
-		t.Skipf("test environment has project markers above %q; skipping orphan-error path", orphanDir)
+	orphanDir := t.TempDir()
+	orphan := filepath.Join(orphanDir, "loose.yaml")
+	if err := os.WriteFile(orphan, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	_, err := ValidateAndDetectRootsForFiles([]string{rootedFile, orphan})
+	// Skip if the test environment's tmp ancestor happens to be a
+	// talm project — the orphan would resolve to a real root and
+	// the test premise would be invalid.
+	if got, _ := DetectProjectRootForFile(orphan); got != "" {
+		t.Skipf("test environment has project markers above %q; skipping orphan side-patch path", orphanDir)
+	}
+
+	got, err := ValidateAndDetectRootsForFiles([]string{rootedFile, orphan})
+	if err != nil {
+		t.Fatalf("first-rooted + second-orphan must succeed under the first-file-anchors contract; got error: %v", err)
+	}
+
+	wantRoot, _ := filepath.EvalSymlinks(root)
+	gotRoot, _ := filepath.EvalSymlinks(got)
+	if gotRoot != wantRoot {
+		t.Errorf("anchor root = %q, want %q (first file's project root wins)", gotRoot, wantRoot)
+	}
+}
+
+// TestContract_ValidateAndDetectRootsForFiles_FirstOrphan_RejectedWithReorderHint
+// pins the inverse: orphan first, rooted second. Under the
+// first-file-anchors contract this is rejected — there is no
+// rooted anchor to begin with. The hint must tell the operator
+// to reorder, not to move the file under a project.
+func TestContract_ValidateAndDetectRootsForFiles_FirstOrphan_RejectedWithReorderHint(t *testing.T) {
+	root := t.TempDir()
+	makeProjectRoot(t, root)
+
+	rootedFile := filepath.Join(root, "node.yaml")
+	if err := os.WriteFile(rootedFile, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphanDir := t.TempDir()
+	orphan := filepath.Join(orphanDir, "loose.yaml")
+	if err := os.WriteFile(orphan, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := DetectProjectRootForFile(orphan); got != "" {
+		t.Skipf("test environment has project markers above %q; skipping orphan-first rejection path", orphanDir)
+	}
+
+	_, err := ValidateAndDetectRootsForFiles([]string{orphan, rootedFile})
 	if err == nil {
-		t.Fatal("expected error for orphan file")
+		t.Fatal("expected error: first file with no project root must reject the whole chain")
+	}
+
+	// The error message + hints must guide the operator to reorder.
+	hints := strings.Join(errors.GetAllHints(err), "\n")
+	full := err.Error() + "\n" + hints
+	if !strings.Contains(full, "first") {
+		t.Errorf("error / hint must explain that the FIRST file anchors the root; got:\n%s", full)
+	}
+}
+
+// TestContract_ValidateAndDetectRootsForFiles_OnlyOrphan_StillRejected
+// pins the no-contract-regression case: a single orphan file is
+// rejected exactly as before. The first-file-anchors relaxation
+// only widens the multi-file case; single-file behaviour stays
+// strict.
+func TestContract_ValidateAndDetectRootsForFiles_OnlyOrphan_StillRejected(t *testing.T) {
+	orphanDir := t.TempDir()
+	orphan := filepath.Join(orphanDir, "loose.yaml")
+	if err := os.WriteFile(orphan, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := DetectProjectRootForFile(orphan); got != "" {
+		t.Skipf("test environment has project markers above %q; skipping orphan-only rejection path", orphanDir)
+	}
+
+	_, err := ValidateAndDetectRootsForFiles([]string{orphan})
+	if err == nil {
+		t.Fatal("single-file orphan must continue to error (no contract regression)")
 	}
 }
 

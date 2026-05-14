@@ -22,9 +22,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/cozystack/talm/pkg/engine"
 	"github.com/siderolabs/talos/pkg/machinery/client"
-	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/spf13/cobra"
 )
 
@@ -74,13 +72,39 @@ func validatePostUpgradeReconcileWindow(window time.Duration) error {
 
 // wrapUpgradeCommand adds special handling for upgrade command: extract image from config and set --image flag
 //
-//nolint:gocognit,gocyclo,cyclop,funlen,nestif // cobra wrapper branching over (image extraction, file paths, modeline) for the upgrade flow; each branch is short.
+//nolint:gocognit,gocyclo,cyclop,funlen // cobra wrapper branching over (image extraction, file paths, modeline) for the upgrade flow; each branch is short.
 func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Command, []string) error) {
+	// Extend the upstream Long with talm-specific behaviour so
+	// `talm upgrade --help` describes the actual image-resolution
+	// chain (values.yaml, --image override) instead of just the
+	// generic upstream upgrade flow.
+	wrappedCmd.Long = `Upgrade Talos on the target node(s).
+
+Image resolution (when -f is provided):
+  - --image <ref>         takes precedence and is used as-is.
+  - otherwise, talm reads ` + "`image:`" + ` from values.yaml at the
+    project root and passes it as the upgrade target. Bumping
+    values.yaml::image is the canonical "raise the cluster's
+    Talos version" workflow — re-running ` + "`talm template`" + ` to
+    refresh node files first is NOT required.
+
+The first -f file anchors the project root (Chart.yaml +
+secrets.yaml); its modeline supplies the nodes / endpoints. The
+node body's machine.install.image is no longer consulted by the
+upgrade flow.`
+
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
-		"skip the post-upgrade check that compares running Talos version against the target image's tag (Phase 2C; detects silent A/B rollback per #175)")
+		"skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)")
 
 	wrappedCmd.Flags().DurationVar(&upgradeCmdFlags.postUpgradeReconcileWindow, "post-upgrade-reconcile-window", defaultPostUpgradeReconcileWindow,
 		"how long to wait after upgrade returns before re-reading the running version; widen for slow hardware / large image pulls")
+
+	// Shell completion for `talm upgrade --file`: returns modelined
+	// yaml files under <root>/nodes/. ValidArgsFunction is NOT
+	// wired because upstream's upgrade command declares no
+	// positional args; cobra's __complete path suppresses
+	// ValidArgsFunction when the arg-constraint is NoArgs.
+	_ = wrappedCmd.RegisterFlagCompletionFunc("file", completeNodeFiles)
 
 	wrappedCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Fail-fast on a bad --post-upgrade-reconcile-window BEFORE
@@ -116,12 +140,21 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 			return err
 		}
 
-		// If config files are provided and --image flag is not set, extract image from config
+		// If config files are provided and --image flag is not set,
+		// resolve the upgrade target image from values.yaml.
+		// values.yaml is the source of truth for cluster-wide knobs;
+		// the upgrade target reads from there directly rather than
+		// re-extracting from a rendered node body (which would pin
+		// the image to whatever was templated last, ignoring later
+		// values.yaml bumps). Per-node image override remains
+		// possible by passing --image explicitly.
 		if len(filesToProcess) > 0 && !cmd.Flags().Changed("image") {
-			// Process first config file to extract image
+			// Process modeline so GlobalArgs.Nodes / .Endpoints are
+			// populated for the downstream talosctl invocation; we
+			// no longer use the modeline templates list, but the
+			// nodes/endpoints carry on.
 			configFile := filesToProcess[0]
 
-			// Process modeline to update GlobalArgs
 			nodesFromArgs := len(GlobalArgs.Nodes) > 0
 
 			endpointsFromArgs := len(GlobalArgs.Endpoints) > 0
@@ -129,69 +162,18 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 				return errors.Wrap(err, "failed to process modeline")
 			}
 
-			// Get talos-version, with-secrets, kubernetes-version from flags or config
-			talosVersion := Config.TemplateOptions.TalosVersion
-
-			if cmd.Flags().Changed("talos-version") {
-				if val, err := cmd.Flags().GetString("talos-version"); err == nil {
-					talosVersion = val
-				}
-			}
-
-			withSecrets := Config.TemplateOptions.WithSecrets
-
-			if cmd.Flags().Changed("with-secrets") {
-				if val, err := cmd.Flags().GetString("with-secrets"); err == nil {
-					withSecrets = val
-				}
-			}
-
-			// Resolve secrets.yaml path relative to project root if not absolute
-			withSecrets = ResolveSecretsPath(withSecrets)
-
-			kubernetesVersion := Config.TemplateOptions.KubernetesVersion
-
-			if cmd.Flags().Changed("kubernetes-version") {
-				if val, err := cmd.Flags().GetString("kubernetes-version"); err == nil {
-					kubernetesVersion = val
-				}
-			}
-
-			// Process config to extract image
-			eopts := engine.Options{
-				TalosVersion:      talosVersion,
-				WithSecrets:       withSecrets,
-				KubernetesVersion: kubernetesVersion,
-			}
-
-			patches := []string{"@" + configFile}
-
-			configBundle, machineType, err := engine.FullConfigProcess(eopts, patches)
+			image, err := resolveUpgradeImageFromValues(Config.RootDir)
 			if err != nil {
-				return errors.Wrap(err, "full config processing error")
+				return err
 			}
 
-			result, err := engine.SerializeConfiguration(configBundle, machineType)
-			if err != nil {
-				return errors.Wrap(err, "error serializing configuration")
-			}
-
-			config, err := configloader.NewFromBytes(result)
-			if err != nil {
-				return errors.Wrap(err, "error loading config")
-			}
-
-			image := config.Machine().Install().Image()
-			if image == "" {
-				return errors.New("error getting image from config")
-			}
-
-			// Set --image flag with extracted image
 			if err := cmd.Flags().Set("image", image); err != nil {
-				// Flag might not exist, ignore error
+				// Flag might not exist (extremely unlikely given
+				// upgradeCmd registers it); fall through with a
+				// warning rather than aborting.
 				fmt.Fprintf(os.Stderr, "Warning: failed to set --image flag: %v\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "Using image from config: %s\n", image)
+				fmt.Fprintf(os.Stderr, "Using image from values.yaml: %s\n", image)
 			}
 		}
 
@@ -223,8 +205,8 @@ func wrapUpgradeCommand(wrappedCmd *cobra.Command, originalRunE func(*cobra.Comm
 		}
 
 		// Phase 2C: post-upgrade version verify. Detects the silent
-		// auto-rollback case (#175): talosctl upgrade acks the RPC,
-		// Talos pulls + writes the new install, A/B boot fails its
+		// auto-rollback case: talosctl upgrade acks the RPC, Talos
+		// pulls + writes the new install, A/B boot fails its
 		// readiness check, Talos rolls back to the prior partition,
 		// and the operator's "successful" upgrade silently no-ops.
 		// Skip predicate documents the cases where this gate cannot
