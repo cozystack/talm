@@ -228,6 +228,24 @@ When the local `charts/talm/` is older than the talm binary's embedded preset, `
 
 **Regression anchor**: `template -I` is rewrite, not merge — verify by adding a `# my comment` line above the modeline in `nodes/node0.yaml`, running B4, and confirming the comment is GONE in the new body. If the comment survives, a behaviour change shipped (could be either an intentional new `--preserve-comments` flag or an undocumented merge mode — neither should appear silently).
 
+### B6. Scope-filter symmetry across v1.11 and v1.12 renders
+
+Pin both schema renders dropping kernel-managed scopes (`host` / `link` / `nowhere`) from the COSI addresses table. On a node where 169.254/16 link-local addresses live on the default-gateway-bearing interface (Talos always sets `scope=link` for that range), assert:
+
+```bash
+# Render the legacy v1.11 path first — explicit talosVersion pin:
+sed -i.bak 's/^talosVersion: "v1.12"/talosVersion: "v1.11"/' Chart.yaml
+talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.11" || echo "OK v1.11"
+mv Chart.yaml.bak Chart.yaml
+
+# Then render the v1.12 path (default):
+talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.12" || echo "OK v1.12"
+```
+
+Expected: both renders print "OK" — no `address: 169.254.…` lines anywhere in the rendered output. The two helpers (`talm.discovered.default_addresses_by_gateway` for v1.11 and `talm.discovered.addresses_by_link` for v1.12) share the same `$skipScopes := list "host" "link" "nowhere"` filter so a link-local address on the default-gateway link is dropped from both paths.
+
+Regression anchor: a regression that re-introduces the v1.11-only `host`-scope filter would let link-local addresses leak into the legacy `machine.network.interfaces[].addresses` block on a future COSI schema bump that emitted them on the default-gateway-bearing link. Pinned by `TestContract_NetworkLegacy_DefaultAddressesFilterLinkScope` with a `linkScopedAddressOnDefaultGatewayLookup` fixture, but the live render is still useful as a sanity check against real cluster discovery output.
+
 ## C. Apply (auth path)
 
 This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.

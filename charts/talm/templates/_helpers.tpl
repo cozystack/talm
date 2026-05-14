@@ -142,6 +142,17 @@
        it cannot match a real CIDR prefix. */ -}}
 {{- $fipStr := $.Values.floatingIP | toString }}
 {{- $addresses := list }}
+{{- /* Drop the same kernel-managed scopes addresses_by_link
+       rejects (host loopback, link-local, "nowhere"). Real Talos
+       COSI always sets scope=link for the 169.254/16 link-local
+       range, so a legacy v1.11 render that filtered only the
+       "host" scope was at risk of leaking link-local addresses
+       verbatim into machine.network.interfaces[].addresses on
+       the next COSI schema bump. Mirror the two helpers so a
+       future bump that produces new link-local entries on the
+       default-gateway-bearing link can't slip through one path
+       while being correctly rejected by the other. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" }}
 {{- range (lookup "addresses" "" "").items }}
 {{- /* Filter malformed or future-format entries the same way
        addresses_by_link does (cidrPrefixLen >= 0). A corrupt entry
@@ -149,7 +160,7 @@
        legacy v1.11 machine.network.interfaces[].addresses block. */ -}}
 {{- $address := .spec.address | toString }}
 {{- $validCidr := ge (cidrPrefixLen $address) 0 }}
-{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) $validCidr }}
+{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (has (.spec.scope | toString) $skipScopes)) $validCidr }}
 {{- if not (hasPrefix (printf "%s/" $fipStr) $address) }}
 {{- $addresses = append $addresses $address }}
 {{- end }}

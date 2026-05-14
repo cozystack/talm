@@ -1005,6 +1005,34 @@ func TestContract_NetworkLegacy_DefaultAddressesFilterMalformedCidr(t *testing.T
 	}
 }
 
+// Contract: legacy v1.11 default_addresses_by_gateway drops the
+// same kernel-managed scopes addresses_by_link drops — host,
+// link, nowhere. Without this symmetry a link-scoped 169.254/16
+// entry on the default-gateway-bearing link could land verbatim
+// in machine.network.interfaces[].addresses on a future COSI
+// schema bump that produced link-local entries the legacy path
+// hadn't yet seen. Real Talos COSI always uses scope=link for
+// 169.254/16, so this case is currently latent — but the two
+// helpers must apply the same filter for symmetry and to stay
+// reasonable to maintain together.
+//
+// Fixture: a link-scoped 169.254.1.5/16 entry on the default-
+// route-bearing link sandwiched between two global-scope
+// siblings. The render asserts the link-scoped address is
+// absent from the rendered output while the global-scope
+// sibling on the same link is present.
+func TestContract_NetworkLegacy_DefaultAddressesFilterLinkScope(t *testing.T) {
+	out := renderChartTemplateWithLookup(t, cozystackChartPath, controlplaneTpl, linkScopedAddressOnDefaultGatewayLookup(), "v1.11")
+
+	if strings.Contains(out, "169.254.1.5") {
+		t.Errorf("legacy v1.11: link-scoped 169.254/16 leaked into machine.network.interfaces[].addresses; default_addresses_by_gateway scope filter must drop scope=link (mirror addresses_by_link). got:\n%s", out)
+	}
+
+	if !strings.Contains(out, "88.99.210.37") {
+		t.Errorf("legacy v1.11: global-scope sibling on the default-gateway link missing from rendered output — scope filter dropped valid addresses too. got:\n%s", out)
+	}
+}
+
 // Generic-chart mirrors of the four legacy fail-fast contracts above.
 
 func TestContract_NetworkLegacy_Generic_VIPFailsOnInvalidFloatingIP(t *testing.T) {
