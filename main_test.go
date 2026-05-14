@@ -249,6 +249,17 @@ func TestSkipConfigCommands(t *testing.T) {
 			expected: true,
 		},
 		{
+			// dmesg is the retired migration stub — must skip
+			// Chart.yaml loading so the "talm dmesg has been
+			// removed" hint surfaces even outside a project
+			// root. Without this membership the operator would
+			// see an "error reading configuration file" instead
+			// of the migration hint.
+			name:     "dmesg (retired migration stub)",
+			cmdPath:  []string{"talm", "dmesg"},
+			expected: true,
+		},
+		{
 			name:     "apply command should load config",
 			cmdPath:  []string{"talm", "apply"},
 			expected: false,

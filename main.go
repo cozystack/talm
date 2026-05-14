@@ -32,6 +32,12 @@ const (
 	// appears both in skipConfigCommands and in cobra's exported
 	// API.
 	completionInternal = "__complete"
+	// dmesgSubcommandName labels the hidden migration stub for the
+	// retired `talm dmesg` command. The stub errors with a hint
+	// pointing at `talm logs kernel --tail=N`; it must skip
+	// Chart.yaml loading so the migration hint surfaces even when
+	// the operator runs it outside a talm project.
+	dmesgSubcommandName = "dmesg"
 )
 
 // cmdNameTalm is the binary name used both as the cobra root
@@ -49,9 +55,10 @@ var Version = "dev"
 // - init: creates the config, so it doesn't exist yet
 // - completion: generates shell completion scripts
 // - __complete: cobra's internal command for shell autocompletion (Tab key).
+// - dmesg: retired migration stub; must error with the hint regardless of cwd.
 //
 //nolint:gochecknoglobals // immutable lookup table consulted by isCommandOrParent during PersistentPreRunE; init-time literal.
-var skipConfigCommands = []string{initSubcommandName, completionSubcommand, completionInternal}
+var skipConfigCommands = []string{initSubcommandName, completionSubcommand, completionInternal, dmesgSubcommandName}
 
 // rootCmd represents the base command when called without any subcommands.
 //

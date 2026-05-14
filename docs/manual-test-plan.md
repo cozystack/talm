@@ -2,15 +2,20 @@
 
 A QA-oriented matrix for exercising `talm` end-to-end against a real Talos cluster. Designed to surface bugs that unit + contract tests miss — encoding edge cases, real-disk topology quirks, multi-node interactions, recovery flows.
 
-The narrow apply-safety-gates checklist lives at [`apply-safety-gates-test-plan.md`](./apply-safety-gates-test-plan.md); this document covers the whole CLI surface.
+The apply-time safety gate matrix (Phase 1 / 2A / 2B / 2C, per-case triggers + expectations) is folded into Section C-safety below.
 
 ## How to use this plan
 
-1. Build the binary under test:
+1. Build the binary under test and put it on `PATH`:
 
    ```bash
-   cd ~/git/github.com/cozystack/talm && go build -o /tmp/talm-safety ./
+   cd ~/git/github.com/cozystack/talm
+   go install ./   # places `talm` in $GOBIN (or $GOPATH/bin), which should be on PATH
+   # OR, if you prefer a local build:
+   #   go build -o talm ./ && export PATH=$PWD:$PATH
    ```
+
+   The commands in this plan assume `talm` is invokable by bare name. Adjust paths accordingly if you keep the binary elsewhere.
 
 2. Have a reachable Talos cluster (3 controlplane nodes recommended so you can exercise reset / etcd-member-removal without losing quorum). A small OCI / cloud / bare-metal v1.12.x stand is enough.
 
@@ -31,7 +36,7 @@ The narrow apply-safety-gates checklist lives at [`apply-safety-gates-test-plan.
 
 ```bash
 mkdir -p /tmp/talm-init-test && cd /tmp/talm-init-test
-/tmp/talm-safety init --preset cozystack --name test-cluster \
+talm init --preset cozystack --name test-cluster \
   --endpoints https://192.0.2.1:6443
 ```
 
@@ -47,7 +52,7 @@ Watch for:
 
 ```bash
 cd /tmp/talm-init-test
-/tmp/talm-safety init --preset cozystack --name test-cluster
+talm init --preset cozystack --name test-cluster
 ```
 
 Expected: error citing each conflicting file, hint mentioning both `--force` and `--update`. Exit non-zero.
@@ -56,7 +61,7 @@ Expected: error citing each conflicting file, hint mentioning both `--force` and
 
 ```bash
 cd $PROJECT
-/tmp/talm-safety init --update --preset cozystack < /dev/null
+talm init --update --preset cozystack < /dev/null
 ```
 
 Expected: hint-bearing error pointing at `--force`. NOT a raw `reading interactive overwrite confirmation: EOF`.
@@ -65,7 +70,7 @@ Expected: hint-bearing error pointing at `--force`. NOT a raw `reading interacti
 
 ```bash
 cd $PROJECT
-/tmp/talm-safety init --update --preset cozystack --force < /dev/null
+talm init --update --preset cozystack --force < /dev/null
 ```
 
 Expected: one `Overwriting <path> (--force)` line per diff; no prompt; exit zero.
@@ -74,9 +79,9 @@ Expected: one `Overwriting <path> (--force)` line per diff; no prompt; exit zero
 
 ```bash
 cd /tmp/talm-init-test
-/tmp/talm-safety init --decrypt
+talm init --decrypt
 test -f secrets.yaml && test -f talosconfig
-/tmp/talm-safety init --encrypt
+talm init --encrypt
 test -f secrets.encrypted.yaml && test -f talosconfig.encrypted
 ```
 
@@ -86,7 +91,7 @@ Expected: per-file `Decrypting X -> Y` / `Encrypting X -> Y` lines; both round-t
 
 ```bash
 cd /tmp/talm-init-test && mv talm.key /tmp/talm.key.backup
-/tmp/talm-safety init --decrypt
+talm init --decrypt
 mv /tmp/talm.key.backup talm.key
 ```
 
@@ -102,9 +107,9 @@ rm -rf /tmp/talm-init-test
 
 ```bash
 mkdir -p /tmp/talm-decrypt-test && cd /tmp/talm-decrypt-test
-/tmp/talm-safety init --preset cozystack --name test --endpoints 192.0.2.1
+talm init --preset cozystack --name test --endpoints 192.0.2.1
 mv talm.key /tmp/talm.key.backup
-/tmp/talm-safety init --decrypt
+talm init --decrypt
 mv /tmp/talm.key.backup talm.key  # restore for next run
 rm -rf /tmp/talm-decrypt-test
 ```
@@ -117,7 +122,7 @@ Regression anchor: the hint must name BOTH recovery paths (restore from backup, 
 
 ```bash
 mkdir -p /tmp/talm-cluster-ep-test && cd /tmp/talm-cluster-ep-test
-/tmp/talm-safety init --preset cozystack --name test \
+talm init --preset cozystack --name test \
   --endpoints 10.0.0.1,10.0.0.2,10.0.0.3 \
   --cluster-endpoint https://vip.example.test:6443
 grep "^endpoint:" values.yaml
@@ -133,7 +138,7 @@ Regression anchor: removing `--cluster-endpoint` and passing only `--endpoints 1
 
 ```bash
 mkdir -p /tmp/talm-single-ep-test && cd /tmp/talm-single-ep-test
-/tmp/talm-safety init --preset cozystack --name test --endpoints 192.0.2.10
+talm init --preset cozystack --name test --endpoints 192.0.2.10
 grep "^endpoint:" values.yaml
 rm -rf /tmp/talm-single-ep-test
 ```
@@ -146,7 +151,7 @@ Regression anchor: this auto-derive ONLY fires when `len(--endpoints) == 1`. Mul
 
 ```bash
 mkdir -p /tmp/talm-bad-ep-test && cd /tmp/talm-bad-ep-test
-/tmp/talm-safety init --preset cozystack --name test \
+talm init --preset cozystack --name test \
   --endpoints 192.0.2.10 \
   --cluster-endpoint "not-a-url"
 ls -la  # should be empty
@@ -167,7 +172,7 @@ name: empty-project
 version: 0.1.0
 dependencies: []
 EOF
-/tmp/talm-safety init --update
+talm init --update
 ```
 
 Expected: single-wrapped error with hint. Inner cause `preset not found in Chart.yaml dependencies` is surfaced verbatim with hint `add a preset chart (e.g. cozystack) to Chart.yaml dependencies or pass --preset`. No outer rewrap line like `preset is required: use --preset flag or ensure Chart.yaml has a preset dependency` — the rewrap was double-messaging the same condition before the fix.
@@ -182,7 +187,7 @@ Regression anchor: `errors.GetAllHints(err)` (or `2>&1 | grep "^hint:"`) MUST st
 
 ```bash
 cd $PROJECT
-/tmp/talm-safety template -f nodes/node0.yaml | head -10
+talm template -f nodes/node0.yaml | head -10
 ```
 
 Expected: rendered MachineConfig YAML starting with the project modeline. Exit zero.
@@ -190,7 +195,7 @@ Expected: rendered MachineConfig YAML starting with the project modeline. Exit z
 ### B2. Render with CLI override
 
 ```bash
-/tmp/talm-safety template -f nodes/node0.yaml \
+talm template -f nodes/node0.yaml \
   --set clusterDomain=overridden.local | grep dnsDomain
 ```
 
@@ -199,7 +204,7 @@ Expected: `dnsDomain: overridden.local` appears in output.
 ### B3. Render against missing file
 
 ```bash
-/tmp/talm-safety template -f nodes/_doesnotexist.yaml
+talm template -f nodes/_doesnotexist.yaml
 ```
 
 Expected: clear error with hint about the missing path. Exit non-zero.
@@ -208,7 +213,7 @@ Expected: clear error with hint about the missing path. Exit non-zero.
 
 ```bash
 cp nodes/node0.yaml /tmp/inplace-before.yaml
-/tmp/talm-safety template -I -f nodes/node0.yaml
+talm template -I -f nodes/node0.yaml
 diff /tmp/inplace-before.yaml nodes/node0.yaml
 cp /tmp/inplace-before.yaml nodes/node0.yaml  # restore
 ```
@@ -225,12 +230,12 @@ When the local `charts/talm/` is older than the talm binary's embedded preset, `
 
 ## C. Apply (auth path)
 
-The apply-safety gates are detailed in [`apply-safety-gates-test-plan.md`](./apply-safety-gates-test-plan.md). This section is the minimal smoke-test for the apply pipe itself.
+This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.
 
 ### C1. Dry-run apply
 
 ```bash
-/tmp/talm-safety apply --dry-run -f nodes/node0.yaml
+talm apply --dry-run -f nodes/node0.yaml
 ```
 
 Expected: drift-preview section, then `Dry run summary:` and the diff the apply would produce. Exit zero.
@@ -238,7 +243,7 @@ Expected: drift-preview section, then `Dry run summary:` and the diff the apply 
 ### C2. Real apply, no-reboot mode
 
 ```bash
-/tmp/talm-safety apply --mode=no-reboot \
+talm apply --mode=no-reboot \
   --skip-post-apply-verify=false -f nodes/node0.yaml
 ```
 
@@ -247,7 +252,7 @@ Expected: drift preview, `Applied configuration without a reboot`. Phase 2B is s
 ### C3. Multi-file apply
 
 ```bash
-/tmp/talm-safety apply --dry-run \
+talm apply --dry-run \
   -f nodes/node0.yaml -f nodes/node1.yaml -f nodes/node2.yaml
 ```
 
@@ -256,7 +261,7 @@ Expected: each node renders / diffs independently; per-node gate output sections
 ### C4. Stage mode
 
 ```bash
-/tmp/talm-safety apply --mode=staged --skip-post-apply-verify=false \
+talm apply --mode=staged --skip-post-apply-verify=false \
   -f nodes/node0.yaml
 ```
 
@@ -266,7 +271,7 @@ Expected: Phase 2B auto-skipped (staged config doesn't change ActiveID); output 
 
 ```bash
 # Rotate machine.token by editing secrets.yaml (or any allowlisted path) then:
-/tmp/talm-safety apply --dry-run -f nodes/node0.yaml
+talm apply --dry-run -f nodes/node0.yaml
 ```
 
 Expected: the drift preview line for `machine.token` reads `machine.token: ***redacted (len=N)*** -> ***redacted (len=M)***`. The literal `old-token-value` / `new-token-value` strings MUST NOT appear in stderr. Non-secret paths (e.g. `machine.network.hostname` if it changed) render verbatim.
@@ -276,7 +281,7 @@ Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,a
 ### C6. Drift preview shows secrets with explicit opt-in
 
 ```bash
-/tmp/talm-safety apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml
+talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml
 ```
 
 Expected: same drift preview as C5, but the secret paths render verbatim — no `***redacted***` sentinel. Operator-explicit bypass for debugging.
@@ -292,7 +297,7 @@ machine:
     servers:
       - 2.example.test
 EOF
-/tmp/talm-safety apply --dry-run \
+talm apply --dry-run \
   -f nodes/node0.yaml -f /tmp/side-ntp.yaml
 ```
 
@@ -306,7 +311,7 @@ Regression anchor: `/tmp/side-ntp.yaml` lives outside the project root. The firs
 cat > nodes/orphan.yaml <<'EOF'
 machine: {}
 EOF
-/tmp/talm-safety apply --dry-run -f nodes/orphan.yaml -f /tmp/side-ntp.yaml
+talm apply --dry-run -f nodes/orphan.yaml -f /tmp/side-ntp.yaml
 ```
 
 Expected: error `first -f file nodes/orphan.yaml lacks a modeline; side-patches require a modelined anchor` with hint that the first `-f` file must carry `# talm: nodes=[…], templates=[…]` so talm knows what to render before stacking. Note: the orphan file lives inside the project tree because the first `-f` file must have a Chart.yaml + secrets.yaml ancestor for root detection — see C6b-pre below for the root-detection failure mode.
@@ -317,7 +322,7 @@ Expected: error `first -f file nodes/orphan.yaml lacks a modeline; side-patches 
 cat > /tmp/orphan.yaml <<'EOF'
 machine: {}
 EOF
-/tmp/talm-safety apply --dry-run -f /tmp/orphan.yaml
+talm apply --dry-run -f /tmp/orphan.yaml
 ```
 
 Expected: error `failed to detect project root for first file /tmp/orphan.yaml (Chart.yaml and secrets.yaml not found)` with hint `the first -f file anchors the project root; place it inside a talm init'd project, or reorder the -f chain so a rooted file comes first`. This gate fires BEFORE the modeline-vs-orphan dispatch, so any orphan placed outside a project root can never reach the direct-patch path.
@@ -328,7 +333,7 @@ Expected: error `failed to detect project root for first file /tmp/orphan.yaml (
 # Build a talosconfig with explicit nodes field
 cp talosconfig /tmp/talosconfig-with-nodes
 # (edit to add nodes: [...] under contexts.<active>.nodes — YAML or yq)
-/tmp/talm-safety apply --dry-run \
+talm apply --dry-run \
   --talosconfig /tmp/talosconfig-with-nodes \
   -f nodes/orphan.yaml
 ```
@@ -339,7 +344,7 @@ Expected: progress line `- talm: file=nodes/orphan.yaml, nodes=[…], endpoints=
 
 ```bash
 # Same talosconfig but WITHOUT a nodes: field in the active context
-/tmp/talm-safety apply --dry-run \
+talm apply --dry-run \
   --talosconfig /tmp/talosconfig-no-nodes \
   -f nodes/orphan.yaml
 ```
@@ -366,12 +371,252 @@ Hand-craft a chart that emits a bad value (e.g. `name: 999.999.0.1` on a `Static
 
 Regression anchor: empty / omitted endpoint on a Wireguard peer is NOT a finding — peers without endpoints are listener-only remote peers. Verify a chart with `endpoint: ""` passes Phase 1.
 
+## C-safety. Apply-time safety gates (detailed matrix)
+
+The Section C entries above smoke the apply pipe end-to-end. This section is the per-gate matrix that backs them: each Phase (1 / 2A / 2B / 2C) has a case-by-case trigger + expected-output table, used to validate changes to `pkg/applycheck/`, `pkg/commands/preflight_*.go`, and the upgrade-verify hooks in `pkg/commands/upgrade_handler.go`. Run after every refactor in those packages; cross-reference with the contract tests under `pkg/applycheck/` and `pkg/commands/preflight_*_test.go`.
+
+### Phase 1 — declared-resource existence
+
+#### Link references
+
+| Case | How to trigger | Expected |
+| --- | --- | --- |
+| Typoed `LinkConfig.name` | Add `LinkConfig{name: eth9999}` to a node body | `[blocker] declared link "eth9999" not found …` plus available-links hint |
+| Typoed bond slave | Add `BondConfig{name: bond0, links: [ghost0, ens5]}` | Blocker on `ghost0` only; `bond0` (new bond) NOT flagged |
+| Typoed VLAN parent | Add `VLANConfig{name: ens5.99, parent: ghost0, vlanID: 99}` (YAML key is `parent`, NOT `link` — `vlan.go ParentLinkConfig`) | Blocker on `parent: ghost0`; `name: ens5.99` not flagged (new VLAN) |
+| Typoed bridge slave | Add `BridgeConfig{name: br99, links: [ghost0]}` (YAML key is `links`, NOT `ports` — `bridge.go BridgeLinks`) | Blocker on `ghost0` only; `br99` not flagged |
+| Typoed Layer2VIP link | Set `vipLink: ghost0` in values | Blocker on `link: ghost0` |
+| Legacy v1.11 interface | `machine.network.interfaces[].interface: eth9999` | Blocker; same hint shape |
+
+#### Disk references
+
+| Case | How to trigger | Expected |
+| --- | --- | --- |
+| Bad literal disk | Set `machine.install.disk: /dev/sdz` | Blocker, hint lists real disks (sda, sdb) — **must omit** virtual class (dm-*, drbd*, loop*) |
+| Bad model selector | `diskSelector: {model: Samsumg}` | Blocker "matches zero disks", hint lists candidate disks with size |
+| Impossible size | `diskSelector: {size: ">= 99TB"}` | Blocker "matches zero disks" |
+| Lowercase units | `diskSelector: {size: ">= 100gb"}` | Matches as if `>= 100GB` (humanize.ParseBytes case-insensitive) |
+| Mixed case + spaces | `diskSelector: {size: "<= 200000MiB"}` | Parsed correctly |
+| Multiple matches | `diskSelector: {type: ssd}` on host with several SSDs | Warning (not blocker) "matches multiple disks; install picks the first match" |
+| Type semantics | `type: nvme/sd/hdd/ssd` per-disk Transport+Rotational | Mirror Talos `v1alpha1_provider.go:1325-1351` mapping |
+| Readonly excluded | Selector + a readonly disk on host | Readonly disk not counted as match |
+| CDROM excluded | Selector + a CD drive on host | CD not counted as match |
+| Virtual excluded | Selector on cozystack host with many dm/drbd/loop | dm/drbd/loop not counted; hint omits them |
+
+#### Hint length budget
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Few candidates (≤10) | Storage host with 4 disks, bad selector | Hint lists all candidates inline; no `... and N more` suffix |
+| Many candidates (>10) | Host with 25+ links (bonds, VLANs, bridges) + bad link ref | Hint shows first 10 alphabetically; tail collapsed as `... and 15 more`; total chars on the hint line stays under ~400 |
+| Boundary case (exactly 11) | 11 links on the host, bad ref | First 10 inline + `... and 1 more` (the suffix fires at >10, not at >=10) |
+| Empty candidate set | Selector matches zero, no real candidates either (mock) | Hint says `<none>` rather than empty trailing space |
+
+#### Net-addr field references
+
+The Phase 1 walker validates the syntactic shape of net-addr fields in three v1alpha1 multidoc kinds. Pure syntactic — no host snapshot — runs alongside the Ref-based walker via `multidocNetAddrHandlers`. Field names match the actual Talos `network` schema (see `siderolabs/talos/pkg/machinery/config/types/network/`).
+
+| Case | How to trigger | Expected |
+| --- | --- | --- |
+| Bad `StaticHostConfig.name` | `StaticHostConfig{name: 999.999.0.1, hostnames: [foo]}` — the `name` field carries the IP literal in this kind | Blocker "StaticHostConfig.name is not a valid IP literal" with hint listing IPv4/IPv6 examples |
+| Valid IPv4 / IPv6 | `name: 192.0.2.10` / `name: 2001:db8::1` | No finding |
+| Missing `name` | Omit the field | No finding (Talos rejects at RPC with a clearer required-field message) |
+| Hostname-shaped name | `name: example.invalid` | Blocker — `name` is required to be an IP literal, not a DNS name |
+| Bad `NetworkRuleConfig.ingress[i].subnet` | `ingress: [{subnet: notacidr}]` | Per-entry blocker citing `ingress[i].subnet` |
+| Bad `NetworkRuleConfig.ingress[i].except` | `ingress: [{subnet: 192.0.2.0/24, except: notacidr}]` | Blocker on `except` even when `subnet` is valid |
+| Bare IP without /N | `ingress: [{subnet: 192.0.2.10}]` | Blocker — schema is CIDR-shaped, not IP-shaped |
+| Valid CIDR mix | IPv4 + IPv6 CIDRs across `ingress[].subnet` | No findings |
+| Bad `WireguardConfig.peers[].endpoint` | One peer `endpoint: notavalid:endpoint` | Per-peer blocker citing `peers[i].endpoint` |
+| Valid IPv4:port | `endpoint: 192.0.2.10:51820` | No finding |
+| Valid bracketed IPv6:port | `endpoint: "[2001:db8::1]:51820"` | No finding |
+| Empty `endpoint` | `endpoint: ""` | No finding (peer is listener-only — this side does not initiate) |
+| Missing `endpoint` field | Omit the field | No finding |
+| Unknown multidoc kind | A new kind not in the dispatch map | No finding (Talos extensions / future kinds do not break the gate) |
+| Real-schema pin | `TestWalkNetAddrFindings_RealSchema_StaticHostConfig` / `..._NetworkRuleConfig` feed the actual schema shape (`name` carrying the IP, `ingress[].subnet/except` for CIDRs) — the walker fires on what Talos emits, not on a hand-crafted YAML the schema doesn't produce |
+| No-overlap pin | Adding a kind to both `multidocHandlers` AND `multidocNetAddrHandlers` | `TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers` fails — double-walking would produce duplicate findings |
+
+#### Opt-out
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| `--skip-resource-validation` | Pass with bad selector + bad link | No Phase 1 output; render proceeds |
+
+### Phase 2A — pre-apply drift preview
+
+#### Diff classification
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Identical desired/on-node | First-run apply after the same render | `0 addition, 0 removal, 0 update, N unchanged.` |
+| Removed doc | Apply config that drops a previously-emitted doc (e.g. dropping a LinkConfig that was on-node) | `- LinkConfig{name: …}` line |
+| Added doc | Apply config that adds a fresh doc | `+ LinkConfig{name: …}` line |
+| Updated leaf | Change one nested field (e.g. `clusterDomain`) | `~ MachineConfig` plus `cluster.network.dnsDomain: cozy.local -> cozy.example` |
+| Identical inputs include Equal entries | Verified via Diff API; OpEqual entries returned, FilterChanged drops them | — |
+| Distinguish absent vs null | YAML `extraField: null` added to one side | FieldChange.HasOld=false / HasNew=true; formatter renders `(absent) -> <nil>` |
+| Stable ordering | Re-run on same inputs | Identical output bytes |
+
+#### Path / mode interactions
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Dry-run shows preview | `talm apply --dry-run -f node.yaml` | Phase 2A runs; this is the "show me what would change" contract |
+| `--mode=no-reboot` | `talm apply --mode=no-reboot -f node.yaml` | Phase 2A runs |
+| `--mode=auto` | `talm apply --mode=auto -f node.yaml` | Phase 2A runs |
+| `--mode=reboot` | `talm apply --mode=reboot -f node.yaml` | Phase 2A runs (preview is read-only and shows what the reboot will activate) |
+| `--mode=staged` | `talm apply --mode=staged -f node.yaml` | Phase 2A runs (operator still wants to see what got staged) |
+| `--mode=try` | `talm apply --mode=try -f node.yaml` | Phase 2A runs (mirrors --mode=auto from the preview's perspective) |
+| Insecure path | `talm apply -i -f node.yaml` (where chart can render offline) | `talm: drift verification unavailable on maintenance connection`; no block |
+| Insecure path, multi-node | `talm apply -i --nodes a,b -f node.yaml` (each iteration through `openClientPerNodeMaintenance`) | Per-node-prefixed line `node a: talm: drift verification unavailable …` and `node b: talm: …` — disambiguation cohort over the maintenance-warning emission |
+| Insecure path, single node | `talm apply -i -f node.yaml` with single `--nodes` | Still gets `node X: talm: …` prefix because `cosiPreflightContext` falls back to `GlobalArgs.Nodes[0]` when there is no outgoing-context metadata |
+| Insecure path, empty nodeID | Unusual call shape with `GlobalArgs.Nodes` somehow empty | Bare `talm: drift verification unavailable …` line — never `node : …` garbage prefix |
+| `--skip-drift-preview` | Pass with any change | Preview suppressed entirely |
+
+#### Secret-bearing field redaction
+
+The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`).
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Cluster secret rotation | Change `cluster.token` via `secrets.yaml` rotation | `cluster.token: ***redacted (len=N)*** -> ***redacted (len=M)***` — value never appears in stderr |
+| Machine token rotation | Change `machine.token` | Same shape; `machine.token: ***redacted (len=N)*** -> …` |
+| Array-indexed secret | Change `cluster.acceptedCAs[2].key` | Bracket-normalised match against `cluster.acceptedCAs[].key`; redacted |
+| Wireguard private key | Rotate `WireguardConfig.privateKey` | `privateKey: ***redacted (len=N)*** -> …` — bare path because the differ's flatten step does not prefix multidoc fields with the doc kind |
+| Wireguard pre-shared key | Rotate `peers[2].presharedKey` | Bracket-normalised; redacted |
+| Non-secret path | Change `machine.network.hostname` | Verbatim — operator-visible information is not redacted |
+| False-prefix guard | A non-secret path sharing a prefix (`cluster.tokenExtras`) | Verbatim — `isSecretPath` is path-segment exact, not substring prefix |
+| `--show-secrets-in-drift` | Pass with any secret rotation | Verbatim both sides on the secret line; sentinel never appears |
+| Non-string secret value | Hypothetical schema drift puts an int on a secret-bearing path | `***redacted (len=N)***` where N is the `%v` length; rotation signal survives non-string types (caveat: maps render with non-deterministic key order — disclaimed in the godoc) |
+| Slice-shaped secret path | Hypothetical future allowlist entry naming an array | Redacted via the secret check that runs BEFORE `bothSlices` — elements never leak through `formatSliceSetDiff` |
+
+#### Output pretty-print
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Scalar field change | Change `clusterDomain` in values | `cluster.network.dnsDomain: cozy.local -> cozy.example` inline |
+| Map field change | Add a key to `machine.nodeLabels` | YAML flow mapping `{role: control-plane, tier: primary}`, NOT `map[role:control-plane tier:primary]` |
+| Multi-element slice add-or-remove | Add a SAN to `cluster.apiServer.certSANs` | `cluster.apiServer.certSANs: added [192.0.2.6]` — set-diff form, NOT a full-slice dump |
+| Duplicate-cleanup on slice | Remove a duplicate entry from `certSANs` | `cluster.apiServer.certSANs: removed [127.0.0.1]` — multiset semantics surface a single removal |
+| Both add and remove | Replace one SAN with another | `cluster.apiServer.certSANs: removed [old.example], added [new.example]` |
+| Reorder-only change | Same elements in a different order | `cluster.apiServer.certSANs: reordered (3 element(s))` — explicit signal, NOT silent OpUpdate |
+| Slice appearing from absent | Field added that wasn't there before | `(absent) -> [a, b, c]` — flow-style list, NOT `[a b c]` |
+
+### Phase 2B — post-apply state verification
+
+Default off until the Talos-mutated-field allowlist lands. Enable explicitly with `--skip-post-apply-verify=false`.
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Clean apply | Apply config matching on-node, `--skip-post-apply-verify=false` | Silent success (no output, no error) |
+| Mode=staged | `--mode=staged --skip-post-apply-verify=false` | Phase 2B skipped (staged store doesn't change ActiveID) |
+| Mode=try | `--mode=try --skip-post-apply-verify=false` | Phase 2B skipped (rollback timer races verify) |
+| Mode=reboot | `--mode=reboot --skip-post-apply-verify=false` | Phase 2B skipped (reboot kills the COSI connection mid-verify) |
+| Mode=auto | `--mode=auto --skip-post-apply-verify=false` | Phase 2B skipped — Talos promotes AUTO to REBOOT internally when the change requires it, so the verify would race the reboot (same shape as the explicit REBOOT skip). Acceptable cost: AUTO applies that don't reboot also lose their verify; pass `--mode=no-reboot` to opt back in |
+| Mode=no-reboot | Real apply with verify enabled | Phase 2B runs (the only mode where the verify is guaranteed to reach a stable post-apply ActiveID) |
+| Dry-run | `--dry-run --skip-post-apply-verify=false` | Phase 2B skipped (no real apply) |
+| Reader error | Simulated COSI hiccup on auth path | Hint-bearing blocker `post-apply: re-reading on-node MachineConfig`, exit non-zero (the gate is here to catch silent rollbacks — error is not swallowed) |
+| Insecure path | `talm apply -i --skip-post-apply-verify=false` | `drift verification unavailable on maintenance connection` line; no block |
+
+### Phase 2C — post-upgrade version verify
+
+On by default for `talm upgrade`. The gate fires after talosctl upgrade returns success, waits 90s for the node to finish booting, reads `runtime.Version` COSI, and compares the running version's contract against the contract parsed from the target image tag. Catches the silent A/B rollback case where Talos rolls back to the previous partition (cross-vendor image, missing extensions, failed boot readiness check) yet talosctl's RPC already acked.
+
+| Case | Trigger | Expected |
+| --- | --- | --- |
+| Same-minor upgrade | `talm upgrade -f node.yaml` to a same-minor image (e.g. v1.12.6 -> v1.12.7) | Silent success; contracts match at minor level |
+| Cross-minor mismatch | upgrade to `siderolabs/installer:v1.13.0` on a node that rolls back to v1.12 | Hint-bearing blocker citing both versions + two-hypothesis hint (rollback OR slow boot) |
+| `--skip-post-upgrade-verify` | Pass with any image | Phase 2C suppressed entirely |
+| `--insecure` upgrade | Maintenance path — auth-only COSI unreachable | Phase 2C skipped entirely (hard early-return in `shouldRunPostUpgradeVerify(insecure=true, …)`). Distinct from the Phase 2A/2B insecure path, which still calls the COSI reader and degrades gracefully with a "drift verification unavailable on maintenance connection" line — Phase 2C drops the call site itself because there is no graceful degradation path for "verify the version after upgrade" without auth |
+| `--stage` upgrade | New partition not yet activated until reboot — `runtime.Version` would always be the OLD value | Phase 2C skipped via `shouldRunPostUpgradeVerify(staged=true, …)`; guaranteed false positive without skip |
+| Digest-pinned image | `--image foo/bar@sha256:abc...` | Phase 2C surrenders silently (no tag to parse the target version from) |
+| Image with no tag | `--image foo/bar` | Phase 2C surrenders silently |
+| Slow boot beyond 90s | Cold OCI instance or large image pull | Same blocker as cross-minor mismatch BUT hint instructs the operator to re-run `talm get version` after a minute to distinguish a slow boot from a real rollback |
+| Real read failure (connection refused, RPC error) | Reader returns `("", false, err)` | Hint-bearing blocker — a node that auto-rolled back or hung mid-boot looks like "connection refused" from the COSI client, so the read failure IS the rollback signal. Same two-hypothesis hint as a detected mismatch (rollback OR slow boot). The blocker wraps the underlying err so the operator sees the cause |
+| By-design unreachable | Reader returns `("", false, nil)` (cosiVersionReader does not produce this; reserved for future custom readers that need to surrender silently) | Soft warning line `post-upgrade verification skipped, could not read running version from the node`, no block. Distinguishable from the real-read-failure case via the err — three-valued contract makes the contract explicit |
+| Zero target nodes | `--nodes` empty and talosconfig context has no nodes either | Explanatory "skipped, no target nodes resolved" line (no silent no-op) |
+| Reconcile wait line | Any non-skipped run | "post-upgrade verify: waiting 1m30s for the node to finish booting..." printed up front so the operator's terminal isn't a mystery hang |
+| Configurable reconcile window | `talm upgrade --post-upgrade-reconcile-window=180s …` | "post-upgrade verify: waiting 3m0s for the node to finish booting..." — Go's `time.Duration.String()` renders 180s deterministically as `3m0s`. Hint copy references "the configured reconcile window (`--post-upgrade-reconcile-window`)" instead of the hardcoded "90s reconcile window" wording |
+| Window default | `talm upgrade --help` | Flag listed with `default 1m30s`; the const `defaultPostUpgradeReconcileWindow` preserves the previous hardcoded 90s for byte-identical back-compat |
+| Window non-positive | `talm upgrade --post-upgrade-reconcile-window=0s …` | Fail-fast error with hint mentioning "positive duration" — validation runs at the TOP of `wrapUpgradeCommand` RunE so the talosctl upgrade RPC never fires. Same shape for `-30s` (negative). Pinned by `TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE` which asserts the sentinel `originalRunE` stays uninvoked |
+
+### Real-Talos validation
+
+Before requesting human review, exercise the gates against a live Talos node.
+
+#### Sanity check
+
+```bash
+cd $PROJECT
+talm template -f nodes/node0.yaml > /tmp/rendered.yaml
+test -s /tmp/rendered.yaml || echo "render failed"
+```
+
+#### Phase 1 (auth path)
+
+```bash
+# Clean run — should silently pass:
+talm apply --dry-run -f nodes/node0.yaml
+
+# Inject a bad link ref (cp + edit a temp file inside the talm project):
+cp nodes/node0.yaml nodes/_test-bad.yaml
+echo -e "---\napiVersion: v1alpha1\nkind: LinkConfig\nname: eth9999" >> nodes/_test-bad.yaml
+talm apply --dry-run -f nodes/_test-bad.yaml  # expect [blocker]
+rm nodes/_test-bad.yaml
+```
+
+#### Phase 2A (drift preview)
+
+```bash
+# Dry-run against a clean cluster — should report 0/0/0 unchanged:
+talm apply --dry-run -f nodes/node0.yaml
+
+# Force a leaf change via values.yaml (back up then revert):
+sed -i.bak 's/^clusterDomain: .*/clusterDomain: cozy.example/' values.yaml
+talm apply --dry-run -f nodes/node0.yaml | grep -E "^  [+\-~=]|^      "
+mv values.yaml.bak values.yaml
+```
+
+#### Phase 2B (real apply with verify enabled)
+
+```bash
+talm apply --mode=no-reboot --skip-post-apply-verify=false -f nodes/node0.yaml
+# Expected: drift preview + 'Applied configuration without a reboot' + silent post-apply verify
+```
+
+#### Multi-node + mix
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml -f nodes/node1.yaml -f nodes/node2.yaml
+# Each node renders its own preview; per-node independence.
+```
+
+#### Insecure path
+
+`talm apply -i` exercises the maintenance connection. The cozystack reference chart uses live discovery (`lookup "disks"`), which fails on insecure (no auth for COSI). The render errors before the gate runs — that's existing talm behaviour, not a regression.
+
+### Implementation health
+
+Run as part of every push:
+
+```bash
+go test ./...
+go test -race ./pkg/applycheck/... ./pkg/commands/...
+golangci-lint run ./...
+GOOS=windows golangci-lint run ./...
+go vet ./...
+```
+
+### Known limitations / follow-ups
+
+- **Talos-mutated-field allowlist**: Phase 2B reports cert hashes / timestamps as divergence today; the verify is off by default until an allowlist lands.
+- **`talm upgrade` has no pre-upgrade gates** (Phase 2C runs *after*, not before): the upgrade flow wraps `talosctl upgrade` and doesn't route through `buildApplyClosure` / `applyOneFileDirectPatchMode`, so Phase 1 / Phase 2A do not run. Phase 2C (post-upgrade version verify) was added precisely to catch the silent-rollback class without that refactor. Full pre-upgrade gates would require reproducing the gate calls in `upgrade_handler.go` or refactoring the apply flow.
+- **Phase 1/2 on `--insecure`**: the safety gates can't run before the chart renders, and the chart's `lookup` calls need an authenticated COSI connection. Insecure path = effectively no gates today.
+
 ## D. Apply (insecure / maintenance path)
 
 ### D1. Apply with chart that uses discovery
 
 ```bash
-/tmp/talm-safety apply -i --dry-run -f nodes/node0.yaml
+talm apply -i --dry-run -f nodes/node0.yaml
 ```
 
 Expected: render fails because `lookup "disks"` / `lookup "links"` require auth. Hint mentions reachability.
@@ -387,7 +632,7 @@ When a chart renders fully offline (no `lookup`), `talm apply -i` runs through t
 On a multi-node insecure apply where every node hits the `ok=false` (maintenance) path, each per-node emission of the warning must carry the node identifier prefix so the operator can correlate which line came from which node:
 
 ```bash
-/tmp/talm-safety apply -i \
+talm apply -i \
   --nodes 192.0.2.10,192.0.2.11,192.0.2.12 \
   --endpoints 192.0.2.10,192.0.2.11,192.0.2.12 \
   -f nodes/node0.yaml
@@ -402,7 +647,7 @@ Regression anchor: a refactor that always-prefixes (`node : talm: ...` on single
 ### E1. Stage an upgrade to the same image
 
 ```bash
-/tmp/talm-safety upgrade --stage -f nodes/node0.yaml
+talm upgrade --stage -f nodes/node0.yaml
 ```
 
 Note: `--stage --wait` (the default) actually triggers a reboot to apply the staged upgrade. Plan for a 1-2 minute outage of the node under test. The cluster should stay healthy if you have 3+ control plane nodes and other nodes hold quorum.
@@ -412,7 +657,7 @@ Expected: events stream from BOOTING through `post check passed`. Node returns t
 ### E2. Upgrade with bad image
 
 ```bash
-/tmp/talm-safety upgrade --image ghcr.io/cozystack/cozystack/talos:doesnotexist \
+talm upgrade --image ghcr.io/cozystack/cozystack/talos:doesnotexist \
   --stage -f nodes/node0.yaml
 ```
 
@@ -422,15 +667,15 @@ Expected: `error validating installer image ... not found`. Talos itself catches
 
 ```bash
 # Help-text surface — confirms the flag is registered with the 90s default.
-/tmp/talm-safety upgrade --help | grep -A1 post-upgrade-reconcile-window
+talm upgrade --help | grep -A1 post-upgrade-reconcile-window
 
 # Custom widened window (slow hardware / large image pulls).
-/tmp/talm-safety upgrade --post-upgrade-reconcile-window=180s \
+talm upgrade --post-upgrade-reconcile-window=180s \
   --image ghcr.io/siderolabs/installer:v1.13.0 \
   --stage -f nodes/node0.yaml
 
 # Rejection of non-positive values.
-/tmp/talm-safety upgrade --post-upgrade-reconcile-window=0s \
+talm upgrade --post-upgrade-reconcile-window=0s \
   -f nodes/node0.yaml
 ```
 
@@ -443,7 +688,7 @@ Regression anchor: the version-mismatch hint emitted on a Phase 2C blocker MUST 
 ### F1. Rotate CA dry-run
 
 ```bash
-/tmp/talm-safety rotate-ca --dry-run --nodes $NODE --endpoints $NODE
+talm rotate-ca --dry-run --nodes $NODE --endpoints $NODE
 ```
 
 Expected: every per-step line ends with `(dry-run)`; final line mentions `re-run with \`--dry-run=false\` to apply the changes`. Possibly trailing `failed to create new client with rotated Talos CA` — harmless under dry-run.
@@ -451,7 +696,7 @@ Expected: every per-step line ends with `(dry-run)`; final line mentions `re-run
 ### F2. Real CA rotation
 
 ```bash
-/tmp/talm-safety rotate-ca --dry-run=false --nodes $NODE --endpoints $NODE
+talm rotate-ca --dry-run=false --nodes $NODE --endpoints $NODE
 ```
 
 Expected: `CA rotation completed successfully!`. `secrets.yaml`, `secrets.encrypted.yaml`, `talosconfig`, `kubeconfig` updated on disk.
@@ -459,7 +704,7 @@ Expected: `CA rotation completed successfully!`. `secrets.yaml`, `secrets.encryp
 ### F3. Apply after rotation
 
 ```bash
-/tmp/talm-safety apply --dry-run -f nodes/node0.yaml
+talm apply --dry-run -f nodes/node0.yaml
 ```
 
 Expected: works against the rotated CA. No `tls: certificate required` errors.
@@ -469,7 +714,7 @@ Expected: works against the rotated CA. No `tls: certificate required` errors.
 ### G1. Read / list
 
 ```bash
-/tmp/talm-safety get metakey --nodes $NODE --endpoints $NODE
+talm get metakey --nodes $NODE --endpoints $NODE
 ```
 
 Expected: table of META keys with their values.
@@ -477,8 +722,8 @@ Expected: table of META keys with their values.
 ### G2. Write a test key
 
 ```bash
-/tmp/talm-safety meta write 0x0a "test-value" --nodes $NODE --endpoints $NODE
-/tmp/talm-safety get metakey 0x0a --nodes $NODE --endpoints $NODE
+talm meta write 0x0a "test-value" --nodes $NODE --endpoints $NODE
+talm get metakey 0x0a --nodes $NODE --endpoints $NODE
 ```
 
 Expected: written; reads back the value.
@@ -486,8 +731,8 @@ Expected: written; reads back the value.
 ### G3. Delete the test key
 
 ```bash
-/tmp/talm-safety meta delete 0x0a --nodes $NODE --endpoints $NODE
-/tmp/talm-safety get metakey 0x0a --nodes $NODE --endpoints $NODE
+talm meta delete 0x0a --nodes $NODE --endpoints $NODE
+talm get metakey 0x0a --nodes $NODE --endpoints $NODE
 ```
 
 Expected: delete succeeds; read returns `NotFound`.
@@ -497,7 +742,7 @@ Expected: delete succeeds; read returns `NotFound`.
 ### H1. Bootstrap on running cluster
 
 ```bash
-/tmp/talm-safety bootstrap --nodes $NODE --endpoints $NODE
+talm bootstrap --nodes $NODE --endpoints $NODE
 ```
 
 Expected: refuses with `etcd data directory is not empty`.
@@ -507,7 +752,7 @@ Expected: refuses with `etcd data directory is not empty`.
 ⚠️ Destructive. Run only against a cluster you can afford to lose one node from. The talm default populates `--system-labels-to-wipe=STATE,EPHEMERAL` automatically when neither `--wipe-mode` nor `--system-labels-to-wipe` was passed, so META survives and the node self-recovers on the next boot. Upstream `talosctl reset` defaults to `--wipe-mode=all`, which destroys META; that path is exposed in talm as the explicit `--wipe-mode=all` opt-in (see H2a).
 
 ```bash
-/tmp/talm-safety reset --graceful=true --reboot \
+talm reset --graceful=true --reboot \
   --nodes $NODE --endpoints $OTHER_NODE
 ```
 
@@ -526,9 +771,9 @@ Two opt-out values land in the same destructive server-side branch: `--wipe-mode
 
 ```bash
 # Equivalent destructive paths:
-/tmp/talm-safety reset --wipe-mode=all --graceful=true --reboot \
+talm reset --wipe-mode=all --graceful=true --reboot \
   --nodes $NODE --endpoints $OTHER_NODE
-/tmp/talm-safety reset --wipe-mode=system-disk --graceful=true --reboot \
+talm reset --wipe-mode=system-disk --graceful=true --reboot \
   --nodes $NODE --endpoints $OTHER_NODE
 ```
 
@@ -539,18 +784,18 @@ Regression anchor: when EITHER of these commands is run the wrapper MUST NOT sil
 ### H2b. Reset with operator-specified narrower scope (`--system-labels-to-wipe=STATE` only)
 
 ```bash
-/tmp/talm-safety reset --system-labels-to-wipe=STATE --graceful=true --reboot \
+talm reset --system-labels-to-wipe=STATE --graceful=true --reboot \
   --nodes $NODE --endpoints $OTHER_NODE
 ```
 
 Expected: only STATE wiped, EPHEMERAL kept (containerd image cache survives the reset), node returns. The operator's explicit narrower list must be honored byte-for-byte; the wrapper MUST NOT silently expand to `STATE,EPHEMERAL`.
 
-Regression anchor: after the node returns, `talm dmesg --nodes $NODE | grep -i ephemeral` should show no fresh-format markers for the EPHEMERAL partition. If the wrapper silently expanded the operator's list, EPHEMERAL would have been wiped too.
+Regression anchor: after the node returns, `talm logs kernel --nodes $NODE | grep -i ephemeral` should show no fresh-format markers for the EPHEMERAL partition. If the wrapper silently expanded the operator's list, EPHEMERAL would have been wiped too.
 
 ### H2c. Reset with `--graceful=false` (ungraceful, preserves safe default)
 
 ```bash
-/tmp/talm-safety reset --graceful=false --reboot \
+talm reset --graceful=false --reboot \
   --nodes $NODE --endpoints $OTHER_NODE
 ```
 
@@ -562,7 +807,7 @@ Regression anchor: the default-flip MUST be independent of `--graceful`. A chang
 
 ```bash
 cd $PROJECT  # directory with nodes/$NODE.yaml carrying the modeline
-/tmp/talm-safety reset --reboot --graceful=true
+talm reset --reboot --graceful=true
 ```
 
 Expected: same outcome as H2 — modeline supplies `--nodes` / `--endpoints` from `nodes/$NODE.yaml`, no wipe flags on the CLI, wrapper applies the safe default, META preserved.
@@ -572,7 +817,7 @@ Regression anchor: the default-flip is gated on `Changed("wipe-mode") && Changed
 ### H3. Etcd quorum after reset
 
 ```bash
-/tmp/talm-safety etcd members --nodes $OTHER_NODE --endpoints $OTHER_NODE
+talm etcd members --nodes $OTHER_NODE --endpoints $OTHER_NODE
 ```
 
 Expected during the reset: 2 of 3 members. After Talos brings the reset node back from META (typical Linux/Talos auto-rejoin path): 3 members; the reset node may carry a placeholder hostname (`talos-XXXXX`) until the next apply.
@@ -580,7 +825,7 @@ Expected during the reset: 2 of 3 members. After Talos brings the reset node bac
 ### H4. Rejoin after reset
 
 ```bash
-/tmp/talm-safety apply --dry-run -f nodes/node-resetted.yaml
+talm apply --dry-run -f nodes/node-resetted.yaml
 ```
 
 Expected: `0 addition, 0 removal, 0 update, N unchanged` when META preserved the full config; otherwise drift will reflect the missing state (re-apply to fix).
@@ -588,7 +833,7 @@ Expected: `0 addition, 0 removal, 0 update, N unchanged` when META preserved the
 ### H5. Insecure path on a freshly-wiped node
 
 ```bash
-/tmp/talm-safety apply -i -f nodes/node-fresh.yaml
+talm apply -i -f nodes/node-fresh.yaml
 ```
 
 Expected: render error from `lookup "disks"` requiring auth, OR drift-preview degrade line if the chart is offline-renderable.
@@ -604,20 +849,31 @@ NODE=$NODE
 for cmd in version "get machineconfig -o yaml" containers processes \
            "health --server=false" "interfaces" "disks" "etcd members" \
            "list /system/state" memory mounts stats service cgroups \
-           "dmesg --tail" netstat routes "usage /var/log" \
+           "logs kernel --tail 3" netstat routes "usage /var/log" \
            "logs kubelet" "logs etcd" "events --tail=3" \
            "image list" "etcd status" "etcd alarm list"; do
-  timeout 8 /tmp/talm-safety $cmd --nodes $NODE --endpoints $NODE 2>&1 | head -1
+  timeout 8 talm $cmd --nodes $NODE --endpoints $NODE 2>&1 | head -1
 done
 ```
 
-Expected: every command prints either a header row (table) or an error from the node side. None should hang past the timeout.
+Expected: every command prints either a header row (table) or an error from the node side. None should hang past the timeout. The `logs kernel` entry replaces the retired `dmesg` command; `logs kernel --tail=N` is the supported way to read the last N kernel-log lines.
+
+### I0-1a. `talm dmesg` is retired — migration stub surfaces a hint
+
+```bash
+talm dmesg --tail 3
+talm dmesg --nodes $NODE
+```
+
+Expected: both invocations exit non-zero with `talm dmesg has been removed` and a hint pointing at `talm logs kernel --tail=N --nodes <node>`. The stub is hidden from `talm --help` (operators don't see a retired command as available). The migration hint surfaces regardless of cwd (the stub skips Chart.yaml loading, mirroring `init` and `completion`).
+
+Regression anchor: a regression that re-enables the upstream `dmesg` wrap (removing it from `excludedCommands` in `pkg/commands/talosctl_wrapper.go`) would either collide with the talm-owned stub at cobra registration, or — if the stub is also dropped — leave operators with the original cryptic `strconv.ParseBool` failure on `--tail=N`. Both shapes are documented elsewhere; this anchor pins the proactive removal + migration-hint contract.
 
 ### I0-2. Concurrent dry-run apply
 
 ```bash
 for i in 1 2 3; do
-  /tmp/talm-safety apply --dry-run -f nodes/node0.yaml 2>&1 | grep -E "^talm:" &
+  talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -E "^talm:" &
 done
 wait
 ```
@@ -627,7 +883,7 @@ Expected: 3 independent renders, all complete, no race-condition diagnostics.
 ### I0-3. CLI nodes/endpoints override modeline
 
 ```bash
-/tmp/talm-safety apply --dry-run \
+talm apply --dry-run \
   --nodes $OTHER_NODE --endpoints $OTHER_NODE \
   -f nodes/node0.yaml | grep "^- talm"
 ```
@@ -637,7 +893,7 @@ Expected: log line shows `nodes=[$OTHER_NODE]` not the modeline value. The CLI t
 ### I0-4. Reboot a node (no config change)
 
 ```bash
-/tmp/talm-safety reboot --nodes $NODE --endpoints $NODE
+talm reboot --nodes $NODE --endpoints $NODE
 ```
 
 ⚠️ Destructive timing — the node will be unreachable for ~30-60s. Cluster keeps quorum if at least one other controlplane is healthy.
@@ -647,7 +903,7 @@ Expected: returns once events check completes; etcd member list shows the node b
 ### I0-5. Wipe a non-system disk
 
 ```bash
-/tmp/talm-safety wipe disk <devname> --nodes $NODE --endpoints $NODE
+talm wipe disk <devname> --nodes $NODE --endpoints $NODE
 ```
 
 Expected: refuses with `FailedPrecondition: blockdevice "<dev>" is in use by disk "..."` if it's mounted / part of LVM / part of DRBD. Wipe succeeds only on truly idle block devices. The error itself is the regression pin: a wipe that DIDN'T refuse would risk destroying the cluster's persistent state.
@@ -659,7 +915,7 @@ Expected: refuses with `FailedPrecondition: blockdevice "<dev>" is in use by dis
 Install bash completion:
 
 ```bash
-/tmp/talm-safety completion bash > /tmp/talm-completion.bash
+talm completion bash > /tmp/talm-completion.bash
 source /tmp/talm-completion.bash
 ```
 
@@ -677,7 +933,7 @@ Regression anchor: positional completion (`talm apply <TAB>` without a flag) MUS
 
 ```bash
 for sh in bash zsh fish powershell; do
-  /tmp/talm-safety completion $sh > /tmp/talm-completion.$sh
+  talm completion $sh > /tmp/talm-completion.$sh
   case $sh in
     bash|zsh) bash -n /tmp/talm-completion.$sh && echo "$sh OK" ;;
     *) echo "$sh: $(wc -l < /tmp/talm-completion.$sh) lines" ;;
@@ -692,7 +948,7 @@ Expected: every shell prints a script that parses (for bash/zsh syntax-check con
 ### J0-1. `--set` vs `--set-string` for IP-shaped values
 
 ```bash
-/tmp/talm-safety template -f nodes/node0.yaml --set floatingIP=0700
+talm template -f nodes/node0.yaml --set floatingIP=0700
 ```
 
 Expected: with an IPv4-validating chart, fails fast with `talm: floatingIP "0700" is not a valid IPv4 / IPv6 literal`. A chart without the validation silently renders an invalid VIP.
@@ -702,9 +958,9 @@ Expected: with an IPv4-validating chart, fails fast with `talm: floatingIP "0700
 `--set` emits a non-fatal warning to stderr when the RHS matches an IP-shaped or semver-shaped literal:
 
 ```bash
-/tmp/talm-safety template -f nodes/node0.yaml --set endpoint=10.0.0.1 2>&1 | grep "^talm:"
+talm template -f nodes/node0.yaml --set endpoint=10.0.0.1 2>&1 | grep "^talm:"
 # Expected: warning recommending --set-string for IP / version literals.
-/tmp/talm-safety template -f nodes/node0.yaml --set-string endpoint=10.0.0.1 2>&1 | grep "^talm:"
+talm template -f nodes/node0.yaml --set-string endpoint=10.0.0.1 2>&1 | grep "^talm:"
 # Expected: no warning emitted — operator opt-in to verbatim string.
 ```
 
@@ -716,7 +972,7 @@ Regression anchors:
 ### J0-2. `--set-literal` keeps dotted keys intact
 
 ```bash
-/tmp/talm-safety template -f nodes/node0.yaml \
+talm template -f nodes/node0.yaml \
   --set-literal "label.with.dots=raw"
 ```
 
@@ -726,7 +982,7 @@ Expected: key `label.with.dots` (single literal) appears in values rather than n
 
 ```bash
 echo "from-file" > /tmp/_v.txt
-/tmp/talm-safety template -f nodes/node0.yaml --set-file someKey=/tmp/_v.txt
+talm template -f nodes/node0.yaml --set-file someKey=/tmp/_v.txt
 rm /tmp/_v.txt
 ```
 
@@ -736,7 +992,7 @@ Expected: file content available as `.Values.someKey` during render.
 
 ```bash
 echo "clusterDomain: overlay.local" > /tmp/_overlay.yaml
-/tmp/talm-safety template -f nodes/node0.yaml --values /tmp/_overlay.yaml
+talm template -f nodes/node0.yaml --values /tmp/_overlay.yaml
 rm /tmp/_overlay.yaml
 ```
 
@@ -767,7 +1023,7 @@ Each command should return promptly (sub-second) for read-only paths.
 ```bash
 # Bump talosVersion in Chart.yaml to one minor ahead of running.
 sed -i 's|talosVersion: "v1.12"|talosVersion: "v1.13"|' Chart.yaml
-/tmp/talm-safety apply --dry-run -f nodes/node0.yaml | head -5
+talm apply --dry-run -f nodes/node0.yaml | head -5
 ```
 
 Expected: `warning: pre-flight: configured talosVersion=v1.13 is newer than the node's running Talos v1.12.x` plus a hint about rebooting into a matching maintenance image or lowering the contract. Drift preview still runs.
@@ -827,7 +1083,7 @@ This is the post-merge equivalent of what Phase 2C does automatically. Keep the 
 ```bash
 # In values.yaml, point image at the new installer:
 sed -i 's|installer:v1.12.6|installer:v1.13.0|' values.yaml
-/tmp/talm-safety upgrade --stage -f nodes/node0.yaml
+talm upgrade --stage -f nodes/node0.yaml
 ```
 
 Expected: events stream from `installAndReboot` through `post check passed`. Node returns running v1.13.x (`talm version --nodes $NODE`). Etcd member count unchanged (`talm etcd members`).
@@ -836,8 +1092,8 @@ Expected: events stream from `installAndReboot` through `post check passed`. Nod
 
 ```bash
 for n in node0 node1 node2; do
-  /tmp/talm-safety upgrade --stage -f nodes/$n.yaml
-  /tmp/talm-safety etcd members --nodes $OTHER --endpoints $OTHER \
+  talm upgrade --stage -f nodes/$n.yaml
+  talm etcd members --nodes $OTHER --endpoints $OTHER \
     | grep -c "^[0-9]"  # quorum must be >= 2 at all times
 done
 ```
@@ -849,7 +1105,7 @@ Expected: each node returns to etcd within 60s; quorum never drops below 2/3 (on
 After K2, with the chart still on v1.13 contract:
 
 ```bash
-/tmp/talm-safety apply --dry-run -f nodes/node0.yaml
+talm apply --dry-run -f nodes/node0.yaml
 ```
 
 Expected: no version-mismatch warning (chart contract matches running). Drift preview shows the per-version diff if any (e.g. a new field machinery v1.13 injects).
@@ -863,7 +1119,7 @@ Between K2-step-1 (node0 upgraded) and K2-step-2 (node1 still on old version), P
 ### L1. `inspect dependencies` returns a DOT graph
 
 ```bash
-/tmp/talm-safety inspect dependencies --nodes $NODE --endpoints $NODE | head
+talm inspect dependencies --nodes $NODE --endpoints $NODE | head
 ```
 
 Expected: starts with `digraph {`. Useful for visualizing Talos controller deps. Pipe through `dot -Tpng` to render.
@@ -871,7 +1127,7 @@ Expected: starts with `digraph {`. Useful for visualizing Talos controller deps.
 ### L2. `pcap` short capture on loopback
 
 ```bash
-timeout 8 /tmp/talm-safety pcap --nodes $NODE --endpoints $NODE \
+timeout 8 talm pcap --nodes $NODE --endpoints $NODE \
   --interface lo --duration 2s > /tmp/_cap.pcap
 file /tmp/_cap.pcap && rm /tmp/_cap.pcap
 ```
@@ -881,7 +1137,7 @@ Expected: binary pcap stream to stdout. `file` reports "pcap capture file".
 ### L3. `time` against NTP
 
 ```bash
-/tmp/talm-safety time --nodes $NODE --endpoints $NODE
+talm time --nodes $NODE --endpoints $NODE
 ```
 
 Expected: table with `NTP-SERVER`, `NODE-TIME`, `NTP-SERVER-TIME`.
@@ -889,7 +1145,7 @@ Expected: table with `NTP-SERVER`, `NODE-TIME`, `NTP-SERVER-TIME`.
 ### L4. `etcd defrag`
 
 ```bash
-/tmp/talm-safety etcd defrag --nodes $NODE --endpoints $NODE
+talm etcd defrag --nodes $NODE --endpoints $NODE
 ```
 
 Expected: silent return (no output), exit 0. DB is defragmented.
@@ -897,7 +1153,7 @@ Expected: silent return (no output), exit 0. DB is defragmented.
 ### L5. `etcd alarm list`
 
 ```bash
-/tmp/talm-safety etcd alarm list --nodes $NODE --endpoints $NODE
+talm etcd alarm list --nodes $NODE --endpoints $NODE
 ```
 
 Expected: empty output on a healthy cluster. Any output indicates an alarm to investigate (NOSPACE / CORRUPT).
@@ -905,7 +1161,7 @@ Expected: empty output on a healthy cluster. Any output indicates an alarm to in
 ### L6. `etcd forfeit-leadership` on a non-leader
 
 ```bash
-/tmp/talm-safety etcd forfeit-leadership --nodes $NON_LEADER --endpoints $NODE
+talm etcd forfeit-leadership --nodes $NON_LEADER --endpoints $NODE
 ```
 
 Expected: silent no-op. Leader unchanged.
@@ -913,7 +1169,7 @@ Expected: silent no-op. Leader unchanged.
 ### L7. `service kubelet restart`
 
 ```bash
-/tmp/talm-safety service kubelet restart --nodes $NODE --endpoints $NODE
+talm service kubelet restart --nodes $NODE --endpoints $NODE
 ```
 
 Expected: `Service "kubelet" restarted`. Pod replays after ~10s.
@@ -921,7 +1177,7 @@ Expected: `Service "kubelet" restarted`. Pod replays after ~10s.
 ### L8. `service kubelet stop` (refused)
 
 ```bash
-/tmp/talm-safety service kubelet stop --nodes $NODE --endpoints $NODE
+talm service kubelet stop --nodes $NODE --endpoints $NODE
 ```
 
 Expected: `kubelet doesn't support stop operation via API`. Talos intentionally blocks stop on essential services.
@@ -931,7 +1187,7 @@ Expected: `kubelet doesn't support stop operation via API`. Talos intentionally 
 ⚠️ Powers off the node. Recovery requires `tofu apply` (or manual provider-side reboot). Use only against a node whose recovery path you control.
 
 ```bash
-/tmp/talm-safety shutdown --nodes $TARGET --endpoints $OTHER
+talm shutdown --nodes $TARGET --endpoints $OTHER
 ```
 
 Expected: events stream through `teardownLifecycle` → `stopEverything` → `events check condition met`. Etcd member remains in the list until TTL expires (~10 min) or the next membership reconciliation.
@@ -939,7 +1195,7 @@ Expected: events stream through `teardownLifecycle` → `stopEverything` → `ev
 ### L10. `get rd` lists registered resource types
 
 ```bash
-/tmp/talm-safety get rd --nodes $NODE --endpoints $NODE | wc -l
+talm get rd --nodes $NODE --endpoints $NODE | wc -l
 ```
 
 Expected: 100+ resource types. Baseline for `get <type>` calls.
@@ -947,7 +1203,7 @@ Expected: 100+ resource types. Baseline for `get <type>` calls.
 ### L11. `get -o jsonpath`
 
 ```bash
-/tmp/talm-safety get hostname --nodes $NODE --endpoints $NODE \
+talm get hostname --nodes $NODE --endpoints $NODE \
   -o jsonpath='{.spec.hostname}'
 ```
 
@@ -956,7 +1212,7 @@ Expected: the node's hostname as a bare string. Useful for scripted extraction.
 ### L12. `logs --tail N`
 
 ```bash
-/tmp/talm-safety logs kubelet --tail 3 --nodes $NODE --endpoints $NODE
+talm logs kubelet --tail 3 --nodes $NODE --endpoints $NODE
 ```
 
 Expected: last 3 lines of kubelet log.
@@ -968,7 +1224,7 @@ Expected: last 3 lines of kubelet log.
 ```bash
 echo "# talm: nodes=this-is-not-json-array" > /tmp/_bad.yaml
 echo "machine: {type: controlplane}" >> /tmp/_bad.yaml
-/tmp/talm-safety apply --dry-run -f /tmp/_bad.yaml
+talm apply --dry-run -f /tmp/_bad.yaml
 rm /tmp/_bad.yaml
 ```
 
@@ -979,7 +1235,7 @@ Expected: `error parsing JSON array for key nodes` with a hint about the expecte
 ```bash
 echo "# operator note above plain YAML" > nodes/_orphan-commented.yaml
 echo "machine: {}" >> nodes/_orphan-commented.yaml
-/tmp/talm-safety apply --dry-run --nodes $NODE --endpoints $NODE -f nodes/_orphan-commented.yaml
+talm apply --dry-run --nodes $NODE --endpoints $NODE -f nodes/_orphan-commented.yaml
 rm nodes/_orphan-commented.yaml
 ```
 
@@ -995,7 +1251,7 @@ machine:
   type: controlplane
 # talm: nodes=["1.2.3.4"], endpoints=["1.2.3.4"], templates=["templates/controlplane.yaml"]
 EOF
-/tmp/talm-safety apply --dry-run -f nodes/_misplaced.yaml
+talm apply --dry-run -f nodes/_misplaced.yaml
 rm nodes/_misplaced.yaml
 ```
 
@@ -1014,7 +1270,7 @@ machine:
   type: controlplane
   install: not-a-map-but-a-string
 EOF
-/tmp/talm-safety apply --dry-run -f /tmp/_bad.yaml
+talm apply --dry-run -f /tmp/_bad.yaml
 rm /tmp/_bad.yaml
 ```
 
@@ -1023,7 +1279,7 @@ Expected: `yaml: construct errors: cannot construct !!str ... into v1alpha1.Inst
 ### M3. Bad `--cert-fingerprint`
 
 ```bash
-/tmp/talm-safety apply --insecure --cert-fingerprint deadbeef \
+talm apply --insecure --cert-fingerprint deadbeef \
   -f nodes/node0.yaml
 ```
 
@@ -1032,7 +1288,7 @@ Expected: TLS handshake error `leaf peer certificate doesn't match the provided 
 ### M4. `--talosconfig` pointing at missing file
 
 ```bash
-/tmp/talm-safety apply --dry-run --talosconfig /tmp/nonexistent \
+talm apply --dry-run --talosconfig /tmp/nonexistent \
   -f nodes/node0.yaml
 ```
 
@@ -1041,7 +1297,7 @@ Expected: `talos config file is empty`. Apply does not proceed.
 ### M5. `TALOSCONFIG` env var
 
 ```bash
-TALOSCONFIG=$PWD/talosconfig /tmp/talm-safety apply --dry-run \
+TALOSCONFIG=$PWD/talosconfig talm apply --dry-run \
   --talosconfig "" -f nodes/node0.yaml
 ```
 
@@ -1081,10 +1337,10 @@ Run after every destructive section (E, F, H, and anything that touches `--mode=
 cd $PROJECT
 for n in node0 node1 node2; do
   echo "=== $n ==="
-  /tmp/talm-safety apply --dry-run -f nodes/$n.yaml | grep -E "^talm:"
+  talm apply --dry-run -f nodes/$n.yaml | grep -E "^talm:"
 done
-/tmp/talm-safety etcd members --nodes $NODE --endpoints $NODE
-/tmp/talm-safety health --nodes $NODE --endpoints $NODE
+talm etcd members --nodes $NODE --endpoints $NODE
+talm health --nodes $NODE --endpoints $NODE
 ```
 
 Expected: each node reports drift preview (typically `0/0/0 unchanged` after a clean run), etcd shows 3 members, health passes.
@@ -1097,13 +1353,13 @@ These don't ship as part of the regular run but are worth re-running after refac
 
 ```bash
 echo "" > /tmp/empty.yaml
-/tmp/talm-safety apply --dry-run -f /tmp/empty.yaml
+talm apply --dry-run -f /tmp/empty.yaml
 # Expected: modeline-prefix error.
 
 cat > /tmp/modeline-only.yaml <<EOF
 # talm: nodes=["$NODE"], endpoints=["$NODE"], templates=["templates/controlplane.yaml"]
 EOF
-/tmp/talm-safety apply --dry-run -f /tmp/modeline-only.yaml
+talm apply --dry-run -f /tmp/modeline-only.yaml
 # Expected: drift preview, possibly significant `-` removals.
 ```
 
@@ -1118,7 +1374,7 @@ Try every BondConfig / VLANConfig / BridgeConfig YAML field permutation that ope
 
 ```bash
 printf '\xef\xbb\xbfmachine:\r\n  install:\r\n    disk: /dev/sda\r\n' > /tmp/bom.yaml
-/tmp/talm-safety apply --dry-run -f /tmp/bom.yaml
+talm apply --dry-run -f /tmp/bom.yaml
 # Expected: no panic. Walker decodes the doc.
 ```
 

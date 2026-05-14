@@ -332,71 +332,117 @@ func TestWrapKubeconfigCommand_PositionalPathErrorMessageMatchesContract(t *test
 	}
 }
 
-// TestWrapDmesgCommand_TailEqualsNumeric_RewritesError pins the
-// FlagErrorFunc cushion for `--tail=<n>` typo. Upstream talosctl
-// registers --tail as a BoolVarP (toggling tail-mode for --follow), but
-// operators' first instinct is tail(1)-style line count. `--tail=3`
-// trips pflag's ParseBool and surfaces a cryptic
-// 'strconv.ParseBool: parsing "3": invalid syntax' error.
+// TestDmesgRemoved_StubSurfacesMigrationHint pins the proactive
+// removal of `talm dmesg`. Upstream Talos is retiring the `dmesg`
+// command in favor of `talm logs kernel`, which supports
+// `--tail=N` as a line count directly (the exact semantics
+// operators reach for). Per siderolabs/talos#13333 the upstream
+// maintainer pointed at `logs kernel` as the replacement.
 //
-// The wrapper installs a FlagErrorFunc that detects this specific
-// pattern and rewrites it with a hint pointing at the actual
-// upstream contract + a pipe-to-tail(1) suggestion for the
-// line-count case operators usually want.
-func TestWrapDmesgCommand_TailEqualsNumeric_RewritesError(t *testing.T) {
-	var dmesgCmd *cobra.Command
+// talm short-circuits any `talm dmesg ...` invocation with a
+// hidden stub command that always errors. The error names the
+// migration path so operators with scripts get an immediate
+// nudge to the right surface rather than a silent "unknown
+// command" or — worse — a working-but-deprecated command.
+//
+// Contract pins:
+//
+//   - The stub exists at the `talm dmesg` command path.
+//   - It is HIDDEN from `talm --help` (operators shouldn't see
+//     dmesg as available).
+//   - Any invocation (with or without flags) errors and the
+//     error's hint names `logs kernel --tail=N` as the
+//     replacement.
+//   - The upstream taloscommands.Commands entry for `dmesg` is
+//     NOT wrapped (the wrapper's excludedCommands map skips it).
+//     Without this, the stub would collide with the wrapped
+//     upstream command and cobra would error on duplicate.
+func TestDmesgRemoved_StubSurfacesMigrationHint(t *testing.T) {
+	t.Parallel()
 
-	for _, cmd := range taloscommands.Commands {
+	// Find the registered talm `dmesg` stub among package
+	// commands. Iterate Commands rather than rootCmd.Commands
+	// because rootCmd assembly happens in main.go's init, which
+	// the test package doesn't drive.
+	var stub *cobra.Command
+
+	for _, cmd := range Commands {
 		if cmd.Name() == "dmesg" {
-			dmesgCmd = cmd
+			stub = cmd
 
 			break
 		}
 	}
 
-	if dmesgCmd == nil {
-		t.Skip("upstream taloscommands.Commands has no 'dmesg' command — schema changed")
+	if stub == nil {
+		t.Fatal("talm must register a `dmesg` stub command so `talm dmesg ...` invocations surface a migration hint; got no command with that name in Commands")
 	}
 
-	wrapped := wrapTalosCommand(dmesgCmd, "dmesg")
-
-	// FlagErrorFunc is invoked by cobra's Execute() lifecycle on a
-	// ParseFlags failure. Reproduce that path by capturing the
-	// ParseFlags error and feeding it through the registered hook —
-	// this is exactly what cobra does internally in command.execute.
-	rawErr := wrapped.ParseFlags([]string{"--tail=3"})
-	if rawErr == nil {
-		t.Fatal("--tail=3 must error from pflag (upstream --tail is bool); got nil")
+	if !stub.Hidden {
+		t.Error("dmesg stub must be hidden from --help so operators don't see a retired command as available")
 	}
 
-	hook := wrapped.FlagErrorFunc()
-	if hook == nil {
-		t.Fatal("wrapped dmesg must register a FlagErrorFunc to rewrite ParseBool errors")
+	// Invoke RunE to verify the migration error fires with the
+	// hint pointing at `logs kernel`. RunE invocation skips
+	// cobra's flag parsing layer; the stub uses
+	// DisableFlagParsing so any operator-supplied flags pass
+	// through and don't error before reaching RunE.
+	if stub.RunE == nil {
+		t.Fatal("stub must have a RunE that returns the migration error")
 	}
 
-	err := hook(wrapped, rawErr)
+	err := stub.RunE(stub, []string{"--nodes", "1.2.3.4"})
+	if err == nil {
+		t.Fatal("dmesg stub must error on every invocation")
+	}
 
 	msg := err.Error()
-
-	// Top-level message must describe the actual contract
-	// (boolean toggle for --follow) so the operator sees it first
-	// before any inherited ParseBool noise.
-	if !strings.Contains(strings.ToLower(msg), "boolean") && !strings.Contains(strings.ToLower(msg), "follow") {
-		t.Errorf("rewritten error must describe --tail's actual contract (boolean toggle for --follow); got: %q", msg)
+	if !strings.Contains(msg, "dmesg") || !strings.Contains(strings.ToLower(msg), "removed") {
+		t.Errorf("error must name the dmesg-removal explicitly; got: %q", msg)
 	}
 
-	// Chain must preserve the original ParseBool error via
-	// errors.Wrap so the underlying pflag failure remains
-	// reachable for verbose debugging (errors.Unwrap,
-	// fmt.Sprintf("%+v", err), etc.). Without wrap-not-replace,
-	// downstream tooling that walks the chain or matches against
-	// the upstream error type loses information.
-	if !strings.Contains(msg, "ParseBool") {
-		t.Errorf("rewritten error must wrap (not replace) the original ParseBool error so the chain stays inspectable; got: %q", msg)
+	hints := strings.Join(errors.GetAllHints(err), "\n")
+	// The hint must cover both operator use cases that the
+	// retired dmesg surface served: --tail=N for the last N
+	// lines (the line-count case operators reach for), AND
+	// --follow for live streaming (the original valid usage of
+	// `talm dmesg --follow` that wasn't a parse-error trap).
+	// Operators with either pattern in scripts get a complete
+	// migration target instead of a hint that only covers one.
+	for _, want := range []string{"logs kernel", "--tail", "--follow"} {
+		if !strings.Contains(hints, want) {
+			t.Errorf("hint must point at `talm logs kernel` covering both `--tail=N` (last N lines) and `--follow` (stream); missing %q in hints:\n%s", want, hints)
+		}
+	}
+}
+
+// TestDmesgExcludedFromTalosctlWrap pins the other half of the
+// removal contract: the upstream taloscommands.Commands entry
+// for `dmesg` MUST NOT be wrapped through wrapTalosCommand.
+// Without this guard the talm-owned stub and the wrapped
+// upstream command would collide on cobra registration. The
+// excludedCommands map in talosctl_wrapper.go's init is the
+// load-bearing piece; this test surfaces a regression that
+// removes "dmesg" from the map while leaving the stub.
+func TestDmesgExcludedFromTalosctlWrap(t *testing.T) {
+	t.Parallel()
+
+	// The talm Commands slice is built from two sources:
+	// upstream taloscommands.Commands (excluding the
+	// excludedCommands map) and talm-native registrations
+	// (apply, init, template, talosconfig, plus our new dmesg
+	// stub). Exactly one entry named `dmesg` should exist (the
+	// stub). If two are present, the exclusion failed.
+	count := 0
+
+	for _, cmd := range Commands {
+		if cmd.Name() == "dmesg" {
+			count++
+		}
 	}
 
-	if unwrapped := errors.Unwrap(err); unwrapped == nil {
-		t.Errorf("rewritten error must be unwrappable to the original; errors.Unwrap returned nil for %q", msg)
+	if count != 1 {
+		t.Errorf("Commands slice must contain exactly one entry named 'dmesg' (the talm stub); got %d — upstream taloscommands.Commands entry was not excluded", count)
 	}
 }
 
