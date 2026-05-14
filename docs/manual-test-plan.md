@@ -113,6 +113,50 @@ Expected: error `failed to decrypt secrets: load key: read key file: open <path>
 
 Regression anchor: the hint must name BOTH recovery paths (restore from backup, re-run init to regenerate) AND include the warning that regeneration writes new secrets making the old encrypted secrets undecryptable. A regression that drops either path or the warning silently invites operators to "just run init again" without understanding the data-loss tradeoff.
 
+### A9. `init --cluster-endpoint` populates values.yaml::endpoint
+
+```bash
+mkdir -p /tmp/talm-cluster-ep-test && cd /tmp/talm-cluster-ep-test
+/tmp/talm-safety init --preset cozystack --name test \
+  --endpoints 10.0.0.1,10.0.0.2,10.0.0.3 \
+  --cluster-endpoint https://vip.example.test:6443
+grep "^endpoint:" values.yaml
+grep -A 3 "endpoints:" talosconfig | head -5
+rm -rf /tmp/talm-cluster-ep-test
+```
+
+Expected: `values.yaml` has `endpoint: "https://vip.example.test:6443"` (operator's VIP, explicit), `talosconfig` has all three `10.0.0.1`/`10.0.0.2`/`10.0.0.3` under the context's endpoints array. The two flags address different concepts — `--cluster-endpoint` is the kube-apiserver URL, `--endpoints` is the talosctl-client list — and both round-trip independently.
+
+Regression anchor: removing `--cluster-endpoint` and passing only `--endpoints 10.0.0.1,10.0.0.2,10.0.0.3` MUST leave `values.yaml::endpoint` empty (the multi-endpoint case never auto-derives — picking one node would silently couple cluster availability to it). The init flow MUST then print a hint at the end pointing the operator at `values.yaml::endpoint` with examples for VIP / LB shapes.
+
+### A10. `init --endpoints` with single entry auto-derives values.yaml::endpoint
+
+```bash
+mkdir -p /tmp/talm-single-ep-test && cd /tmp/talm-single-ep-test
+/tmp/talm-safety init --preset cozystack --name test --endpoints 192.0.2.10
+grep "^endpoint:" values.yaml
+rm -rf /tmp/talm-single-ep-test
+```
+
+Expected: `endpoint: "https://192.0.2.10:6443"` — the single-endpoint case is unambiguously "this is also the cluster URL", so init derives the canonical `https://<host>:6443` form. No hint printed at end of init for this case.
+
+Regression anchor: this auto-derive ONLY fires when `len(--endpoints) == 1`. Multi-endpoint inputs MUST leave the field empty (see A9).
+
+### A11. `init --cluster-endpoint` rejects malformed URL before any files land on disk
+
+```bash
+mkdir -p /tmp/talm-bad-ep-test && cd /tmp/talm-bad-ep-test
+/tmp/talm-safety init --preset cozystack --name test \
+  --endpoints 192.0.2.10 \
+  --cluster-endpoint "not-a-url"
+ls -la  # should be empty
+rm -rf /tmp/talm-bad-ep-test
+```
+
+Expected: error `cluster-endpoint "not-a-url" is missing scheme, host, or port` with hint pointing at the canonical form. Directory remains empty — NO `talosconfig`, NO `.gitignore`, NO `secrets.yaml` written. Validation happens in PreRunE before any file writes so a malformed flag never produces a half-initialised project tree.
+
+Regression anchor: a regression that defers validation to RunE (i.e. after the secret-bundle generation) would leave `talosconfig` and `.gitignore` behind — verify by checking `ls -la` after the failing command finds an empty directory.
+
 ### A8. `init --update` without `--preset` and without preset dep in Chart.yaml
 
 ```bash

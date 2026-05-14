@@ -61,7 +61,17 @@ talm init -p cozystack -N myawesomecluster --image factory.talos.dev/installer/<
 
 `--image` rewrites the top-level `image:` field in the preset's `values.yaml` before write. The flag is honored on initial `init` only — for an existing project, edit `values.yaml` directly. The `cozystack` preset declares `image:`; the `generic` preset does not, so `--image --preset generic` is rejected up front.
 
-Edit `values.yaml` to set your cluster's control-plane endpoint. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty on purpose so a missed override fails loudly instead of silently embedding a placeholder.
+To set the Kubernetes control-plane URL at init time, pass `--cluster-endpoint`:
+
+```bash
+talm init -p cozystack -N myawesomecluster --cluster-endpoint https://vip.example.test:6443
+```
+
+`--cluster-endpoint` writes the URL into `values.yaml::endpoint`, which the chart renders into `cluster.controlPlane.endpoint` of every node's MachineConfig (the URL kubelet and kube-proxy dial). The flag is honored on initial `init` only — for an existing project, edit `values.yaml` directly.
+
+`--endpoints` and `--cluster-endpoint` address different concepts: `--endpoints` (plural, list) populates the `talosconfig` context for the talosctl client; `--cluster-endpoint` (singular, full URL) populates the Kubernetes control-plane address inside the chart. When `--endpoints` is given a single value, init auto-derives `values.yaml::endpoint` as `https://<that>:6443` — the single-target case is unambiguous. Multi-endpoint inputs never auto-derive (picking one node would silently couple cluster availability to it); the operator must pass `--cluster-endpoint` explicitly or fill `values.yaml::endpoint` later. The init flow prints a hint at the end when the field is left empty.
+
+Edit `values.yaml` to set your cluster's control-plane endpoint if neither flag set it. This is the URL every node's kubelet and kube-proxy will dial. The chart leaves it empty by default so a missed override fails loudly instead of silently embedding a placeholder.
 
 Endpoint / floatingIP combinations:
 

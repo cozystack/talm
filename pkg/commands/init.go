@@ -19,6 +19,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -114,14 +116,15 @@ func resolveTalosconfigEndpoints(globalEndpoints []string) []string {
 //
 //nolint:gochecknoglobals // cobra flag binding requires a stable address
 var initCmdFlags struct {
-	force        bool
-	preset       string
-	name         string
-	talosVersion string
-	image        string
-	update       bool
-	encrypt      bool
-	decrypt      bool
+	force           bool
+	preset          string
+	name            string
+	talosVersion    string
+	image           string
+	clusterEndpoint string
+	update          bool
+	encrypt         bool
+	decrypt         bool
 }
 
 // initCmd represents the `init` command.
@@ -146,6 +149,30 @@ var initCmd = &cobra.Command{
 				errors.New("--image is honored on initial init only; not valid with --encrypt, --decrypt, or --update"),
 				"drop --image, or run init without --encrypt/--decrypt/--update",
 			)
+		}
+
+		// Same constraint applies to --cluster-endpoint: it rewrites
+		// values.yaml::endpoint at write time on initial init only.
+		// On --encrypt / --decrypt / --update the flag would have no
+		// effect, so surface the mismatch loudly instead of silently
+		// discarding the operator's intent.
+		if initCmdFlags.clusterEndpoint != "" && (initCmdFlags.encrypt || initCmdFlags.decrypt || initCmdFlags.update) {
+			return errors.WithHint(
+				errors.New("--cluster-endpoint is honored on initial init only; not valid with --encrypt, --decrypt, or --update"),
+				"drop --cluster-endpoint and edit values.yaml manually if you need to change the control-plane URL on an existing project, or re-run init without --encrypt/--decrypt/--update",
+			)
+		}
+
+		// Validate the URL shape of --cluster-endpoint up front so a
+		// malformed value short-circuits before any files are
+		// written. The same validation runs again at the
+		// resolveClusterEndpoint call site in RunE as defense in
+		// depth, but the early check keeps a half-initialised
+		// project tree off disk when the operator typos the flag.
+		if initCmdFlags.clusterEndpoint != "" {
+			if err := validateClusterEndpoint(initCmdFlags.clusterEndpoint); err != nil {
+				return err
+			}
 		}
 
 		// For -e, -d, and -u flags, always check that we're in a project root
@@ -699,6 +726,15 @@ var initCmd = &cobra.Command{
 			return err
 		}
 
+		// Resolve the Kubernetes control-plane URL up front. Failing
+		// here (malformed --cluster-endpoint) short-circuits before
+		// any files are written so the project tree never lands in
+		// a half-initialised state.
+		clusterEndpoint, err := resolveClusterEndpoint(initCmdFlags.clusterEndpoint, GlobalArgs.Endpoints)
+		if err != nil {
+			return err
+		}
+
 		for path, content := range presetFiles {
 			parts := strings.SplitN(path, "/", 2)
 			chartName := parts[0]
@@ -715,6 +751,8 @@ var initCmd = &cobra.Command{
 					if err != nil {
 						return err
 					}
+
+					rendered = applyEndpointOverride(rendered, clusterEndpoint)
 
 					err = writeToDestination(rendered, file, presetFileMode)
 				default:
@@ -744,6 +782,15 @@ var initCmd = &cobra.Command{
 		if keyWasCreated {
 			printSecretsWarning()
 		}
+
+		// Late hint when the operator left the cluster-control-plane
+		// URL unset: walk the rendered values.yaml on disk and check
+		// `endpoint:` is still an empty string. The check reads the
+		// written file rather than relying on resolveClusterEndpoint's
+		// return because the preset itself may have shipped a non-
+		// empty default (which we'd leave alone). This way the hint
+		// only fires when the operator genuinely has more work to do.
+		printClusterEndpointHintIfEmpty(filepath.Join(Config.RootDir, valuesYamlName))
 
 		return nil
 	},
@@ -792,6 +839,111 @@ func readChartYamlPreset() (string, error) {
 		errors.New("preset not found in Chart.yaml dependencies"),
 		"add a preset chart (e.g. cozystack) to Chart.yaml's dependencies, or pass --preset on the command line",
 	)
+}
+
+// endpointLineRe matches the top-level `endpoint:` line in a
+// preset values.yaml regardless of YAML serialization style —
+// double-quoted, single-quoted, unquoted, with or without a
+// trailing comment. Same shape as imageLineRe so that
+// applyEndpointOverride round-trips identically across presets
+// the chart authors write in different styles.
+var endpointLineRe = regexp.MustCompile(`(?m)^endpoint:(\s|$).*$`)
+
+// resolveClusterEndpoint picks the value to embed in
+// values.yaml::endpoint, applying precedence from operator-
+// explicit to inferred:
+//
+//  1. --cluster-endpoint flag wins (validated as URL with
+//     scheme, host, port).
+//  2. --endpoints with exactly one entry auto-derives
+//     `https://<that>:6443`. The single-target case is
+//     unambiguous; picking one of N multi-control-plane
+//     endpoints would silently couple cluster availability to
+//     that node, so multi-endpoint inputs return empty here.
+//  3. Empty otherwise — the init flow prints a hint at the end
+//     pointing the operator at values.yaml::endpoint.
+//
+// The chart leaves endpoint empty by default so a missed
+// override fails loudly rather than silently embedding a
+// placeholder. The single-endpoint auto-derive does not violate
+// this intent: the operator stated their endpoint explicitly
+// via --endpoints, the derived value is the canonical
+// `https://<host>:6443` form, and a missed flag still produces
+// an empty endpoint + the late hint.
+func resolveClusterEndpoint(clusterEndpointFlag string, endpoints []string) (string, error) {
+	if clusterEndpointFlag != "" {
+		if err := validateClusterEndpoint(clusterEndpointFlag); err != nil {
+			return "", err
+		}
+
+		return clusterEndpointFlag, nil
+	}
+
+	if len(endpoints) == 1 {
+		return "https://" + net.JoinHostPort(endpoints[0], "6443"), nil
+	}
+
+	return "", nil
+}
+
+// validateClusterEndpoint requires the URL to have an explicit
+// scheme, host, and port — the three pieces kube-apiserver
+// clients need to dial the control plane. Looser shapes (bare
+// host, missing scheme, missing port) tend to be operator
+// typos that surface much later as unreachable-control-plane
+// errors deep in apply / upgrade flows; catching them at the
+// init boundary keeps the failure mode close to the cause.
+func validateClusterEndpoint(endpoint string) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Wrapf(err, "parsing cluster-endpoint %q", endpoint),
+			"--cluster-endpoint must be a full URL with scheme, host, and port (e.g. `https://10.0.0.1:6443` or `https://vip.example.test:6443`)",
+		)
+	}
+
+	if parsed.Scheme == "" || parsed.Host == "" || parsed.Port() == "" {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Newf("cluster-endpoint %q is missing scheme, host, or port", endpoint),
+			"--cluster-endpoint must be a full URL with scheme, host, and port (e.g. `https://10.0.0.1:6443` or `https://vip.example.test:6443`)",
+		)
+	}
+
+	return nil
+}
+
+// applyEndpointOverride returns values with the top-level
+// `endpoint:` line replaced so it points at override. An empty
+// override returns values unchanged. Unlike applyImageOverride,
+// a preset that does not declare a top-level `endpoint:` line is
+// NOT a hard error — the auto-derive path (single-endpoint
+// implicit) shouldn't fail the init flow when the chart simply
+// doesn't expose the field. Operator-explicit `--cluster-endpoint`
+// on such a preset is validated up the call chain (the caller
+// can choose to surface a warning); the helper itself stays
+// best-effort.
+//
+// The override is %q-quoted (same as applyImageOverride) so
+// special characters in the URL (rarely present in practice
+// but possible in DNS names with quoted segments) are escaped.
+// ReplaceAllFunc is used to defeat regex.ReplaceAll's
+// $-expansion in the replacement.
+func applyEndpointOverride(values []byte, override string) []byte {
+	if override == "" {
+		return values
+	}
+
+	if !endpointLineRe.Match(values) {
+		return values
+	}
+
+	replacement := fmt.Appendf(nil, "endpoint: %q", override)
+
+	return endpointLineRe.ReplaceAllFunc(values, func([]byte) []byte {
+		return replacement
+	})
 }
 
 // imageLineRe matches the top-level `image:` line in a preset
@@ -1273,6 +1425,7 @@ func init() {
 	initCmd.Flags().StringVarP(&initCmdFlags.preset, "preset", "p", "", "preset for file generation (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().StringVarP(&initCmdFlags.name, "name", "N", "", "cluster name (not required with --encrypt, --decrypt, or --update)")
 	initCmd.Flags().StringVar(&initCmdFlags.image, "image", "", "override the Talos installer image written to the preset's values.yaml (e.g. factory.talos.dev/installer/<sha256>:<version>)")
+	initCmd.Flags().StringVar(&initCmdFlags.clusterEndpoint, "cluster-endpoint", "", "Kubernetes control-plane URL written to values.yaml::endpoint (e.g. https://10.0.0.1:6443 or https://vip.example.test:6443). Takes precedence over the single-endpoint auto-derive heuristic; required for multi-control-plane setups where the operator picks a VIP or load balancer.")
 	initCmd.Flags().BoolVar(&initCmdFlags.force, "force", false, "overwrite existing files; on --update also auto-accepts every preset-template diff without the interactive prompt")
 	initCmd.Flags().BoolVarP(&initCmdFlags.update, "update", "u", false, "update Talm library chart")
 	// Override persistent -e flag for init command to use for encrypt
@@ -1428,6 +1581,41 @@ func fileExists(file string) bool {
 	_, err := os.Stat(file)
 
 	return err == nil
+}
+
+// emptyEndpointLineRe matches a top-level `endpoint:` line whose
+// value is the empty string in any common YAML serialization
+// shape: `endpoint: ""`, `endpoint: ”`, `endpoint:` followed by
+// nothing, optional trailing comment. Used by
+// printClusterEndpointHintIfEmpty to decide whether the operator
+// still needs to fill the field after init.
+var emptyEndpointLineRe = regexp.MustCompile(`(?m)^endpoint:\s*(?:""|''|)\s*(?:#.*)?$`)
+
+// printClusterEndpointHintIfEmpty surfaces a one-line operator
+// hint pointing at values.yaml::endpoint when init completes
+// with that field left empty. Hits the common case where the
+// operator passed `--endpoints` (which populates talosconfig)
+// but didn't also tell talm the Kubernetes control-plane URL —
+// both shared the word "endpoint" so the distinction is easy to
+// miss. The hint is purely advisory: the chart is allowed to
+// ship with an empty endpoint and the operator can fill it
+// manually later.
+//
+// Best-effort: I/O failures here are silently ignored (the hint
+// is a nudge, not a contract). Presets that don't declare a
+// top-level endpoint: field skip the hint too — the heuristic
+// only matches an explicit empty assignment.
+func printClusterEndpointHintIfEmpty(valuesPath string) {
+	data, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return
+	}
+
+	if !emptyEndpointLineRe.Match(data) {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "\nNext: set values.yaml::endpoint to your cluster's control-plane URL (e.g. `https://<vip>:6443` for a VIP setup, or `https://<LB-host>:6443` for an external load balancer).\nThe chart leaves this empty by design — `--endpoints` populates talosconfig (talosctl client routing), not the kube-apiserver URL nodes dial. Use `--cluster-endpoint` on `talm init` to set both in one go.\n")
 }
 
 func printSecretsWarning() {
