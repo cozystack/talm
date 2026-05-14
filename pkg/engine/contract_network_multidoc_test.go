@@ -374,6 +374,99 @@ func TestContract_NetworkMultidoc_BridgeConfigEmitted(t *testing.T) {
 	assertContains(t, out, "name: br0")
 }
 
+// === Bridge as gateway: no longer fails ===
+
+// bridgeAsGatewayLookup builds a LookupFunc emulating a bridge link
+// carrying the IPv4 default route. Used to be the trigger for the
+// multi-doc renderer's "bridge as gateway" hard-fail before
+// BridgeConfig emission landed; today it produces a clean render
+// pinned by TestContract_NetworkMultidoc_BridgeAsGateway_NoLongerFails
+// below.
+func bridgeAsGatewayLookup() func(string, string, string) (map[string]any, error) {
+	br0 := map[string]any{
+		"metadata": map[string]any{"id": "br0"},
+		"spec": map[string]any{
+			"kind":  "bridge",
+			"index": 5,
+			// busPath intentionally absent: bridges aren't physical NICs.
+			// configurable_link_names accepts them via the $isVirtual branch.
+		},
+	}
+	links := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{br0},
+	}
+	routes := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "br0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	addresses := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"linkName": "br0",
+					"address":  "192.168.1.10/24",
+					"family":   "inet4",
+					"scope":    "global",
+				},
+			},
+		},
+	}
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "links":
+			if id == "br0" {
+				return br0, nil
+			}
+			if id == "" {
+				return links, nil
+			}
+		case "routes":
+			return routes, nil
+		case "addresses":
+			return addresses, nil
+		}
+		return map[string]any{}, nil
+	}
+}
+
+// Contract: multi-doc renderer no longer aborts when a bridge
+// carries the IPv4 default route — it now emits a typed
+// BridgeConfig document with the gateway. The previous shape
+// hard-failed here on the premise that BridgeConfig emission was
+// unimplemented, but the typed-document branch handles bridges
+// symmetrically to bonds today. The per-chart cross-product is
+// pinned in TestContract_NetworkMultidoc_BridgeConfigEmitted and
+// TestMultiDocEmitsBridgeConfigWhenBridgeCarriesDefaultRoute; this
+// test stays as the negative pin against the previous fail-fast.
+func TestContract_NetworkMultidoc_BridgeAsGateway_NoLongerFails(t *testing.T) {
+	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
+		t.Run(chartPath, func(t *testing.T) {
+			err := renderExpectingError(t, chartPath, multidocTalos, bridgeAsGatewayLookup(), map[string]any{
+				"endpoint":          testEndpoint,
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+			})
+			if err != nil {
+				t.Errorf("bridge-as-gateway must no longer fail (BridgeConfig is emitted now), got: %v", err)
+			}
+		})
+	}
+}
+
 // Contract: a controlplane floatingIP that lives inside the subnet
 // configured on a bridge link now legitimately lands on the bridge —
 // the bridge is fully rendered as a typed BridgeConfig document, so
