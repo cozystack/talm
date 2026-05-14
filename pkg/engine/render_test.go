@@ -5749,6 +5749,102 @@ func malformedAddressEntryLookup() func(string, string, string) (map[string]any,
 	}
 }
 
+// linkScopedAddressOnDefaultGatewayLookup mirrors
+// malformedAddressEntryLookup's IPv4 Hetzner topology but
+// sandwiches a link-scoped 169.254/16 entry on the
+// default-gateway-bearing link between two global-scope
+// siblings. Used by
+// TestContract_NetworkLegacy_DefaultAddressesFilterLinkScope to
+// pin that the legacy v1.11 default_addresses_by_gateway helper
+// drops scope=link the same way addresses_by_link does. Real
+// Talos COSI always emits scope=link for 169.254/16, so the
+// fixture reflects realistic on-the-wire shape.
+func linkScopedAddressOnDefaultGatewayLookup() func(string, string, string) (map[string]any, error) {
+	publicNIC := map[string]any{
+		"metadata": map[string]any{"id": "enp0s31f6"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:01:01",
+			"busPath":      "pci-0000:00:1f.6",
+			"mtu":          1500,
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "88.99.210.1",
+					"outLinkName": "enp0s31f6",
+					"family":      "inet4",
+					"table":       "main",
+					"priority":    100,
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{publicNIC},
+	}
+	// Three entries on the default-gateway link: a global-scope
+	// global IP, a link-scoped 169.254 link-local that the new
+	// scope filter MUST drop, and another global-scope sibling
+	// so the test can assert the filter is scope-selective (it
+	// doesn't drop everything on the link).
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.37/26", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "169.254.1.5/16", "family": "inet4", "scope": "link"}},
+			map[string]any{"spec": map[string]any{"linkName": "enp0s31f6", "address": "88.99.210.38/26", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"88.99.210.37/26"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "enp0s31f6" {
+				return publicNIC, nil
+			}
+			if id == "" {
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // hetznerPublicNICWithPrivateIPv6VLANLookup is the IPv6-equivalent of
 // hetznerPublicNICWithPrivateVLANLookup. The same physical / VLAN
 // topology, but the private subnet is a /64 ULA and the VIP is an

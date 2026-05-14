@@ -142,14 +142,25 @@
        it cannot match a real CIDR prefix. */ -}}
 {{- $fipStr := $.Values.floatingIP | toString }}
 {{- $addresses := list }}
+{{- /* Drop the same kernel-managed scopes addresses_by_link
+       rejects (host loopback, link-local, "nowhere"). Real Talos
+       COSI always sets scope=link for the 169.254/16 link-local
+       range, so a legacy v1.11 render that filtered only the
+       "host" scope was at risk of leaking link-local addresses
+       verbatim into machine.network.interfaces[].addresses on
+       the next COSI schema bump. Mirror the two helpers so a
+       future bump that produces new link-local entries on the
+       default-gateway-bearing link can't slip through one path
+       while being correctly rejected by the other. */ -}}
+{{- $skipScopes := list "host" "link" "nowhere" }}
 {{- range (lookup "addresses" "" "").items }}
 {{- /* Filter malformed or future-format entries the same way
        addresses_by_link does (cidrPrefixLen >= 0). A corrupt entry
        in the COSI addresses table must not leak verbatim into the
        legacy v1.11 machine.network.interfaces[].addresses block. */ -}}
 {{- $address := .spec.address | toString }}
-{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 }}
-{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (eq .spec.scope "host")) $validCidr }}
+{{- $validCidr := ge (cidrPrefixLen $address) 0 }}
+{{- if and (eq .spec.linkName $linkName) (eq .spec.family $family) (not (has (.spec.scope | toString) $skipScopes)) $validCidr }}
 {{- if not (hasPrefix (printf "%s/" $fipStr) $address) }}
 {{- $addresses = append $addresses $address }}
 {{- end }}
@@ -561,7 +572,7 @@ vlans:
        apply with a less-informative error than the chart could
        give. */ -}}
 {{- $address := .spec.address | toString -}}
-{{- $validCidr := ge (int (cidrPrefixLen $address)) 0 -}}
+{{- $validCidr := ge (cidrPrefixLen $address) 0 -}}
 {{- if and (eq .spec.linkName $linkName) $hasScope (not $skip) $validCidr -}}
 {{- $addresses = append $addresses $address -}}
 {{- end -}}
@@ -689,3 +700,320 @@ busPath: {{ $link.spec.busPath }}
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{- /* talm.config.network.multidoc reconstructs the v1.12+ multi-doc
+       network config from discovery resources. Single source of truth
+       used by both the cozystack and generic chart presets — each
+       chart's talos.config.network.multidoc forwards here via include.
+       Lives in the talm library chart because both charts include
+       talm as a subchart for discovery helpers, so the define is in
+       scope under one canonical name. */ -}}
+{{- define "talm.config.network.multidoc" }}
+{{- /* Multi-doc format reconstructs network config from discovery resources.
+       Every configurable link on the node (physical NIC, bond, VLAN, bridge)
+       gets its own document so a multi-NIC node ends up with all NICs
+       configured rather than only the gateway-bearing one. The gateway-
+       link's IPv4 default-route gateway is emitted only on that link's
+       document; every other link gets its addresses without a default route.
+       MTU is surfaced when discovery reports a value so non-default-MTU
+       links (jumbo frames, GRE) survive a re-render.
+
+       existing_interfaces_configuration is not consulted here: v1.12 nodes
+       store network config in separate documents (LinkConfig, BondConfig,
+       VLANConfig), not in the legacy machine.network.interfaces field. The
+       guardrail below catches the upgrade case where a node was originally
+       bootstrapped on a chart that emitted the legacy schema and still
+       carries non-empty machine.network.interfaces[] in its running
+       MachineConfig — the renderer cannot translate those entries today
+       and would otherwise silently drop them on the next apply. */ -}}
+{{- $legacyInterfaces := include "talm.discovered.existing_interfaces_configuration" . }}
+{{- if $legacyInterfaces }}
+{{- fail (printf "talm: the multi-doc renderer cannot translate legacy machine.network.interfaces[] from the running MachineConfig. Move the interfaces, vlans, and addresses below into per-node body overlays as v1.12 typed documents (LinkConfig, VLANConfig, BondConfig, RouteConfig) before re-running talm apply, or pin templateOptions.talosVersion to v1.11 in Chart.yaml until the translator lands.\n\nDetected legacy block:\n%s" $legacyInterfaces) }}
+{{- end }}
+{{- (include "talm.discovered.physical_links_info" .) }}
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: {{ include "talm.discovered.hostname" . | quote }}
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+{{- $resolvers := include "talm.discovered.default_resolvers" . }}
+{{- if $resolvers }}
+{{- range fromJsonArray $resolvers }}
+  - address: {{ . | quote }}
+{{- end }}
+{{- else }}
+  []
+{{- end }}
+{{- /* Coerce .Values.floatingIP to its string form once at the
+       top of the multi-doc body and reuse the result everywhere
+       a downstream lookup or formatter needs it. The per-link
+       addresses_by_link strip on every link emission below
+       depends on the same stringified value — a worker render
+       with `floatingIP: 192168` would otherwise feed printf
+       "%s/" an int, producing `%!s(int=192168)/` that never
+       matches a CIDR. The coercion isolates that trap to one
+       place and lets the rest of the template treat the value
+       uniformly.
+
+       "<nil>" is Sprig's serialisation of nil and "" is the
+       unset string; both mean "operator did not supply a
+       value". The shared talm.validate_floatingIP partial below
+       handles the actual fail-fast — invoke it here AND in the
+       legacy define so a malformed value fails at render time
+       regardless of the rendered Talos version. */}}
+{{- $fipStr := .Values.floatingIP | toString }}
+{{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
+{{- include "talm.validate_floatingIP" . }}
+{{- /* Operator-declared vipLink override: emit Layer2VIPConfig
+       regardless of discovery state. Useful when the target link
+       does not yet exist on the live system at first apply (typical
+       case: a VLAN sub-interface this template is about to bring up).
+       The discovery-derived block below skips its own Layer2VIPConfig
+       when this branch fires, so we never emit duplicates. */}}
+{{- if and $fipIsSet .Values.vipLink (eq .MachineType "controlplane") }}
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ $fipStr | quote }}
+link: {{ .Values.vipLink }}
+{{- end }}
+{{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
+{{- $configurableLinks := fromJsonArray (include "talm.discovered.configurable_link_names" .) }}
+{{- range $linkName := $configurableLinks }}
+{{- $link := lookup "links" "" $linkName }}
+{{- if $link }}
+{{- $kind := $link.spec.kind | toString }}
+{{- $isGatewayLink := eq $linkName $defaultLinkName }}
+{{- $rawAddresses := fromJsonArray (include "talm.discovered.addresses_by_link" $linkName) }}
+{{- /* Strip the operator-declared floatingIP from per-link addresses
+       so the VIP currently held by this leader does not leak into
+       LinkConfig.addresses. Talos's VIP operator installs the VIP
+       as a regular global-scope address indistinguishable from a
+       permanent one in COSI; without the filter, a re-render against
+       the VIP-active node would declare the VIP both as a permanent
+       address and as the Layer2VIPConfig target, putting the leader
+       and follower configs out of sync. */}}
+{{- $addresses := list }}
+{{- range $rawAddresses }}
+{{- /* Use the hoisted $fipStr/$fipIsSet from the top of the
+       define so the strip honours the same coerced value the
+       validation block above used. Going through `printf "%s/"
+       $.Values.floatingIP` directly would emit
+       `%!s(int=192168)/` for a numeric YAML scalar on a worker
+       render (controlplane was caught by the fail-fast). */ -}}
+{{- if not (and $fipIsSet (hasPrefix (printf "%s/" $fipStr) .)) }}
+{{- $addresses = append $addresses . }}
+{{- end }}
+{{- end }}
+{{- $linkGateway := "" }}
+{{- if $isGatewayLink }}
+{{- $linkGateway = include "talm.discovered.gateway_by_link" $linkName }}
+{{- end }}
+{{- if eq $kind "bridge" }}
+{{- /* BridgeConfig emission. Discovers bridge ports (members) via
+       talm.discovered.bridge_slaves and emits a typed v1.12+
+       BridgeConfig document with the same address / route / mtu
+       shape as the other branches. STP and VLAN filtering are
+       opt-in: they are emitted only when the bridge controller
+       reported a non-nil spec.bridgeMaster.stp / spec.bridgeMaster
+       value, so a default-state bridge stays minimal. */ -}}
+{{- $bridgeMaster := $link.spec.bridgeMaster }}
+{{- $bridgePorts := fromJsonArray (include "talm.discovered.bridge_slaves" $link.spec.index) }}
+---
+apiVersion: v1alpha1
+kind: BridgeConfig
+name: {{ $linkName }}
+{{- if $bridgePorts }}
+links:
+{{- range $bridgePorts }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- if $bridgeMaster }}
+{{- if $bridgeMaster.stp }}
+{{- if hasKey $bridgeMaster.stp "enabled" }}
+stp:
+  enabled: {{ $bridgeMaster.stp.enabled }}
+{{- end }}
+{{- end }}
+{{- /* COSI's BridgeVLANSpec serialises FilteringEnabled as
+       yaml:"filteringEnabled" (verified against
+       siderolabs/talos pkg/machinery/resources/network/link.go).
+       The output-side BridgeConfig schema uses the shorter
+       yaml:"filtering,omitempty" key — so we read the long form
+       from discovery and emit the short form into the rendered
+       document. */ -}}
+{{- if $bridgeMaster.vlan }}
+{{- if hasKey $bridgeMaster.vlan "filteringEnabled" }}
+vlan:
+  filtering: {{ $bridgeMaster.vlan.filteringEnabled }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
+{{- end }}
+{{- else if eq $kind "bond" }}
+{{- $bondMaster := $link.spec.bondMaster }}
+{{- $slaves := fromJsonArray (include "talm.discovered.bond_slaves" $link.spec.index) }}
+{{- if not $slaves }}
+{{- /* Talos's link controller can auto-create a bond stub in COSI
+       link state before any operator configuration enslaves
+       physical NICs to it: the master link carries a bondMaster
+       spec but no other link has slaveKind: bond + masterIndex
+       pointing at it. Emitting BondConfig with empty `links:`
+       produces a document Talos rejects on apply ("at least one
+       link must be specified"). Treat empty-slaves as not-a-
+       user-bond and skip the document. An operator who intends
+       a bond must declare its slaves via a per-node body overlay;
+       until then the discovered stub is not promoted to config. */ -}}
+{{- else }}
+---
+apiVersion: v1alpha1
+kind: BondConfig
+name: {{ $linkName }}
+links:
+{{- range $slaves }}
+  - {{ . }}
+{{- end }}
+{{- if $bondMaster }}
+{{- if $bondMaster.mode }}
+bondMode: {{ $bondMaster.mode }}
+{{- end }}
+{{- if $bondMaster.xmitHashPolicy }}
+xmitHashPolicy: {{ $bondMaster.xmitHashPolicy }}
+{{- end }}
+{{- if $bondMaster.lacpRate }}
+lacpRate: {{ $bondMaster.lacpRate }}
+{{- end }}
+{{- if $bondMaster.miimon }}
+miimon: {{ $bondMaster.miimon }}
+{{- end }}
+{{- if $bondMaster.updelay }}
+updelay: {{ $bondMaster.updelay }}
+{{- end }}
+{{- if $bondMaster.downdelay }}
+downdelay: {{ $bondMaster.downdelay }}
+{{- end }}
+{{- end }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
+{{- end }}
+{{- end }}
+{{- else if eq $kind "vlan" }}
+{{- $parentLinkName := include "talm.discovered.parent_link_name" $linkName }}
+{{- $vlanID := include "talm.discovered.vlan_id" $linkName }}
+{{- if not $parentLinkName }}
+{{- /* VLANConfig requires the parent field on the wire. Emitting one
+       without it produces a document Talos rejects on apply. Treat the
+       partial-discovery case as fail-fast — a VLAN with an unresolvable
+       linkIndex is a discovery bug, not a config we can render. */ -}}
+{{- fail (printf "talm: discovered VLAN %q has no resolvable parent link (spec.linkIndex points at a non-existent link). VLANConfig requires the parent field; refusing to emit an invalid document. Fix the discovery state or declare the VLAN explicitly via a per-node body overlay." $linkName) }}
+{{- end }}
+{{- if not $vlanID }}
+{{- /* VLANConfig also requires vlanID. Symmetric guardrail to the
+       missing-parent case above — discovery without spec.vlan.vlanID
+       cannot produce a valid VLANConfig. */ -}}
+{{- fail (printf "talm: discovered VLAN %q has no resolvable vlanID (spec.vlan.vlanID is unset). VLANConfig requires vlanID; refusing to emit an invalid document. Fix the discovery state or declare the VLAN explicitly via a per-node body overlay." $linkName) }}
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: VLANConfig
+name: {{ $linkName }}
+vlanID: {{ $vlanID }}
+parent: {{ $parentLinkName }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
+{{- end }}
+{{- else }}
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: {{ $linkName }}
+{{- if $addresses }}
+addresses:
+{{- range $addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- if $linkGateway }}
+routes:
+  - gateway: {{ $linkGateway }}
+{{- end }}
+{{- if $link.spec.mtu }}
+mtu: {{ $link.spec.mtu }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
+       has set .Values.vipLink, since the override-path block above
+       has already emitted the document with the operator's chosen
+       link.
+
+       Link selection prefers the link whose discovered addresses
+       contain the floatingIP (talm.discovered.link_name_for_address),
+       so a VIP in a private subnet hosted on a VLAN child lands on
+       that VLAN — not on the IPv4-default-route NIC. The
+       default-gateway link stays as the fallback for topologies
+       where the VIP isn't on any discovered subnet (typical for
+       upstream-routable VIPs that arrive via the default-route
+       link). When neither resolves a link, no Layer2VIPConfig is
+       emitted, matching the prior behaviour. */}}
+{{- if and $fipIsSet (not .Values.vipLink) (eq .MachineType "controlplane") }}
+{{- $vipLink := include "talm.discovered.link_name_for_address" $fipStr }}
+{{- /* Default-gateway fallback must also point at a configurable
+       link — otherwise an unmanaged default-route NIC (Wireguard,
+       a slave NIC of a bond, anything outside the configurable
+       set) would silently win selection and the rendered
+       Layer2VIPConfig would dangle on a link the chart never
+       emits a per-link document for. Mirror the same
+       configurable-link gate link_name_for_address applies inside
+       its own iteration. */ -}}
+{{- if not $vipLink }}
+{{- if has $defaultLinkName $configurableLinks }}
+{{- $vipLink = $defaultLinkName }}
+{{- end }}
+{{- end }}
+{{- if $vipLink }}
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ $fipStr | quote }}
+link: {{ $vipLink }}
+{{- end }}
+{{- end }}
+{{- end }}
