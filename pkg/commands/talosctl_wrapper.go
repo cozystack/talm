@@ -301,13 +301,6 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		wrapCrashdumpCommand(wrappedCmd)
 	}
 
-	// Special handling for dmesg: rewrite the cryptic ParseBool
-	// error from a numeric --tail value into a hint that describes
-	// upstream's actual --tail contract.
-	if baseCmdName == dmesgCmdName {
-		wrapDmesgCommand(wrappedCmd)
-	}
-
 	// Special handling for the interactive-only commands
 	// (dashboard, edit): refuse non-tty stdin up front so the
 	// operator gets a clear hint instead of a no-output failure.
@@ -344,6 +337,7 @@ func init() {
 		"config":        true, // talm manages config differently
 		"patch":         true, // not needed in talm
 		"upgrade-k8s":   true, // not needed in talm
+		dmesgCmdName:    true, // retired upstream (siderolabs/talos#13333); talm registers a hidden migration stub pointing at `talm logs kernel --tail=N`
 		talosconfigName: true, // talm has its own talosconfig command
 	}
 

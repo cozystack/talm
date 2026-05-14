@@ -15,54 +15,59 @@
 package commands
 
 import (
-	"strings"
-
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
 )
 
-// dmesgCmdName labels the wrapped dmesg subcommand in the dispatch.
-// Hoisted so a future rename touches one site.
+// dmesgCmdName labels the talm stub that replaces the wrapped
+// upstream dmesg command. Hoisted so a future rename touches one
+// site.
 const dmesgCmdName = "dmesg"
 
-// wrapDmesgCommand installs a FlagErrorFunc that rewrites the
-// cryptic ParseBool error from a numeric --tail value into an
-// operator-friendly hint.
+// dmesgCmd is a hidden migration stub for the retired `talm dmesg`
+// surface.
 //
-// Upstream talosctl registers --tail as a BoolVarP toggling
-// tail-mode for --follow (`Dmesg(ctx, follow, tail bool)` on the
-// wire). Operators' first instinct is `tail(1)`-style line count;
-// `talm dmesg --tail=3` then surfaces
-// `strconv.ParseBool: parsing "3": invalid syntax` with no hint
-// at the actual contract.
+// Upstream Talos is retiring the `dmesg` command in favor of
+// `talm logs kernel`, which supports `--tail=N` as a line count
+// directly (the semantics operators reach for; the original
+// `dmesg --tail` was a boolean toggle for tail-mode under
+// --follow, a frequent source of `strconv.ParseBool` confusion).
+// The upstream maintainer's response on siderolabs/talos#13333
+// pointed at `logs kernel` as the replacement.
 //
-// The original ParseBool error is wrapped (not replaced) so it
-// stays reachable via errors.Unwrap and verbose fmt.Sprintf("%+v",
-// err) rendering — debugging the underlying pflag failure remains
-// possible while the operator-facing top line describes what --tail
-// actually does and what to do instead.
-func wrapDmesgCommand(wrappedCmd *cobra.Command) {
-	wrappedCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
-		// Substring detection on pflag's error format. Two tokens
-		// — `--tail` plus `ParseBool` — together are specific
-		// enough to avoid false positives (pflag only emits
-		// ParseBool errors for bool flags). Matching on `--tail`
-		// without surrounding quotes is durable to pflag's
-		// rendering difference between shorthand-present and
-		// shorthand-absent flags: today's `BoolVarP(..., "tail",
-		// "", ...)` emits `"--tail"`, but a future upstream that
-		// adds a shorthand would emit `-T, --tail` and would
-		// otherwise silently bypass the cushion. pflag does not
-		// export a typed error for invalid-argument failures, so
-		// substring is the only available detection path.
-		msg := err.Error()
-		if strings.Contains(msg, "--tail") && strings.Contains(msg, "ParseBool") {
-			return errors.WithHint(
-				errors.Wrap(err, "talm dmesg --tail is a boolean toggle (tail-mode for --follow), not a line count"),
-				"for the last N lines, pipe to tail(1): `talm dmesg --nodes <node> | tail -n N`; to stream only new messages, use `--follow --tail`",
-			)
-		}
+// Removing the command proactively (rather than waiting for
+// upstream's removal) means operators with scripts that call
+// `talm dmesg ...` get an immediate, actionable migration hint
+// instead of a silently-deprecated command that may disappear
+// on the next Talos bump. The stub is hidden from `talm --help`
+// so the command does not surface to new operators.
+// DisableFlagParsing lets operator-supplied flags pass through
+// to RunE without pflag erroring first — the migration hint
+// runs regardless of what arguments accompanied the call.
+//
+// Side effect of DisableFlagParsing: cobra does NOT intercept
+// `--help` either — `talm dmesg --help` reaches RunE and
+// surfaces the same migration hint instead of cobra's help
+// renderer. Intentional: every invocation of the retired
+// command should reach the same nudge. A future maintainer
+// who flips DisableFlagParsing to false would silently
+// re-introduce the original pflag failure shape on `--tail=N`
+// for any operator who didn't migrate yet.
+//
+//nolint:gochecknoglobals // cobra command registration requires a package-level value
+var dmesgCmd = &cobra.Command{
+	Use:                dmesgCmdName,
+	Short:              "[removed] use `talm logs kernel` instead",
+	Hidden:             true,
+	DisableFlagParsing: true,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		return errors.WithHint(
+			errors.New("talm dmesg has been removed"),
+			"use `talm logs kernel --tail=N --nodes <node>` for the last N kernel-log lines, or `talm logs kernel --follow --nodes <node>` to stream new messages. Upstream Talos is retiring the `dmesg` command (see siderolabs/talos#13333) and talm drops it ahead of time to avoid a silent break on the next Talos bump.",
+		)
+	},
+}
 
-		return err
-	})
+func init() {
+	addCommand(dmesgCmd)
 }

@@ -545,7 +545,7 @@ Regression anchor: when EITHER of these commands is run the wrapper MUST NOT sil
 
 Expected: only STATE wiped, EPHEMERAL kept (containerd image cache survives the reset), node returns. The operator's explicit narrower list must be honored byte-for-byte; the wrapper MUST NOT silently expand to `STATE,EPHEMERAL`.
 
-Regression anchor: after the node returns, `talm dmesg --nodes $NODE | grep -i ephemeral` should show no fresh-format markers for the EPHEMERAL partition. If the wrapper silently expanded the operator's list, EPHEMERAL would have been wiped too.
+Regression anchor: after the node returns, `talm logs kernel --nodes $NODE | grep -i ephemeral` should show no fresh-format markers for the EPHEMERAL partition. If the wrapper silently expanded the operator's list, EPHEMERAL would have been wiped too.
 
 ### H2c. Reset with `--graceful=false` (ungraceful, preserves safe default)
 
@@ -604,14 +604,25 @@ NODE=$NODE
 for cmd in version "get machineconfig -o yaml" containers processes \
            "health --server=false" "interfaces" "disks" "etcd members" \
            "list /system/state" memory mounts stats service cgroups \
-           "dmesg --tail" netstat routes "usage /var/log" \
+           "logs kernel --tail 3" netstat routes "usage /var/log" \
            "logs kubelet" "logs etcd" "events --tail=3" \
            "image list" "etcd status" "etcd alarm list"; do
   timeout 8 /tmp/talm-safety $cmd --nodes $NODE --endpoints $NODE 2>&1 | head -1
 done
 ```
 
-Expected: every command prints either a header row (table) or an error from the node side. None should hang past the timeout.
+Expected: every command prints either a header row (table) or an error from the node side. None should hang past the timeout. The `logs kernel` entry replaces the retired `dmesg` command; `logs kernel --tail=N` is the supported way to read the last N kernel-log lines.
+
+### I0-1a. `talm dmesg` is retired — migration stub surfaces a hint
+
+```bash
+/tmp/talm-safety dmesg --tail 3
+/tmp/talm-safety dmesg --nodes $NODE
+```
+
+Expected: both invocations exit non-zero with `talm dmesg has been removed` and a hint pointing at `talm logs kernel --tail=N --nodes <node>`. The stub is hidden from `talm --help` (operators don't see a retired command as available). The migration hint surfaces regardless of cwd (the stub skips Chart.yaml loading, mirroring `init` and `completion`).
+
+Regression anchor: a regression that re-enables the upstream `dmesg` wrap (removing it from `excludedCommands` in `pkg/commands/talosctl_wrapper.go`) would either collide with the talm-owned stub at cobra registration, or — if the stub is also dropped — leave operators with the original cryptic `strconv.ParseBool` failure on `--tail=N`. Both shapes are documented elsewhere; this anchor pins the proactive removal + migration-hint contract.
 
 ### I0-2. Concurrent dry-run apply
 
