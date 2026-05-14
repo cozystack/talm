@@ -104,6 +104,20 @@ func LoadKey(rootDir string) (*age.X25519Identity, error) {
 
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Talm.key absence is a real operational scenario
+			// (laptop swap, lost backup, fresh checkout) and the
+			// raw "open ...: no such file" surfaces as if it's an
+			// internal bug. Attach the recovery hint naming both
+			// paths the operator can take so the error reads as
+			// "what to do next", not "talm is broken".
+			//nolint:wrapcheck // cockroachdb/errors.WithHint is the project's wrapping/hinting idiom at boundaries.
+			return nil, errors.WithHint(
+				errors.Wrap(err, "read key file"),
+				"talm.key is required to decrypt secrets.encrypted.yaml. Restore your backed-up key, or re-run `talm init` to regenerate (this writes new secrets — the old secrets.encrypted.yaml will not be decryptable without the original key).",
+			)
+		}
+
 		return nil, errors.Wrap(err, "read key file")
 	}
 

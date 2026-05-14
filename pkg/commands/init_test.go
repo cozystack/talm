@@ -598,6 +598,242 @@ func TestResolveTalosconfigEndpoints_MultipleEndpoints(t *testing.T) {
 	}
 }
 
+// TestResolveClusterEndpoint pins the precedence rules for the
+// cluster-control-plane URL that lands in values.yaml::endpoint:
+//
+//  1. --cluster-endpoint (explicit, takes precedence)
+//  2. --endpoints with exactly one entry (auto-derive
+//     https://<that>:6443 — the unambiguous single-target case)
+//  3. empty (operator must fill values.yaml manually)
+//
+// Multi-endpoint --endpoints MUST NOT auto-populate: in
+// multi-node-control-plane topologies the right value is a VIP /
+// LB / DNS RR, NOT one node picked arbitrarily; picking would
+// silently couple cluster availability to that node.
+func TestResolveClusterEndpoint(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name            string
+		clusterEndpoint string
+		endpoints       []string
+		want            string
+		wantErrContains string
+	}{
+		{
+			name:            "cluster-endpoint flag wins over single-endpoint derive",
+			clusterEndpoint: "https://vip.example.test:6443",
+			endpoints:       []string{"192.0.2.10"},
+			want:            "https://vip.example.test:6443",
+		},
+		{
+			name:            "cluster-endpoint alone (no --endpoints)",
+			clusterEndpoint: "https://vip.example.test:6443",
+			endpoints:       nil,
+			want:            "https://vip.example.test:6443",
+		},
+		{
+			name:            "single endpoint auto-derives default-port URL",
+			clusterEndpoint: "",
+			endpoints:       []string{"192.0.2.10"},
+			want:            "https://192.0.2.10:6443",
+		},
+		{
+			name:            "multi endpoint does NOT auto-derive (picking one is wrong)",
+			clusterEndpoint: "",
+			endpoints:       []string{"192.0.2.10", "192.0.2.11", "192.0.2.12"},
+			want:            "",
+		},
+		{
+			name:            "no sources returns empty",
+			clusterEndpoint: "",
+			endpoints:       nil,
+			want:            "",
+		},
+		{
+			name:            "malformed cluster-endpoint rejected (no scheme)",
+			clusterEndpoint: "vip.example.test:6443",
+			endpoints:       nil,
+			wantErrContains: "cluster-endpoint",
+		},
+		{
+			name:            "malformed cluster-endpoint rejected (no host)",
+			clusterEndpoint: "https://",
+			endpoints:       nil,
+			wantErrContains: "cluster-endpoint",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := resolveClusterEndpoint(tc.clusterEndpoint, tc.endpoints)
+			if tc.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q; got nil and value %q", tc.wantErrContains, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrContains) {
+					t.Errorf("error must mention %q; got: %v", tc.wantErrContains, err)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestApplyEndpointOverride pins the values.yaml rewrite contract
+// for the top-level `endpoint:` field: empty override leaves the
+// file unchanged (single-source-of-truth: leave it for the
+// operator), non-empty override replaces only that line and
+// preserves surrounding content (other top-level keys, comments,
+// trailing newlines).
+func TestApplyEndpointOverride(t *testing.T) {
+	t.Parallel()
+
+	original := []byte(`# Cluster endpoint.
+endpoint: ""
+
+floatingIP: ""
+vipLink: ""
+
+image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
+podSubnets:
+- 10.244.0.0/16
+`)
+
+	t.Run("empty override returns input unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		got := applyEndpointOverride(original, "")
+		if !bytes.Equal(got, original) {
+			t.Errorf("empty override mutated the input:\n%s", got)
+		}
+	})
+
+	t.Run("non-empty override replaces only the endpoint line", func(t *testing.T) {
+		t.Parallel()
+
+		got := applyEndpointOverride(original, "https://192.0.2.10:6443")
+		want := `endpoint: "https://192.0.2.10:6443"`
+		if !bytes.Contains(got, []byte(want)) {
+			t.Errorf("expected %q in output, got:\n%s", want, got)
+		}
+
+		for _, marker := range []string{
+			"# Cluster endpoint.",
+			"floatingIP: \"\"",
+			"vipLink: \"\"",
+			`image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"`,
+			"podSubnets:",
+			"- 10.244.0.0/16",
+		} {
+			if !bytes.Contains(got, []byte(marker)) {
+				t.Errorf("override stripped surrounding content %q:\n%s", marker, got)
+			}
+		}
+	})
+
+	t.Run("values without endpoint field returns input unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		// Unlike --image, a non-existent endpoint: line is not an
+		// error — the auto-derive path is implicit and shouldn't
+		// fail the init flow. Operator-explicit
+		// --cluster-endpoint on a preset without the field is
+		// validated up-front in resolveClusterEndpoint's caller
+		// (init RunE), not here.
+		noEndpoint := []byte("image: foo\n")
+		got := applyEndpointOverride(noEndpoint, "https://192.0.2.10:6443")
+		if !bytes.Equal(got, noEndpoint) {
+			t.Errorf("override on values without endpoint: line must be a no-op; got:\n%s", got)
+		}
+	})
+}
+
+// TestPrintClusterEndpointHintIfEmpty pins the heuristic that
+// decides whether to nudge the operator about
+// values.yaml::endpoint. The hint MUST fire only when the field
+// is left explicitly empty and MUST stay silent otherwise (file
+// missing, preset without the field, operator already filled it).
+//
+// Parent is non-parallel: captureStderr swaps os.Stderr globally
+// for the duration of fn, and concurrent subtests would race on
+// the shared fd. The serial body is cheap (six tempdirs +
+// six regex matches).
+func TestPrintClusterEndpointHintIfEmpty(t *testing.T) {
+	const fileMissingSentinel = "<<file-missing>>"
+
+	cases := []struct {
+		name        string
+		fileContent string
+		wantHint    bool
+	}{
+		{
+			name:        "explicit empty endpoint surfaces hint",
+			fileContent: "endpoint: \"\"\nimage: foo\n",
+			wantHint:    true,
+		},
+		{
+			name:        "single-quoted empty endpoint surfaces hint",
+			fileContent: "endpoint: ''\nimage: foo\n",
+			wantHint:    true,
+		},
+		{
+			name:        "bare-colon empty endpoint surfaces hint",
+			fileContent: "endpoint:\nimage: foo\n",
+			wantHint:    true,
+		},
+		{
+			name:        "populated endpoint stays silent",
+			fileContent: "endpoint: \"https://10.0.0.1:6443\"\nimage: foo\n",
+			wantHint:    false,
+		},
+		{
+			name:        "preset without endpoint field stays silent",
+			fileContent: "image: foo\n",
+			wantHint:    false,
+		},
+		{
+			name:        "missing file stays silent (best-effort)",
+			fileContent: fileMissingSentinel,
+			wantHint:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		// captureStderr swaps os.Stderr globally for the duration of
+		// fn — running subtests in parallel would race on the shared
+		// fd. Keep these sequential while the parent still benefits
+		// from t.Parallel relative to other tests in the package.
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, valuesYamlName)
+			if tc.fileContent != fileMissingSentinel {
+				if err := os.WriteFile(path, []byte(tc.fileContent), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got := captureStderr(t, func() {
+				printClusterEndpointHintIfEmpty(path)
+			})
+
+			gotHint := strings.Contains(got, "Next: set values.yaml::endpoint")
+			if gotHint != tc.wantHint {
+				t.Errorf("wantHint=%v gotHint=%v; stderr=%q", tc.wantHint, gotHint, got)
+			}
+		})
+	}
+}
+
 func TestWriteSecretsBundleToFile_StillRefusesOverwrite(t *testing.T) {
 	forceOrig := initCmdFlags.force
 	rootOrig := Config.RootDir
