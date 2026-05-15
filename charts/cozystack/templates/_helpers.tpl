@@ -39,9 +39,31 @@ machine:
         - {{ . }}
         {{- end }}
         {{- end }}
+    {{- /* extraKubeletExtraArgs MUST NOT collide with the preset's
+           built-in extraConfig keys — yaml.v3 (used by Talos config
+           decode and by the upgrade-time body write-back) rejects
+           duplicate map keys, so a silent merge would emit a config
+           that cannot decode. Fail at render with a precise hint
+           naming the offending key; operators wanting a different
+           default fork the preset. */ -}}
+    {{- range $k, $_ := .Values.extraKubeletExtraArgs }}
+      {{- if or (eq $k "cpuManagerPolicy") (eq $k "maxPods") }}
+        {{- fail (printf "values.yaml: extraKubeletExtraArgs.%s collides with the cozystack preset's built-in kubelet.extraConfig — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraKubeletExtraArgs, or fork the chart preset if you need a different default." $k) }}
+      {{- end }}
+    {{- end }}
     extraConfig:
       cpuManagerPolicy: static
       maxPods: 512
+      {{- with .Values.extraKubeletExtraArgs }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  {{- /* extraSysctls MUST NOT collide with the preset's built-in
+         sysctls; same rationale as extraKubeletExtraArgs. */ -}}
+  {{- range $k, $_ := .Values.extraSysctls }}
+    {{- if or (eq $k "vm.nr_hugepages") (eq $k "net.ipv4.neigh.default.gc_thresh1") (eq $k "net.ipv4.neigh.default.gc_thresh2") (eq $k "net.ipv4.neigh.default.gc_thresh3") }}
+      {{- fail (printf "values.yaml: extraSysctls.%s collides with the cozystack preset's built-in machine.sysctls — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraSysctls, or fork the chart preset if you need a different default." $k) }}
+    {{- end }}
+  {{- end }}
   sysctls:
     {{- with $.Values.nr_hugepages }}
     vm.nr_hugepages: {{ . | quote }}
@@ -49,6 +71,9 @@ machine:
     net.ipv4.neigh.default.gc_thresh1: "4096"
     net.ipv4.neigh.default.gc_thresh2: "8192"
     net.ipv4.neigh.default.gc_thresh3: "16384"
+    {{- with .Values.extraSysctls }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   kernel:
     modules:
     - name: openvswitch
@@ -59,6 +84,9 @@ machine:
     - name: spl
     - name: vfio_pci
     - name: vfio_iommu_type1
+    {{- with .Values.extraKernelModules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   certSANs:
   - 127.0.0.1
   {{- with .Values.certSANs }}
@@ -84,6 +112,9 @@ machine:
       devices {
          global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|" ]
       }
+  {{- with .Values.extraMachineFiles }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
   install:
     {{- with .Values.image }}
     image: {{ . }}

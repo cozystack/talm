@@ -28,7 +28,10 @@
 package engine
 
 import (
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // === Shared contracts (both charts, both schemas, both machine types) ===
@@ -215,6 +218,389 @@ func TestContract_Machine_KernelModules_Cozystack(t *testing.T) {
 			assertContains(t, out, "- name: vfio_iommu_type1")
 		})
 	}
+}
+
+// === Cozystack extension points (extraKernelModules / extraSysctls / extraKubeletExtraArgs / extraMachineFiles) ===
+//
+// The cozystack preset ships hard-coded defaults for kernel modules,
+// sysctls, kubelet extraConfig, and machine.files. Operators wanting
+// to extend any of these without forking the preset set the matching
+// `extra*` values key; the chart appends operator entries to the
+// built-in set.
+//
+// The built-in set is load-bearing for cozystack's storage /
+// networking / runtime stack and is NEVER overridable by an
+// extension entry:
+//
+//   - List-shaped `extra*` values (extraKernelModules,
+//     extraMachineFiles) append unconditionally; duplicates by
+//     identifying field are tolerated at apply time by Talos
+//     (modules dedupe on load; collision-by-path on machine.files
+//     is the operator's responsibility).
+//   - Map-shaped `extra*` values (extraKubeletExtraArgs, extraSysctls)
+//     are guarded at template time by chart-level `fail`: any operator
+//     key that names a built-in (e.g. extraSysctls.gc_thresh1) blocks
+//     the render with a hint pointing at the offending key. yaml.v3
+//     (used by Talos config decode and by the upgrade-time body
+//     writeback in this same branch) rejects duplicate map keys on
+//     decode, so a silent emit-both merge would produce a config that
+//     cannot round-trip. The escape hatch is to fork the preset.
+//
+// The contract tests below pin both shapes: `_AppendValues` /
+// `_MergeInto*` round-trip-decode the rendered output through yaml.v3
+// (substring asserts on the bytes would silently pass for invalid
+// duplicate-key output), and `_RejectsCollisionWithBuiltin` pins the
+// failure mode for every built-in key.
+
+// Contract: values.extraKernelModules APPENDS to the cozystack preset's
+// built-in module list — it never overrides. The built-in six
+// (openvswitch, drbd, zfs, spl, vfio_pci, vfio_iommu_type1) are
+// load-bearing for cozystack's storage/networking stack, so an
+// operator who supplies extra modules must NOT silently drop any of
+// the built-ins.
+func TestContract_Machine_ExtraKernelModules_Cozystack_AppendValues(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraKernelModules": []any{
+			map[string]any{"name": "nf_conntrack"},
+			map[string]any{"name": "br_netfilter"},
+		},
+	})
+	// Built-in six still present.
+	assertContains(t, out, "- name: openvswitch")
+	assertContains(t, out, "- name: drbd")
+	assertContains(t, out, "- usermode_helper=disabled")
+	assertContains(t, out, "- name: zfs")
+	assertContains(t, out, "- name: spl")
+	assertContains(t, out, "- name: vfio_pci")
+	assertContains(t, out, "- name: vfio_iommu_type1")
+	// Operator-supplied modules appended.
+	assertContains(t, out, "- name: nf_conntrack")
+	assertContains(t, out, "- name: br_netfilter")
+}
+
+// Contract: an empty values.extraKernelModules (or its default `[]`)
+// leaves the cozystack module list IDENTICAL to the built-in six — no
+// `[]` suffix, no empty-list artifact, no trailing module lines. The
+// `{{- with .Values.extraKernelModules }}` guard relies on Helm's
+// emptiness check; a regression that swaps `with` for a bare
+// `toYaml .Values.extraKernelModules` would emit `[]` after
+// vfio_iommu_type1 and either fail YAML parse or pin the wrong list
+// shape. Boundary case between the unset path
+// (TestContract_Machine_KernelModules_Cozystack) and the set path
+// (_AppendValues).
+func TestContract_Machine_ExtraKernelModules_Cozystack_EmptyOmitsAppend(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraKernelModules": []any{},
+	})
+	// Built-in six present.
+	assertContains(t, out, "- name: vfio_iommu_type1")
+	// No empty-list artifact after the built-in tail.
+	assertNotContains(t, out, "vfio_iommu_type1\n    []")
+	assertNotContains(t, out, "vfio_iommu_type1\n[]")
+	// Exactly six `- name:` lines inside the modules block: parse the
+	// block bounds and count. Anchors `kernel:` / `certSANs:` are the
+	// adjacent siblings under machine.* in the cozystack chart.
+	kernelIdx := strings.Index(out, "  kernel:")
+	if kernelIdx < 0 {
+		t.Fatalf("kernel: block missing from rendered output")
+	}
+	tail := out[kernelIdx:]
+	endIdx := strings.Index(tail, "  certSANs:")
+	if endIdx < 0 {
+		t.Fatalf("certSANs: sibling missing — block bounds undetectable")
+	}
+	block := tail[:endIdx]
+	gotCount := strings.Count(block, "- name:")
+	if gotCount != 6 {
+		t.Errorf("expected 6 modules in kernel.modules block with empty extraKernelModules, got %d\nblock:\n%s", gotCount, block)
+	}
+}
+
+// Contract: values.extraKernelModules entries pass through verbatim,
+// including the `parameters:` list. A module that needs a module-param
+// (the way the built-in drbd carries `usermode_helper=disabled`) must
+// emit it identically when supplied through values, otherwise the
+// values-driven path silently differs from the hard-coded one.
+func TestContract_Machine_ExtraKernelModules_Cozystack_PreservesParameters(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraKernelModules": []any{
+			map[string]any{
+				"name":       "nf_conntrack",
+				"parameters": []any{"hashsize=131072"},
+			},
+		},
+	})
+	assertContains(t, out, "- name: nf_conntrack")
+	assertContains(t, out, "- hashsize=131072")
+}
+
+// Contract: values.extraKubeletExtraArgs entries merge into the
+// kubelet.extraConfig map alongside the cozystack preset's
+// `cpuManagerPolicy: static` and `maxPods: 512`. The merge is
+// validated by round-trip through yaml.v3 — Talos's config decoder
+// uses yaml.v3 which REJECTS duplicate map keys, so the rendered
+// output must contain each key exactly once. Operator keys must be
+// disjoint from the built-in set (the collision case is rejected at
+// render time — see _RejectsCollisionWithBuiltin).
+func TestContract_Machine_ExtraKubeletExtraArgs_Cozystack_MergeIntoExtraConfig(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraKubeletExtraArgs": map[string]any{
+			"feature-gates": "NodeSwap=true",
+		},
+	})
+	extraConfig := decodeKubeletExtraConfig(t, out)
+	if got, want := extraConfig["cpuManagerPolicy"], "static"; got != want {
+		t.Errorf("cpuManagerPolicy: got %v, want %v", got, want)
+	}
+	// yaml.v3 decodes the bare numeric 512 as int; the test pins the
+	// numeric type as well as the value so a regression that quoted
+	// the built-in would also surface.
+	if got, want := extraConfig["maxPods"], 512; got != want {
+		t.Errorf("maxPods: got %v (%T), want %v (int)", got, got, want)
+	}
+	if got, want := extraConfig["feature-gates"], "NodeSwap=true"; got != want {
+		t.Errorf("feature-gates: got %v, want %v", got, want)
+	}
+}
+
+// Contract: an operator key in extraKubeletExtraArgs that collides
+// with a built-in extraConfig key (cpuManagerPolicy, maxPods) MUST
+// fail at render time with a precise hint. yaml.v3 rejects duplicate
+// map keys on decode, so a silent merge would produce a Talos config
+// that cannot round-trip. Fork-the-preset is the documented escape
+// hatch; this test pins the rejection so the fork path is the only
+// way an operator can change a built-in default.
+func TestContract_Machine_ExtraKubeletExtraArgs_Cozystack_RejectsCollisionWithBuiltin(t *testing.T) {
+	cases := []string{"cpuManagerPolicy", "maxPods"}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"extraKubeletExtraArgs": map[string]any{
+					key: "operator-value",
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected render error for collision on key %q, got nil", key)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, key) {
+				t.Errorf("error message must name the offending key %q; got: %v", key, err)
+			}
+			if !strings.Contains(msg, "extraKubeletExtraArgs") {
+				t.Errorf("error message must name the offending values key extraKubeletExtraArgs; got: %v", err)
+			}
+		})
+	}
+}
+
+// Contract: values.extraSysctls entries merge into machine.sysctls
+// alongside the cozystack preset's gc_thresh* + vm.nr_hugepages
+// defaults. Round-trip-decoded through yaml.v3 so a regression that
+// emits a duplicate key would fail decode here.
+func TestContract_Machine_ExtraSysctls_Cozystack_MergeIntoSysctls(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraSysctls": map[string]any{
+			"net.core.somaxconn": "65535",
+		},
+	})
+	sysctls := decodeMachineSysctls(t, out)
+	// Talos requires sysctl values be strings; the chart's hardcoded
+	// gc_thresh* entries are explicitly quoted to match. Pin both the
+	// value and the string type so a regression that emits unquoted
+	// integers would surface.
+	for _, k := range []string{
+		"net.ipv4.neigh.default.gc_thresh1",
+		"net.ipv4.neigh.default.gc_thresh2",
+		"net.ipv4.neigh.default.gc_thresh3",
+	} {
+		v, ok := sysctls[k].(string)
+		if !ok {
+			t.Errorf("sysctl %q: expected string, got %T (value %v)", k, sysctls[k], sysctls[k])
+		}
+		if v == "" {
+			t.Errorf("sysctl %q: expected non-empty string value, got empty", k)
+		}
+	}
+	if got, want := sysctls["net.core.somaxconn"], "65535"; got != want {
+		t.Errorf("operator sysctl: got %v, want %v", got, want)
+	}
+}
+
+// Contract: an operator key in extraSysctls that collides with the
+// preset's built-in machine.sysctls keys MUST fail render. Same
+// rationale as extraKubeletExtraArgs.
+func TestContract_Machine_ExtraSysctls_Cozystack_RejectsCollisionWithBuiltin(t *testing.T) {
+	cases := []string{
+		"vm.nr_hugepages",
+		"net.ipv4.neigh.default.gc_thresh1",
+		"net.ipv4.neigh.default.gc_thresh2",
+		"net.ipv4.neigh.default.gc_thresh3",
+	}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"extraSysctls": map[string]any{
+					key: "operator-value",
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected render error for collision on key %q, got nil", key)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, key) {
+				t.Errorf("error message must name the offending key %q; got: %v", key, err)
+			}
+			if !strings.Contains(msg, "extraSysctls") {
+				t.Errorf("error message must name the offending values key extraSysctls; got: %v", err)
+			}
+		})
+	}
+}
+
+// decodeKubeletExtraConfig parses every YAML document in the rendered
+// output and returns the machine.kubelet.extraConfig map from
+// whichever document carries it. Uses yaml.v3 directly (the decoder
+// Talos uses internally) so a duplicate map key in the rendered
+// output fails decoding here — the test surfaces the defect instead
+// of asserting on substring presence over invalid YAML.
+func decodeKubeletExtraConfig(t *testing.T, out string) map[string]any {
+	t.Helper()
+	return decodeMachineSubMap(t, out, "kubelet", "extraConfig")
+}
+
+func decodeMachineSysctls(t *testing.T, out string) map[string]any {
+	t.Helper()
+	return decodeMachineSubMap(t, out, "sysctls")
+}
+
+func decodeMachineSubMap(t *testing.T, out string, path ...string) map[string]any {
+	t.Helper()
+
+	dec := yaml.NewDecoder(strings.NewReader(out))
+	for {
+		var doc map[string]any
+		err := dec.Decode(&doc)
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			t.Fatalf("decoding rendered YAML: %v", err)
+		}
+		machine, ok := doc["machine"].(map[string]any)
+		if !ok {
+			continue
+		}
+		cur := any(machine)
+		for _, p := range path {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				cur = nil
+				break
+			}
+			cur = m[p]
+		}
+		if m, ok := cur.(map[string]any); ok {
+			return m
+		}
+	}
+	t.Fatalf("no document carried machine.%s in rendered output:\n%s", strings.Join(path, "."), out)
+	return nil
+}
+
+// Contract: values.extraMachineFiles entries append to machine.files
+// alongside the cozystack preset's CRI-customization and lvm.conf
+// entries. The built-in two must stay intact.
+func TestContract_Machine_ExtraMachineFiles_Cozystack_AppendsToFiles(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraMachineFiles": []any{
+			map[string]any{
+				"path":    "/etc/example/operator.conf",
+				"op":      "create",
+				"content": "hello=world\n",
+			},
+		},
+	})
+	// Built-in files preserved.
+	assertContains(t, out, "path: /etc/cri/conf.d/20-customization.part")
+	assertContains(t, out, "path: /etc/lvm/lvm.conf")
+	// Operator-supplied entry appended.
+	assertContains(t, out, "path: /etc/example/operator.conf")
+	assertContains(t, out, "hello=world")
+}
+
+// === Generic extension points: emit-only-when-set ===
+//
+// The generic preset ships no defaults for any of these blocks. Each
+// rendered block appears ONLY when the matching values key is
+// non-empty. Pinning the on-state here so a regression that always
+// emits an empty `modules: []` (etc.) would fail; the off-state stays
+// pinned by TestContract_Machine_NoCozystackOpinionsOnGeneric.
+
+// Contract: generic preset emits machine.kernel.modules ONLY when
+// values.extraKernelModules is non-empty.
+func TestContract_Machine_ExtraKernelModules_Generic_NonEmptyEmitsBlock(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraKernelModules": []any{
+			map[string]any{"name": "nf_conntrack"},
+		},
+	})
+	assertContains(t, out, "kernel:")
+	assertContains(t, out, "modules:")
+	assertContains(t, out, "- name: nf_conntrack")
+}
+
+// Contract: generic preset emits kubelet.extraConfig ONLY when
+// values.extraKubeletExtraArgs is non-empty (default is `{}`, so the
+// preset renders kubelet with only nodeIP.validSubnets).
+func TestContract_Machine_ExtraKubeletExtraArgs_Generic_NonEmptyEmitsBlock(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraKubeletExtraArgs": map[string]any{
+			"feature-gates": "NodeSwap=true",
+		},
+	})
+	assertContains(t, out, "extraConfig:")
+	assertContains(t, out, "feature-gates: NodeSwap=true")
+}
+
+// Contract: generic preset emits machine.sysctls ONLY when
+// values.extraSysctls is non-empty.
+func TestContract_Machine_ExtraSysctls_Generic_NonEmptyEmitsBlock(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraSysctls": map[string]any{
+			"net.core.somaxconn": "65535",
+		},
+	})
+	assertContains(t, out, "sysctls:")
+	assertContains(t, out, "net.core.somaxconn:")
+	assertContains(t, out, `"65535"`)
+}
+
+// Contract: generic preset emits machine.files ONLY when
+// values.extraMachineFiles is non-empty.
+func TestContract_Machine_ExtraMachineFiles_Generic_NonEmptyEmitsBlock(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraMachineFiles": []any{
+			map[string]any{
+				"path":    "/etc/example/operator.conf",
+				"op":      "create",
+				"content": "hello=world\n",
+			},
+		},
+	})
+	assertContains(t, out, "files:")
+	assertContains(t, out, "path: /etc/example/operator.conf")
 }
 
 // Contract: cozystack always prepends 127.0.0.1 to machine.certSANs

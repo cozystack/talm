@@ -246,6 +246,76 @@ Expected: both renders print "OK" — no `address: 169.254.…` lines anywhere i
 
 Regression anchor: a regression that re-introduces the v1.11-only `host`-scope filter would let link-local addresses leak into the legacy `machine.network.interfaces[].addresses` block on a future COSI schema bump that emitted them on the default-gateway-bearing link. Pinned by `TestContract_NetworkLegacy_DefaultAddressesFilterLinkScope` with a `linkScopedAddressOnDefaultGatewayLookup` fixture, but the live render is still useful as a sanity check against real cluster discovery output.
 
+### B7. `extra*` operator extension points (cozystack: append to defaults)
+
+The cozystack preset ships hardcoded defaults for kernel modules, sysctls, kubelet extraConfig, and machine.files. The matching `extra*` values keys let an operator extend each block without forking the chart. Set every key, re-render, and inspect each affected section:
+
+```yaml
+# values.yaml additions:
+extraKernelModules:
+  - name: nf_conntrack
+extraKubeletExtraArgs:
+  feature-gates: "NodeSwap=true"
+extraSysctls:
+  net.core.somaxconn: "65535"
+extraMachineFiles:
+  - path: /etc/example/operator.conf
+    op: create
+    content: |
+      hello = "world"
+```
+
+```bash
+talm template -f nodes/node0.yaml > /tmp/render.yaml
+yq '.machine.kernel.modules' /tmp/render.yaml
+yq '.machine.kubelet.extraConfig' /tmp/render.yaml
+yq '.machine.sysctls' /tmp/render.yaml
+yq '.machine.files[].path' /tmp/render.yaml
+```
+
+Expected:
+
+- `.machine.kernel.modules` lists the built-in six (`openvswitch`, `drbd` with `usermode_helper=disabled`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
+- `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
+- `.machine.sysctls` carries the built-in `gc_thresh1/2/3` and `vm.nr_hugepages` (when set) AND `net.core.somaxconn`. Same rejection-on-collision rule.
+- `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
+
+Verify the rejection path explicitly. Set an operator key that collides with a built-in (e.g. `extraSysctls: { "net.ipv4.neigh.default.gc_thresh1": "9000" }`) and re-render:
+
+```bash
+talm template -f nodes/node0.yaml 2>&1 | grep -E 'extraSysctls\.net\.ipv4\.neigh\.default\.gc_thresh1 collides'
+```
+
+Expected: render fails with `Error: values.yaml: extraSysctls.net.ipv4.neigh.default.gc_thresh1 collides with the cozystack preset's built-in machine.sysctls — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraSysctls, or fork the chart preset if you need a different default.` Same shape for `extraKubeletExtraArgs.maxPods` etc. The "fork the preset" escape hatch is the only supported path to change a built-in default.
+
+Regression anchor: contract tests `TestContract_Machine_Extra{KernelModules,KubeletExtraArgs,Sysctls,MachineFiles}_Cozystack_*` pin append / merge semantics for each section. The `_RejectsCollisionWithBuiltin` tests pin the failure mode for every built-in key. A regression that swaps the chart-level `fail` for a silent `toYaml | nindent` would render duplicate map keys; the matching `_MergeInto*` test round-trip-decodes through yaml.v3 (which refuses duplicates), and the `_RejectsCollisionWithBuiltin` cases would also fail.
+
+### B8. `extra*` operator extension points (generic: emit-only-when-set)
+
+The generic preset ships no defaults for the same four blocks. Each `machine.*` block appears in the render ONLY when its `extra*` values key is non-empty.
+
+With all `extra*` keys at their empty defaults:
+
+```bash
+talm template -f nodes/node0.yaml > /tmp/render.yaml
+for k in kernel sysctls files; do
+  if [ "$(yq ".machine.$k" /tmp/render.yaml)" = "null" ]; then
+    echo "OK: no $k block"
+  else
+    echo "FAIL: $k block leaked into default generic render"
+  fi
+done
+if [ "$(yq '.machine.kubelet.extraConfig' /tmp/render.yaml)" = "null" ]; then
+  echo "OK: no extraConfig"
+else
+  echo "FAIL: extraConfig leaked"
+fi
+```
+
+Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`, `extraConfig: {}`) shows up as a non-`null` value and trips the FAIL branch.
+
+Regression anchor: contract tests `TestContract_Machine_Extra*_Generic_NonEmptyEmitsBlock` pin the on-state for each block; `TestContract_Machine_NoCozystackOpinionsOnGeneric` pins the off-state at default values. A regression that emits an empty `modules: []` / `sysctls: {}` / `files: []` block in the default render would fail the latter.
+
 ## C. Apply (auth path)
 
 This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.
@@ -376,6 +446,34 @@ Regression anchor: the "no nodes" check fires AFTER the talosconfig context fall
 Inspect any apply progress line from C1, C3, C6a, C6c. Expect `nodes=[n1,n2,n3]` and `endpoints=[e1,e2]` — comma-joined, bracket-framed, no `[n1 n2 n3]` Go slice format artifact.
 
 Regression anchor: the format uses `strings.Join(slice, ",")` with surrounding brackets in the format string; `%s` or `%v` directly on a `[]string` produces the space-separated `[n1 n2 n3]` artifact and is a regression. Verify with a multi-node modeline (`# talm: nodes=["1.2.3.4","5.6.7.8"], ...`) → progress line shows `nodes=[1.2.3.4,5.6.7.8]`.
+
+### C6f. Multi-IP modeline parses regardless of whitespace inside the JSON array
+
+```bash
+# Anchor with hand-written multi-IP modeline (note spaces after commas):
+cat > nodes/multi.yaml <<'EOF'
+# talm: nodes=["1.2.3.4", "5.6.7.8"], endpoints=["1.2.3.4", "5.6.7.8"], templates=["templates/controlplane.yaml"]
+machine: {}
+EOF
+talm apply --dry-run -f nodes/multi.yaml
+
+# Side-patch slot that accidentally carries a modeline (rejection path):
+cat > /tmp/side-modelined.yaml <<'EOF'
+# talm: nodes=["1.2.3.4", "5.6.7.8"], endpoints=["1.2.3.4", "5.6.7.8"]
+machine:
+  kernel:
+    modules:
+    - name: dm_thin_pool
+EOF
+talm apply --dry-run -f nodes/node0.yaml -f /tmp/side-modelined.yaml
+```
+
+Expected:
+
+- First invocation: progress line includes `nodes=[1.2.3.4,5.6.7.8]` (two nodes, parsed from the multi-element array). The whitespace after each comma inside `nodes=[…]` and `endpoints=[…]` is tolerated.
+- Second invocation: rejection error `side-patch /tmp/side-modelined.yaml carries its own modeline; the apply chain treats only the first -f file as the anchor and stacks subsequent files as side-patches` with the per-file-loop / strip-modeline hint. The error is the high-level "side-patches must not have modelines" gate from `rejectModelinedSidePatches`, NOT a low-level `error parsing JSON array for key nodes` — the parser successfully reads the multi-IP form and the rejection happens on the (correctly identified) modelined-side-patch shape.
+
+Regression anchor: the modeline parser splits on commas at JSON-array depth 0 only. A regression that re-introduces a literal comma-plus-space split would silently truncate multi-element arrays — the anchor case above would fail with `unexpected end of JSON input` on `["1.2.3.4"` (array cut at the first comma). Verify the depth tracking by adding a comma inside a string literal: `# talm: nodes=["a,b"]` must parse to `Nodes=["a,b"]`, not split into two tokens.
 
 ### C7. Phase 1 walker rejects malformed net-addr fields before the RPC
 
@@ -700,6 +798,63 @@ talm upgrade --post-upgrade-reconcile-window=0s \
 Expected for the help line: flag listed with `default 1m30s`. Expected for the 180s run: stderr emits `post-upgrade verify: waiting 3m0s for the node to finish booting...` — Go's `time.Duration.String()` renders `180 * time.Second` as `3m0s` deterministically, not `180s`. Expected for the `0s` rejection: error with a hint mentioning "positive duration".
 
 Regression anchor: the version-mismatch hint emitted on a Phase 2C blocker MUST NOT contain the literal string `90s` — operators passing a custom window would see contradictory advice. The hint should reference "the configured reconcile window (`--post-upgrade-reconcile-window`)" instead.
+
+### E4. Post-upgrade body sync: install.image patched on success
+
+Substitute `<TARGET_TAG>` below with the Talos installer version you want the cluster to land on (e.g. `v1.13.0`). The cozystack v1.12+ render emits a multi-document body (machine + cluster + RegistryMirrorConfig + LinkConfig + Layer2VIPConfig + VLANConfig separated by `---`); record the document count before the upgrade so it can be re-asserted afterwards.
+
+```bash
+# Bump the cluster-wide installer in values.yaml WITHOUT re-running `talm template`:
+sed -i.bak 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:<TARGET_TAG>"|' values.yaml
+grep '^image:' values.yaml
+
+# Snapshot the body shape so the post-upgrade diff can pin both the
+# image change AND the multi-doc preservation.
+cp nodes/node0.yaml /tmp/node0.before.yaml
+docs_before=$(grep -c '^---$' nodes/node0.yaml)
+echo "documents before upgrade: $((docs_before + 1))"
+
+# Body still pins the previous image — it was templated earlier.
+yq '.machine.install.image' nodes/node0.yaml
+
+# Run the upgrade. Image is resolved from values.yaml (--image unset).
+talm upgrade -f nodes/node0.yaml
+```
+
+Expected, in order:
+
+- stderr: `Using image from values.yaml: ghcr.io/cozystack/cozystack/talos:v1.13.0`
+- talosctl upgrade event stream runs through `post check passed`.
+- stderr: `post-upgrade verify: waiting 1m30s for the node to finish booting...` then a success line confirming the running version matches the target.
+- stderr: `Synced machine.install.image in nodes/node0.yaml to ghcr.io/cozystack/cozystack/talos:<TARGET_TAG>` — emitted ONLY after the verify line, never before.
+- `nodes/node0.yaml` on disk: `machine.install.image` now equals the target. The `# talm: ...` modeline, the autogen banner, and every other key under `machine.*` are byte-identical to the pre-upgrade file. `git diff nodes/node0.yaml` shows a single-line image change.
+- Multi-doc preservation: `grep -c '^---$' nodes/node0.yaml` returns the SAME count as `$docs_before`. `diff /tmp/node0.before.yaml nodes/node0.yaml` shows only the `image:` line as differing — no document is removed, no `---` separator is dropped, no RegistryMirrorConfig / LinkConfig / Layer2VIPConfig / VLANConfig is silently erased. A regression that used `yaml.Unmarshal` instead of a streaming decoder would silently truncate every non-first document, which this check catches.
+
+Drift check (the bug this scenario closes):
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml
+```
+
+Expected: Phase 2A drift preview shows zero `machine.install.image` mutation. A regression that drops the write-back step would re-render install.image from the new values.yaml, then merge the stale body image on top, and the drift preview would surface `~ machine.install.image: <new> -> <old>` — exactly the silent-revert footgun.
+
+Failure-path coverage (run only if you have a way to force auto-rollback, e.g. cross-vendor image):
+
+```bash
+talm upgrade --image ghcr.io/siderolabs/installer:v1.13.0 -f nodes/node0.yaml
+```
+
+Expected: Phase 2C version verify FAILS (running version is still the pre-upgrade one because Talos auto-rolled back). The "Synced machine.install.image" line does NOT appear; `nodes/node0.yaml` is byte-identical to its pre-upgrade state. The body must reflect what the node ACTUALLY runs, which is the pre-upgrade image.
+
+Skip-verify coverage:
+
+```bash
+talm upgrade --skip-post-upgrade-verify -f nodes/node0.yaml
+```
+
+Expected: stderr emits the "Synced machine.install.image" line immediately after the talosctl RPC returns success — the operator opted out of verify, so the patch fires unconditionally on RPC success. Document the trade-off: skipping verify trades safety (no auto-rollback detection) for body-sync; operators must inspect the node's running version themselves.
+
+Regression anchor: contract tests `TestContract_WriteBackInstallImage_*` pin the on-disk shape of the patch (scalar swap, idempotency, silent-skip on orphan files, structural errors, file-list fan-out). A regression that fires the write-back BEFORE verify (or instead of verify) would silently pin the body to an image the node never actually ran — the failure-path scenario above would catch it. Cross-reference: `pkg/commands/upgrade_image_writeback.go`.
 
 ## F. CA rotation
 

@@ -34,9 +34,26 @@ machine:
         - {{ . }}
         {{- end }}
         {{- end }}
+    {{- with .Values.extraKubeletExtraArgs }}
+    extraConfig:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   {{- with .Values.certSANs }}
   certSANs:
   {{- toYaml . | nindent 2 }}
+  {{- end }}
+  {{- with .Values.extraSysctls }}
+  sysctls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.extraKernelModules }}
+  kernel:
+    modules:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- with .Values.extraMachineFiles }}
+  files:
+    {{- toYaml . | nindent 2 }}
   {{- end }}
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}

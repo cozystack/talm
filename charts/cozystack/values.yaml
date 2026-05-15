@@ -102,3 +102,62 @@ oidcIssuerUrl: ""
 certSANs: []
 nr_hugepages: 0
 allocateNodeCIDRs: true
+
+# Operator-supplied extension points: each `extra*` key ADDS to a
+# load-bearing default the cozystack preset ships. For every key
+# below: leaving it at the empty default is a no-op; the preset's
+# hardcoded set continues to render unchanged. Keys never override
+# the preset's built-ins — if a map-shaped `extra*` value contains a
+# key that collides with a built-in, the chart fails at render time
+# with a guidance message pointing at the offending key. yaml.v3
+# rejects duplicate map keys on decode anyway, so a silent override
+# would produce a Talos config that cannot round-trip. Operators who
+# need different defaults fork the preset.
+
+# Extra kernel modules to load on every node, appended to the preset's
+# built-in list (openvswitch, drbd, zfs, spl, vfio_pci, vfio_iommu_type1).
+# Lists append unconditionally — duplicates by `name` are tolerated by
+# Talos at load time. Each entry is a Talos kernel module spec; see
+# Talos docs for the full shape. Examples:
+#   extraKernelModules:
+#     - name: nf_conntrack
+#     - name: foo
+#       parameters:
+#         - bar=baz
+extraKernelModules: []
+
+# Extra kubelet args added to the preset's kubelet.extraConfig
+# (cpuManagerPolicy: static, maxPods: 512). Operator keys must be
+# DISJOINT from the built-in set; a collision fails the render with
+# a hint pointing at the offending key. Example:
+#   extraKubeletExtraArgs:
+#     feature-gates: "NodeSwap=true"
+extraKubeletExtraArgs: {}
+
+# Extra kernel sysctls added to machine.sysctls alongside the
+# preset's built-ins (net.ipv4.neigh.default.gc_thresh{1,2,3} and
+# vm.nr_hugepages — the latter is gated by the dedicated `nr_hugepages`
+# values key above; set THAT key, not extraSysctls.vm.nr_hugepages,
+# even when the gate is currently inactive — the collision check
+# treats vm.nr_hugepages as preset-owned regardless of the gate state).
+# Operator keys must be DISJOINT from the built-in set; a collision
+# fails the render. Values must be YAML strings (Talos expects
+# strings even for numeric sysctls). Example:
+#   extraSysctls:
+#     net.core.somaxconn: "65535"
+#     fs.inotify.max_user_watches: "524288"
+extraSysctls: {}
+
+# Extra machine.files entries appended to the preset's built-in
+# files (CRI customization and lvm.conf). Lists append; Talos
+# rejects duplicate `path:` entries at apply time, so operator
+# entries must not name a path the preset already writes. Each
+# entry is a Talos machine.files spec (content / path / permissions
+# / op). Example:
+#   extraMachineFiles:
+#     - path: /etc/cri/conf.d/30-extra.part
+#       op: create
+#       content: |
+#         [debug]
+#           level = "info"
+extraMachineFiles: []
