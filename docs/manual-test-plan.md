@@ -246,6 +246,76 @@ Expected: both renders print "OK" — no `address: 169.254.…` lines anywhere i
 
 Regression anchor: a regression that re-introduces the v1.11-only `host`-scope filter would let link-local addresses leak into the legacy `machine.network.interfaces[].addresses` block on a future COSI schema bump that emitted them on the default-gateway-bearing link. Pinned by `TestContract_NetworkLegacy_DefaultAddressesFilterLinkScope` with a `linkScopedAddressOnDefaultGatewayLookup` fixture, but the live render is still useful as a sanity check against real cluster discovery output.
 
+### B7. `extra*` operator extension points (cozystack: append to defaults)
+
+The cozystack preset ships hardcoded defaults for kernel modules, sysctls, kubelet extraConfig, and machine.files. The matching `extra*` values keys let an operator extend each block without forking the chart. Set every key, re-render, and inspect each affected section:
+
+```yaml
+# values.yaml additions:
+extraKernelModules:
+  - name: nf_conntrack
+extraKubeletExtraArgs:
+  feature-gates: "NodeSwap=true"
+extraSysctls:
+  net.core.somaxconn: "65535"
+extraMachineFiles:
+  - path: /etc/example/operator.conf
+    op: create
+    content: |
+      hello = "world"
+```
+
+```bash
+talm template -f nodes/node0.yaml > /tmp/render.yaml
+yq '.machine.kernel.modules' /tmp/render.yaml
+yq '.machine.kubelet.extraConfig' /tmp/render.yaml
+yq '.machine.sysctls' /tmp/render.yaml
+yq '.machine.files[].path' /tmp/render.yaml
+```
+
+Expected:
+
+- `.machine.kernel.modules` lists the built-in six (`openvswitch`, `drbd` with `usermode_helper=disabled`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
+- `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
+- `.machine.sysctls` carries the built-in `gc_thresh1/2/3` and `vm.nr_hugepages` (when set) AND `net.core.somaxconn`. Same rejection-on-collision rule.
+- `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
+
+Verify the rejection path explicitly. Set an operator key that collides with a built-in (e.g. `extraSysctls: { "net.ipv4.neigh.default.gc_thresh1": "9000" }`) and re-render:
+
+```bash
+talm template -f nodes/node0.yaml 2>&1 | grep -E 'extraSysctls\.net\.ipv4\.neigh\.default\.gc_thresh1 collides'
+```
+
+Expected: render fails with `Error: values.yaml: extraSysctls.net.ipv4.neigh.default.gc_thresh1 collides with the cozystack preset's built-in machine.sysctls — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraSysctls, or fork the chart preset if you need a different default.` Same shape for `extraKubeletExtraArgs.maxPods` etc. The "fork the preset" escape hatch is the only supported path to change a built-in default.
+
+Regression anchor: contract tests `TestContract_Machine_Extra{KernelModules,KubeletExtraArgs,Sysctls,MachineFiles}_Cozystack_*` pin append / merge semantics for each section. The `_RejectsCollisionWithBuiltin` tests pin the failure mode for every built-in key. A regression that swaps the chart-level `fail` for a silent `toYaml | nindent` would render duplicate map keys; the matching `_MergeInto*` test round-trip-decodes through yaml.v3 (which refuses duplicates), and the `_RejectsCollisionWithBuiltin` cases would also fail.
+
+### B8. `extra*` operator extension points (generic: emit-only-when-set)
+
+The generic preset ships no defaults for the same four blocks. Each `machine.*` block appears in the render ONLY when its `extra*` values key is non-empty.
+
+With all `extra*` keys at their empty defaults:
+
+```bash
+talm template -f nodes/node0.yaml > /tmp/render.yaml
+for k in kernel sysctls files; do
+  if [ "$(yq ".machine.$k" /tmp/render.yaml)" = "null" ]; then
+    echo "OK: no $k block"
+  else
+    echo "FAIL: $k block leaked into default generic render"
+  fi
+done
+if [ "$(yq '.machine.kubelet.extraConfig' /tmp/render.yaml)" = "null" ]; then
+  echo "OK: no extraConfig"
+else
+  echo "FAIL: extraConfig leaked"
+fi
+```
+
+Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`, `extraConfig: {}`) shows up as a non-`null` value and trips the FAIL branch.
+
+Regression anchor: contract tests `TestContract_Machine_Extra*_Generic_NonEmptyEmitsBlock` pin the on-state for each block; `TestContract_Machine_NoCozystackOpinionsOnGeneric` pins the off-state at default values. A regression that emits an empty `modules: []` / `sysctls: {}` / `files: []` block in the default render would fail the latter.
+
 ## C. Apply (auth path)
 
 This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.

@@ -87,3 +87,40 @@ serviceSubnets:
 advertisedSubnets: []
 
 certSANs: []
+
+# Operator-supplied extension points. The generic preset ships no
+# defaults for any of the keys below, so each rendered block appears
+# only when the corresponding value is non-empty. Keep parity with the
+# cozystack preset's `extra*` keys so a values file is portable
+# between presets.
+
+# Kernel modules to load on every node. Each entry is a Talos kernel
+# module spec — see Talos docs for the full shape. Example:
+#   extraKernelModules:
+#     - name: nf_conntrack
+#     - name: foo
+#       parameters:
+#         - bar=baz
+extraKernelModules: []
+
+# Kubelet command-line args, rendered as machine.kubelet.extraConfig.
+# Talos expects string values. Example:
+#   extraKubeletExtraArgs:
+#     maxPods: "256"
+#     feature-gates: "NodeSwap=true"
+extraKubeletExtraArgs: {}
+
+# Kernel sysctls, rendered as machine.sysctls. Values must be YAML
+# strings (Talos expects strings even for numeric sysctls). Example:
+#   extraSysctls:
+#     net.core.somaxconn: "65535"
+extraSysctls: {}
+
+# Machine files to drop on every node. Each entry is a Talos
+# machine.files spec (content / path / permissions / op). Example:
+#   extraMachineFiles:
+#     - path: /etc/example.conf
+#       op: create
+#       content: |
+#         hello = "world"
+extraMachineFiles: []
