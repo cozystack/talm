@@ -799,6 +799,63 @@ Expected for the help line: flag listed with `default 1m30s`. Expected for the 1
 
 Regression anchor: the version-mismatch hint emitted on a Phase 2C blocker MUST NOT contain the literal string `90s` — operators passing a custom window would see contradictory advice. The hint should reference "the configured reconcile window (`--post-upgrade-reconcile-window`)" instead.
 
+### E4. Post-upgrade body sync: install.image patched on success
+
+Substitute `<TARGET_TAG>` below with the Talos installer version you want the cluster to land on (e.g. `v1.13.0`). The cozystack v1.12+ render emits a multi-document body (machine + cluster + RegistryMirrorConfig + LinkConfig + Layer2VIPConfig + VLANConfig separated by `---`); record the document count before the upgrade so it can be re-asserted afterwards.
+
+```bash
+# Bump the cluster-wide installer in values.yaml WITHOUT re-running `talm template`:
+sed -i.bak 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:<TARGET_TAG>"|' values.yaml
+grep '^image:' values.yaml
+
+# Snapshot the body shape so the post-upgrade diff can pin both the
+# image change AND the multi-doc preservation.
+cp nodes/node0.yaml /tmp/node0.before.yaml
+docs_before=$(grep -c '^---$' nodes/node0.yaml)
+echo "documents before upgrade: $((docs_before + 1))"
+
+# Body still pins the previous image — it was templated earlier.
+yq '.machine.install.image' nodes/node0.yaml
+
+# Run the upgrade. Image is resolved from values.yaml (--image unset).
+talm upgrade -f nodes/node0.yaml
+```
+
+Expected, in order:
+
+- stderr: `Using image from values.yaml: ghcr.io/cozystack/cozystack/talos:v1.13.0`
+- talosctl upgrade event stream runs through `post check passed`.
+- stderr: `post-upgrade verify: waiting 1m30s for the node to finish booting...` then a success line confirming the running version matches the target.
+- stderr: `Synced machine.install.image in nodes/node0.yaml to ghcr.io/cozystack/cozystack/talos:<TARGET_TAG>` — emitted ONLY after the verify line, never before.
+- `nodes/node0.yaml` on disk: `machine.install.image` now equals the target. The `# talm: ...` modeline, the autogen banner, and every other key under `machine.*` are byte-identical to the pre-upgrade file. `git diff nodes/node0.yaml` shows a single-line image change.
+- Multi-doc preservation: `grep -c '^---$' nodes/node0.yaml` returns the SAME count as `$docs_before`. `diff /tmp/node0.before.yaml nodes/node0.yaml` shows only the `image:` line as differing — no document is removed, no `---` separator is dropped, no RegistryMirrorConfig / LinkConfig / Layer2VIPConfig / VLANConfig is silently erased. A regression that used `yaml.Unmarshal` instead of a streaming decoder would silently truncate every non-first document, which this check catches.
+
+Drift check (the bug this scenario closes):
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml
+```
+
+Expected: Phase 2A drift preview shows zero `machine.install.image` mutation. A regression that drops the write-back step would re-render install.image from the new values.yaml, then merge the stale body image on top, and the drift preview would surface `~ machine.install.image: <new> -> <old>` — exactly the silent-revert footgun.
+
+Failure-path coverage (run only if you have a way to force auto-rollback, e.g. cross-vendor image):
+
+```bash
+talm upgrade --image ghcr.io/siderolabs/installer:v1.13.0 -f nodes/node0.yaml
+```
+
+Expected: Phase 2C version verify FAILS (running version is still the pre-upgrade one because Talos auto-rolled back). The "Synced machine.install.image" line does NOT appear; `nodes/node0.yaml` is byte-identical to its pre-upgrade state. The body must reflect what the node ACTUALLY runs, which is the pre-upgrade image.
+
+Skip-verify coverage:
+
+```bash
+talm upgrade --skip-post-upgrade-verify -f nodes/node0.yaml
+```
+
+Expected: stderr emits the "Synced machine.install.image" line immediately after the talosctl RPC returns success — the operator opted out of verify, so the patch fires unconditionally on RPC success. Document the trade-off: skipping verify trades safety (no auto-rollback detection) for body-sync; operators must inspect the node's running version themselves.
+
+Regression anchor: contract tests `TestContract_WriteBackInstallImage_*` pin the on-disk shape of the patch (scalar swap, idempotency, silent-skip on orphan files, structural errors, file-list fan-out). A regression that fires the write-back BEFORE verify (or instead of verify) would silently pin the body to an image the node never actually ran — the failure-path scenario above would catch it. Cross-reference: `pkg/commands/upgrade_image_writeback.go`.
+
 ## F. CA rotation
 
 ### F1. Rotate CA dry-run

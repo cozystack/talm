@@ -91,7 +91,21 @@ Image resolution (when -f is provided):
 The first -f file anchors the project root (Chart.yaml +
 secrets.yaml); its modeline supplies the nodes / endpoints. The
 node body's machine.install.image is no longer consulted by the
-upgrade flow.`
+upgrade flow.
+
+Post-upgrade sync (when the upgrade succeeds):
+  - talm point-patches machine.install.image in every -f node body
+    to the image that was applied. Keeps the body consistent with
+    the running node — without this a follow-up ` + "`talm apply`" + ` would
+    merge the stale install.image over the chart-rendered new value
+    and silently pin the cluster back to the pre-upgrade image on
+    the next A/B boot. Comments, modeline, and unrelated keys are
+    preserved (yaml.v3 node round-trip); files without an
+    install.image key (orphans / side-patches) are silently skipped.
+  - The patch fires after post-upgrade verify confirms the running
+    version matches the target. A failed verify (auto-rollback)
+    intentionally leaves the body untouched, so it still reflects
+    what the node actually runs.`
 
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
 		"skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)")
@@ -212,7 +226,13 @@ upgrade flow.`
 		// Skip predicate documents the cases where this gate cannot
 		// produce a meaningful result.
 		if !shouldRunPostUpgradeVerify(insecure, staged, upgradeCmdFlags.skipPostUpgradeVerify) {
-			return nil
+			// Verify skipped (operator opt-out / insecure / staged).
+			// Still sync node bodies: the RPC was acked, and skipping
+			// the verify is an explicit operator choice — the body
+			// must track what talosctl was asked to install so the
+			// next `talm apply` does not silently revert install.image
+			// over the chart-rendered new value.
+			return writeBackInstallImageToFiles(filesToProcess, targetImage)
 		}
 
 		if targetImage == "" {
@@ -221,7 +241,24 @@ upgrade flow.`
 			return nil
 		}
 
-		return runPostUpgradeVersionVerify(cmd.Context(), targetImage)
+		if err := runPostUpgradeVersionVerify(cmd.Context(), targetImage); err != nil {
+			return err
+		}
+
+		// Verify did not block — patch the node body. The verify
+		// helper returns nil on three shapes: (a) running version
+		// matches the target (the common case), (b) zero nodes were
+		// resolved (rare — the talosctl upgrade RPC above would have
+		// also no-op'd, so the patch is vacuously consistent with
+		// what hit the cluster), (c) the version reader surrendered
+		// silently (reserved future contract). A failed verify
+		// (auto-rollback detected) returns non-nil and was already
+		// returned above, intentionally leaving the body untouched:
+		// the body still points at the pre-upgrade image, which
+		// matches what the node ended up running. An operator who
+		// fixes the rollback cause and re-runs upgrade will sync the
+		// body on the next pass that clears verify.
+		return writeBackInstallImageToFiles(filesToProcess, targetImage)
 	}
 }
 
