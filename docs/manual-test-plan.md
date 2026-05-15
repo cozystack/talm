@@ -377,6 +377,34 @@ Inspect any apply progress line from C1, C3, C6a, C6c. Expect `nodes=[n1,n2,n3]`
 
 Regression anchor: the format uses `strings.Join(slice, ",")` with surrounding brackets in the format string; `%s` or `%v` directly on a `[]string` produces the space-separated `[n1 n2 n3]` artifact and is a regression. Verify with a multi-node modeline (`# talm: nodes=["1.2.3.4","5.6.7.8"], ...`) → progress line shows `nodes=[1.2.3.4,5.6.7.8]`.
 
+### C6f. Multi-IP modeline parses regardless of whitespace inside the JSON array
+
+```bash
+# Anchor with hand-written multi-IP modeline (note spaces after commas):
+cat > nodes/multi.yaml <<'EOF'
+# talm: nodes=["1.2.3.4", "5.6.7.8"], endpoints=["1.2.3.4", "5.6.7.8"], templates=["templates/controlplane.yaml"]
+machine: {}
+EOF
+talm apply --dry-run -f nodes/multi.yaml
+
+# Side-patch slot that accidentally carries a modeline (rejection path):
+cat > /tmp/side-modelined.yaml <<'EOF'
+# talm: nodes=["1.2.3.4", "5.6.7.8"], endpoints=["1.2.3.4", "5.6.7.8"]
+machine:
+  kernel:
+    modules:
+    - name: dm_thin_pool
+EOF
+talm apply --dry-run -f nodes/node0.yaml -f /tmp/side-modelined.yaml
+```
+
+Expected:
+
+- First invocation: progress line includes `nodes=[1.2.3.4,5.6.7.8]` (two nodes, parsed from the multi-element array). The whitespace after each comma inside `nodes=[…]` and `endpoints=[…]` is tolerated.
+- Second invocation: rejection error `side-patch /tmp/side-modelined.yaml carries its own modeline; the apply chain treats only the first -f file as the anchor and stacks subsequent files as side-patches` with the per-file-loop / strip-modeline hint. The error is the high-level "side-patches must not have modelines" gate from `rejectModelinedSidePatches`, NOT a low-level `error parsing JSON array for key nodes` — the parser successfully reads the multi-IP form and the rejection happens on the (correctly identified) modelined-side-patch shape.
+
+Regression anchor: the modeline parser splits on commas at JSON-array depth 0 only. A regression that re-introduces a literal comma-plus-space split would silently truncate multi-element arrays — the anchor case above would fail with `unexpected end of JSON input` on `["1.2.3.4"` (array cut at the first comma). Verify the depth tracking by adding a comma inside a string literal: `# talm: nodes=["a,b"]` must parse to `Nodes=["a,b"]`, not split into two tokens.
+
 ### C7. Phase 1 walker rejects malformed net-addr fields before the RPC
 
 When a rendered MachineConfig carries a malformed value in any of the new walker-covered fields, Phase 1 must block before the apply RPC fires:

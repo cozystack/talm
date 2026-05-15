@@ -10,6 +10,69 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
+// splitModelineParts splits the modeline body (everything after the
+// `# talm: ` prefix) into `key=value` tokens. Splits on `,` only at
+// JSON nesting depth 0, so a comma inside a `nodes=["a", "b"]` array
+// no longer cuts the value mid-stream. Tracks `[`/`]` depth and `"`
+// string state with JSON-style backslash escapes; a `,` or `]` inside
+// a JSON string literal is treated as data, not structure.
+//
+// This is more permissive than the old `, ` literal split — both the
+// canonical talm-generated form (no whitespace inside arrays) and the
+// human-written form (whitespace after each array element) now parse.
+// Whitespace AROUND tokens is trimmed by the caller's SplitN step.
+//
+// Scope: JSON-array values only. The splitter does NOT track `{`/`}`
+// nesting because every modeline key in the current contract (nodes,
+// endpoints, templates) is a JSON array — a `{` at depth 0 will fall
+// through to the downstream json.Unmarshal which rejects non-array
+// inputs. If a future modeline key takes a JSON-object value, extend
+// the depth counter to track `{`/`}` too.
+func splitModelineParts(content string) []string {
+	parts := make([]string, 0)
+	depth := 0
+	inString := false
+	escape := false
+	start := 0
+
+	for i := range len(content) {
+		c := content[i]
+
+		if inString {
+			switch {
+			case escape:
+				escape = false
+			case c == '\\':
+				escape = true
+			case c == '"':
+				inString = false
+			}
+
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+		case '[':
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, content[start:i])
+				start = i + 1
+			}
+		}
+	}
+
+	parts = append(parts, content[start:])
+
+	return parts
+}
+
 // Config structure for storing settings from modeline.
 type Config struct {
 	Nodes     []string
@@ -35,8 +98,7 @@ func ParseModeline(line string) (*Config, error) {
 	if after, ok := strings.CutPrefix(trimLine, prefix); ok {
 		content := after
 
-		parts := strings.SplitSeq(content, ", ")
-		for part := range parts {
+		for _, part := range splitModelineParts(content) {
 			keyVal := strings.SplitN(strings.TrimSpace(part), "=", 2)
 			if len(keyVal) != 2 {
 				//nolint:wrapcheck // cockroachdb/errors.WithHintf is the project's wrapping/hinting idiom

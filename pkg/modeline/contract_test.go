@@ -94,25 +94,140 @@ func TestContract_ParseModeline_RejectsMalformedKeyValue(t *testing.T) {
 	}
 }
 
-// Contract: keys are separated by `, ` (comma then a single space).
-// This is the same separator GenerateModeline emits, so a generated
-// modeline always parses back. Missing the space before the next key
-// fails to find the part-boundary; trailing whitespace inside a JSON
-// array is tolerated (json.Unmarshal handles it).
-func TestContract_ParseModeline_KeyValueSeparatorContract(t *testing.T) {
-	// Canonical (matches GenerateModeline output).
-	canonical := `# talm: nodes=["a"], endpoints=["b"], templates=["c"]`
-	got, err := ParseModeline(canonical)
-	if err != nil {
-		t.Fatalf("canonical line failed: %v", err)
-	}
+// Contract: keys are separated by `,` at JSON-array depth 0. The
+// canonical separator GenerateModeline emits is `, ` (comma+space),
+// but the parser is depth-aware so it also accepts the no-space form
+// and arbitrary whitespace around the comma. A comma INSIDE a
+// `nodes=["a", "b"]` array is array-internal and never splits the
+// key-pair. This relaxation lets operators hand-author shared
+// side-patches with multi-IP modelines in the natural form.
+//
+// All four forms below MUST parse to the same Config — the parser is
+// liberal in what it accepts; GenerateModeline stays strict on output.
+func TestContract_ParseModeline_KeyValueSeparator(t *testing.T) {
 	want := &Config{
 		Nodes:     []string{"a"},
 		Endpoints: []string{"b"},
 		Templates: []string{"c"},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("canonical parse mismatch\n got: %+v\nwant: %+v", got, want)
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"canonical (matches GenerateModeline)", `# talm: nodes=["a"], endpoints=["b"], templates=["c"]`},
+		{"no space after comma", `# talm: nodes=["a"],endpoints=["b"],templates=["c"]`},
+		{"multiple spaces after comma", `# talm: nodes=["a"],   endpoints=["b"],   templates=["c"]`},
+		{"space before comma too", `# talm: nodes=["a"] , endpoints=["b"] , templates=["c"]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseModeline(tc.line)
+			if err != nil {
+				t.Fatalf("expected to parse, got: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("parse mismatch\n got: %+v\nwant: %+v", got, want)
+			}
+		})
+	}
+}
+
+// Contract: a comma inside a JSON array (multi-element value) never
+// splits the key-pair. This is the depth-0 promise that the old
+// literal `, ` split broke: `nodes=["a", "b"]` was cut to
+// `nodes=["a"` + ` "b"]` and the first half failed JSON parsing.
+func TestContract_ParseModeline_CommaInsideArrayNeverSplits(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want *Config
+	}{
+		{
+			"multi-element nodes",
+			`# talm: nodes=["1.2.3.4", "5.6.7.8"]`,
+			&Config{Nodes: []string{testNodeIP1, "5.6.7.8"}},
+		},
+		{
+			"comma inside string literal",
+			`# talm: nodes=["a,b","c"]`,
+			&Config{Nodes: []string{"a,b", "c"}},
+		},
+		{
+			"escaped quote inside string literal",
+			`# talm: nodes=["a\"b","c"]`,
+			&Config{Nodes: []string{`a"b`, "c"}},
+		},
+		{
+			// Square brackets inside a string literal must not affect
+			// the depth counter — inString short-circuits the `[`/`]`
+			// arms of the splitter switch. A regression that drops the
+			// short-circuit would miscount depth and either split on a
+			// `,` inside the string, or fail to split on a legitimate
+			// key-pair `,` that follows.
+			"square brackets inside string literal",
+			`# talm: nodes=["[,]","x"]`,
+			&Config{Nodes: []string{"[,]", "x"}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseModeline(tc.line)
+			if err != nil {
+				t.Fatalf("expected to parse, got: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parse mismatch\n got: %+v\nwant: %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: a trailing `,` at depth 0 (e.g. `nodes=["a"],` with
+// nothing after it) is REJECTED. The splitter emits an empty token
+// for the missing key=value pair, which fails the `SplitN(part, "=", 2)`
+// length check with `invalid format of modeline part`. Pinned so a
+// future "helpfully ignore empty tokens" patch can't silently flip
+// rejection semantics.
+func TestContract_ParseModeline_TrailingCommaRejected(t *testing.T) {
+	cases := []string{
+		`# talm: nodes=["a"],`,
+		`# talm: nodes=["a"], `,
+		`# talm: nodes=["a"], endpoints=["b"],`,
+	}
+	for _, line := range cases {
+		t.Run(line, func(t *testing.T) {
+			_, err := ParseModeline(line)
+			if err == nil {
+				t.Errorf("expected rejection for trailing comma in %q, got nil", line)
+			}
+		})
+	}
+}
+
+// Contract: an unbalanced closing `]` does not panic the depth
+// counter. The splitter clamps depth at zero, so a stray `]` at
+// depth 0 stays at depth 0; subsequent commas are still treated as
+// key-pair separators. The resulting token shape fails downstream
+// JSON unmarshalling, producing a parse error rather than a panic.
+// A regression that drops the `if depth > 0` clamp would let depth
+// go negative — at which point an inner array's content would be
+// misclassified.
+func TestContract_ParseModeline_UnbalancedClosingBracketDoesNotPanic(t *testing.T) {
+	// No assertion on specific error text; the contract is "rejects
+	// without panicking". A nil error would mean the parser somehow
+	// accepted clearly malformed JSON, which is a regression too.
+	cases := []string{
+		`# talm: nodes="a"]`,
+		`# talm: nodes=]`,
+		`# talm: nodes=["a"]], endpoints=["b"]`,
+	}
+	for _, line := range cases {
+		t.Run(line, func(t *testing.T) {
+			_, err := ParseModeline(line)
+			if err == nil {
+				t.Errorf("expected error for unbalanced bracket in %q, got nil", line)
+			}
+		})
 	}
 }
 
