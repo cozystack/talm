@@ -76,6 +76,31 @@ func TestClassifyLookupError_Authn_UnknownAuthority(t *testing.T) {
 	}
 }
 
+// Contract: an x509 SAN mismatch ("certificate is valid for X, not
+// Y") classifies as TLSHandshake, not Authn. The cert chain trusts
+// fine — the certificate just doesn't cover the dialed address. The
+// TLS-handshake hint explicitly names cert SANs as a common cause;
+// the Authn hint would mislead the operator toward talosconfig
+// credentials, which is the wrong fix.
+func TestClassifyLookupError_TLSHandshake_x509SANMismatch(t *testing.T) {
+	err := status.Error(codes.Unavailable, "x509: certificate is valid for 192.0.2.10, not 192.0.2.11")
+	if got := classifyLookupError(err); got != lookupErrTLSHandshake {
+		t.Errorf("got %v, want lookupErrTLSHandshake (SAN mismatch → TLS, not Authn)", got)
+	}
+}
+
+// Contract: an x509 expiry error also classifies as TLSHandshake.
+// The TLS-handshake hint's "node may be in maintenance mode / wrong
+// port" causes don't directly cover expiry, but routing here is
+// still more useful than the Authn branch — the operator's next
+// action is to renew the cert, not to touch talosconfig.
+func TestClassifyLookupError_TLSHandshake_x509Expired(t *testing.T) {
+	err := status.Error(codes.Unavailable, "x509: certificate has expired or is not yet valid")
+	if got := classifyLookupError(err); got != lookupErrTLSHandshake {
+		t.Errorf("got %v, want lookupErrTLSHandshake (expired cert → TLS, not Authn)", got)
+	}
+}
+
 func TestClassifyLookupError_Resource_InternalCode(t *testing.T) {
 	err := status.Error(codes.Internal, "no such resource type")
 	if got := classifyLookupError(err); got != lookupErrResource {

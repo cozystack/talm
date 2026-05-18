@@ -70,12 +70,26 @@ func classifyLookupError(err error) lookupErrorClass {
 
 	desc := strings.ToLower(err.Error())
 
-	if strings.Contains(desc, "certificate signed by unknown authority") ||
-		strings.Contains(desc, "x509:") {
+	// "Signed by unknown authority" is a CA / PKI trust failure —
+	// the dialed cert is fine, but the operator's talosconfig CA bundle
+	// doesn't recognize the signer. That's an authn-class problem
+	// (talosconfig context mismatch); the Authn hint steers the
+	// operator at the talosconfig.
+	if strings.Contains(desc, "certificate signed by unknown authority") {
 		return lookupErrAuthn
 	}
 
-	if strings.Contains(desc, "handshake failed") || strings.Contains(desc, "tls:") {
+	// Any other x509 / tls error (SAN mismatch like "x509: certificate
+	// is valid for X, not Y", expired cert, hostname mismatch) is a
+	// TLS-handshake-class problem. The TLS-handshake hint explicitly
+	// names cert SANs as a common cause and tells the operator how to
+	// verify with `talosctl get nodeaddress`. Routing these to Authn
+	// would land them on the "talosconfig credentials rejected" hint,
+	// which is irrelevant when the cert chain trusts fine but the
+	// SAN / expiry / hostname is wrong.
+	if strings.Contains(desc, "handshake failed") ||
+		strings.Contains(desc, "tls:") ||
+		strings.Contains(desc, "x509:") {
 		return lookupErrTLSHandshake
 	}
 

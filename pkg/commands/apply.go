@@ -419,7 +419,12 @@ func applyOneFileTemplateMode(configFile string, sidePatches, modelineTemplates 
 	// dominant invocation shape is `talm apply -f nodes/<name>.yaml`
 	// without side-patches; reporting `side-patches=[]` on every line
 	// was visible noise without operator value.
-	// Progress line goes to stderr. Apply normally writes nothing to stdout (only `--debug` emits the recipe stream); routing progress here matches the stdout-cleanliness contract already in effect for `talm template > file.yaml` and keeps the future `--debug` recipe stream uncontaminated.
+	// Progress line goes to stderr. Apply normally writes nothing to
+	// stdout (only `--debug` emits the recipe stream via
+	// engine.debugPhase); routing progress here matches the
+	// stdout-cleanliness contract already in effect for `talm template
+	// > file.yaml` and keeps the `--debug` recipe stream
+	// uncontaminated.
 	if len(sidePatches) == 0 {
 		fmt.Fprintf(os.Stderr, "- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
 	} else {
