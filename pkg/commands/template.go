@@ -221,8 +221,8 @@ func templateOneFile(ctx context.Context, args []string, configFile string, firs
 		GlobalArgs.Endpoints = modelineConfig.Endpoints
 	}
 
-	//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-	fmt.Printf("- talm: file=%s, nodes=%s, endpoints=%s, templates=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
+	// Progress line goes to stderr; stdout is reserved for the rendered config stream so `talm template --file X > Y` produces a clean Y.
+	fmt.Fprintf(os.Stderr, "- talm: file=%s, nodes=%s, endpoints=%s, templates=%s\n", configFile, GlobalArgs.Nodes, GlobalArgs.Endpoints, templateCmdFlags.templateFiles)
 
 	if len(GlobalArgs.Nodes) < 1 {
 		//nolint:wrapcheck // sentinel constructed in-place; WithHint attaches operator guidance
@@ -315,7 +315,8 @@ func generateOutput(ctx context.Context, c *client.Client, _ []string) (string, 
 		Offline:           templateCmdFlags.offline,
 		KubernetesVersion: templateCmdFlags.kubernetesVersion,
 		TemplateFiles:     resolvedTemplateFiles,
-		CommandName:       "talm template",
+		CommandName:       engine.CommandNameTemplate,
+		TalosEndpoints:    append([]string(nil), GlobalArgs.Endpoints...),
 	}
 
 	result, err := engine.Render(ctx, c, opts)

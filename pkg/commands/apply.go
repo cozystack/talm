@@ -42,10 +42,12 @@ import (
 const parentDir = ".."
 
 // applyCommandName labels this subcommand inside engine.Options for
-// FailIfMultiNodes error wording. Centralised so the template
-// rendering options block and any test asserting against the field
-// share a single canonical value.
-const applyCommandName = "talm apply"
+// FailIfMultiNodes error wording and for the engine's apply-vs-template
+// hint branching. Aliased to engine.CommandNameApply so the engine
+// constant remains the single source of truth — drift between the
+// two would let apply error hints silently start suggesting the
+// non-existent --offline flag.
+const applyCommandName = engine.CommandNameApply
 
 // roleAnchor and roleSidePatch label the role of a config file in
 // the apply chain for operator-facing error messages
@@ -417,12 +419,11 @@ func applyOneFileTemplateMode(configFile string, sidePatches, modelineTemplates 
 	// dominant invocation shape is `talm apply -f nodes/<name>.yaml`
 	// without side-patches; reporting `side-patches=[]` on every line
 	// was visible noise without operator value.
+	// Progress line goes to stderr. Apply normally writes nothing to stdout (only `--debug` emits the recipe stream); routing progress here matches the stdout-cleanliness contract already in effect for `talm template > file.yaml` and keeps the future `--debug` recipe stream uncontaminated.
 	if len(sidePatches) == 0 {
-		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-		fmt.Printf("- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
+		fmt.Fprintf(os.Stderr, "- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
 	} else {
-		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-		fmt.Printf("- talm: file=%s, side-patches=[%s], nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(sidePatches, ","), strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
+		fmt.Fprintf(os.Stderr, "- talm: file=%s, side-patches=[%s], nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(sidePatches, ","), strings.Join(nodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
 	}
 
 	applyClosure := buildApplyClosure()
@@ -567,8 +568,8 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			return err
 		}
 
-		//nolint:forbidigo // CLI progress line surfaces the file-to-target mapping for the operator
-		fmt.Printf("- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(targetNodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
+		// Progress line goes to stderr; stdout is reserved for rendered output.
+		fmt.Fprintf(os.Stderr, "- talm: file=%s, nodes=[%s], endpoints=[%s]\n", configFile, strings.Join(targetNodes, ","), strings.Join(GlobalArgs.Endpoints, ","))
 
 		read := cosiVersionReader(c)
 
@@ -1010,6 +1011,7 @@ func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string)
 		Root:              Config.RootDir,
 		TemplateFiles:     resolvedTemplates,
 		CommandName:       applyCommandName,
+		TalosEndpoints:    append([]string(nil), GlobalArgs.Endpoints...),
 	}
 }
 

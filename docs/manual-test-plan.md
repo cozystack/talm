@@ -1502,6 +1502,110 @@ Expected: per-entry findings count exactly, valid forms produce zero findings, a
 
 Regression anchor: the no-overlap unit test `TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers` pins the dispatch-map disjointness contract. A future entry that lands in BOTH `multidocHandlers` and `multidocNetAddrHandlers` produces double findings — verify via the unit suite before manual smokes.
 
+## N. Output discipline & error diagnostics
+
+These scenarios pin two operator-facing contracts: (1) stdout stays clean enough to be piped into another file without filtering progress text out; (2) when a `lookup` against the live Talos API fails, the error chain names the dialed endpoint, the resource kind, and a class-specific remedy.
+
+### N.1 stdout cleanliness — `talm template --file X > Y`
+
+```bash
+cd $PROJECT
+talm template --offline -f nodes/node0.yaml > /tmp/rendered.yaml
+head -1 /tmp/rendered.yaml
+# Expected: the first line is `# talm: nodes=[...]` (rendered modeline comment), NOT `- talm: file=...`.
+# A leading `- talm:` would mean the per-file progress line is leaking into stdout.
+
+# Same redirect without --offline against a reachable node:
+talm template -f nodes/node0.yaml > /tmp/rendered.yaml
+head -1 /tmp/rendered.yaml
+# Expected: same `# talm: nodes=[...]` first line; progress is on stderr only.
+
+# Confirm progress lands on stderr:
+talm template --offline -f nodes/node0.yaml 1>/dev/null 2>/tmp/stderr.txt
+grep '^- talm: file=' /tmp/stderr.txt
+# Expected: one matching line per --file argument; stderr is the only channel that carries it.
+```
+
+Run the same shape against `talm apply --dry-run -f nodes/node0.yaml > /tmp/rendered.yaml`. Note that `talm apply` writes nothing to stdout in normal mode (only `--debug` emits the recipe stream); the assertion here is **defensive** — verifying that nothing new starts leaking onto stdout in the future, not filtering an existing stream. The progress line must still go to stderr; assert stdout is empty and stderr carries `- talm: file=...`.
+
+### N.2 Lookup error diagnostics — node unreachable
+
+Run with `--endpoints` pointing at an address that is reachable on TCP but does not run Talos (or a local closed port), and WITHOUT `--offline`:
+
+```bash
+talm template -f nodes/node0.yaml --endpoints 192.0.2.123 || true
+# Expected error chain MUST contain:
+#   - `looking up resource kind="disks" namespace="" id="" on endpoints=[192.0.2.123]`
+#   - a class hint mentioning the dialed endpoint (192.0.2.123)
+#   - one of the remedies depending on class:
+#       * TLS handshake failure → mentions "cert SANs" / "maintenance mode"
+#       * connection refused    → mentions "firewall" / "wrong port"
+#       * timeout               → mentions "timed out"
+#       * authn rejection       → mentions "talosconfig"
+#   - a closing sentence pointing at `--offline` as the safe escape ("If live discovery is not required, pass --offline").
+```
+
+Repeat with `talm apply --dry-run` against the same unreachable endpoint:
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml --endpoints 192.0.2.123 || true
+# Expected: same class hint shape, but the remedy clause MUST say
+# "Fix node reachability before re-running apply." and MUST NOT mention `--offline`
+# (apply has no --offline flag — suggesting it would teach a non-existent workflow).
+```
+
+### N.3 Lookup retry policy — transient connectivity
+
+Bring up a node, then drop its API briefly mid-template (e.g. `systemctl stop apid` for ~300ms on a Talos test node, or use `iptables -A INPUT -p tcp --dport 50000 -j DROP` for half a second on a non-prod target). The expectation is that `talm template -f nodes/node0.yaml` succeeds on the second or third attempt without the operator seeing an error — retry budget is 3 attempts with 200ms/400ms exponential backoff (~600ms total).
+
+```bash
+# In one shell:
+talm template -f nodes/node0.yaml > /tmp/rendered.yaml
+
+# In another (within ~300ms of the first):
+# Briefly block the talos API:
+ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j DROP
+sleep 0.3
+ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
+```
+
+Expected: template render succeeds after retry (1 to 2 retried attempts visible only if `--debug` is on); operator sees the rendered output, no error message.
+
+Same shape against a node that stays down longer than the budget:
+
+```bash
+ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j DROP
+talm template -f nodes/node0.yaml || true
+ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
+```
+
+Expected: failure after ~600ms+ (3 attempts × backoff); operator sees the `connection refused` class hint pointing at firewall / port / `--offline`.
+
+Ctrl+C should interrupt retries instantly:
+
+```bash
+ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j DROP
+talm template -f nodes/node0.yaml &
+sleep 0.1
+kill -INT $!
+ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
+```
+
+Expected: `talm` exits within ~100ms, not after the full 600ms retry budget.
+
+### N.4 Lookup error diagnostics — non-network failure
+
+Forge a chart that calls `lookup` for an unknown resource kind (e.g. add `{{- (lookup "nonexistent_resource_kind" "" "").items }}` to a helper template), then run `talm template -f nodes/node0.yaml` against a reachable Talos node:
+
+```bash
+talm template -f nodes/node0.yaml || true
+# Expected error chain MUST contain:
+#   - `looking up resource kind="nonexistent_resource_kind" ...`
+#   - hint mentioning "chart bug" / "unsupported Talos resource"
+#   - `talosctl get nonexistent_resource_kind` as the verification step
+#   - MUST NOT suggest `--offline` (would mask the chart bug by rendering against empty discovery).
+```
+
 ## Sanity-check block
 
 Run after every destructive section (E, F, H, and anything that touches `--mode=reboot` / `--mode=staged` / `apply -I`):

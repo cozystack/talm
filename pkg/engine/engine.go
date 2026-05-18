@@ -61,6 +61,11 @@ type Options struct {
 	// CommandName names the caller subcommand for error messages such as
 	// the one produced by FailIfMultiNodes. Empty value falls back to "talm".
 	CommandName string
+	// TalosEndpoints carries the addresses dialed by the talos client for
+	// chart `lookup` calls. Surfaced through wrapLookupError so failed
+	// lookups name the endpoints the operator actually targeted, instead
+	// of forcing them to reconstruct from CLI flags / modeline.
+	TalosEndpoints []string
 }
 
 // NormalizeTemplatePath converts OS-specific path separators to forward slash.
@@ -1594,7 +1599,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 			return nil, errors.Wrap(err, "checking node selector")
 		}
 
-		helmEngine.LookupFunc = newLookupFunction(ctx, c)
+		helmEngine.LookupFunc = newLookupFunction(ctx, c, cmdName, opts.TalosEndpoints)
 	}
 
 	chartPath, err := os.Getwd()
@@ -2085,13 +2090,17 @@ func extractResourceData(r resource.Resource) (map[string]any, error) {
 // template function, dispatching across COSI resource kinds and emitting
 // a deterministic error envelope on miss.
 //
-//nolint:funlen // 62 lines: closure over ctx/c with a single linear dispatch over resource kinds; extracting helpers would either thread (ctx, c) through every signature or hoist the closure body to package level.
-func newLookupFunction(ctx context.Context, c *client.Client) func(resource string, namespace string, id string) (map[string]any, error) {
+//nolint:funlen // closure over ctx/c plus a single linear dispatch over resource kinds wrapped in a retry-with-fail-fast loop; extracting helpers would either thread (ctx, c) through every signature or hoist the closure body to package level.
+func newLookupFunction(ctx context.Context, c *client.Client, commandName string, endpoints []string) func(resource string, namespace string, id string) (map[string]any, error) {
 	return func(kind string, namespace string, docID string) (map[string]any, error) {
 		var multiErr *multierror.Error
 
 		var resources []map[string]any
 
+		// Signature is fixed by helpers.ForEachResource; the callback
+		// always returns nil because per-item errors are accumulated
+		// into multiErr / passed through for retry classification.
+		//nolint:unparam // callback shape fixed by helpers.ForEachResource API
 		callbackResource := func(_ context.Context, _ string, r resource.Resource, callError error) error {
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
@@ -2123,14 +2132,53 @@ func newLookupFunction(ctx context.Context, c *client.Client) func(resource stri
 			return nil
 		}
 
-		helperErr := helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID)
-		if helperErr != nil {
-			return map[string]any{}, errors.Wrap(helperErr, "iterating resources")
+		// Retry transient connectivity failures up to defaultMaxAttempts
+		// times; TLS handshake / authn / resource / unknown classes
+		// fail fast — see retryWithFailFast docs. The closure resets
+		// multiErr and resources at the top of each attempt so a
+		// half-collected partial result from a failed attempt does not
+		// leak into the next one.
+		//
+		// helpers.ForEachResource routes per-node dial failures (the
+		// dominant transient class — a single node briefly partitioned
+		// from the rest of a multi-node lookup) through callbackResource
+		// as callError, where they land in multiErr and ForEachResource
+		// itself returns nil. firstLookupError surfaces those to the
+		// retry predicate so the brief-partition case is actually
+		// retried, not silently wrapped on the first attempt.
+		//
+		// shouldRetry adds a partial-success fast-path: when at least
+		// one node responded with data this attempt, retrying would
+		// reset both `resources` AND `multiErr` and re-collect from
+		// the same set — wasting up to 600ms while producing the same
+		// final outcome (a persistently-down node stays down).
+		//
+		// Note this saves ONLY latency: the post-retry caller still
+		// returns an error envelope and discards `resources` whenever
+		// any node failed (matches pre-retry behaviour at engine.go's
+		// wrapLookupError site below). The partial data is not
+		// preserved by this fast-path; what is preserved is the
+		// operator's wall-clock budget on the stale-modeline case
+		// (decommissioned node still listed in modeline) which is
+		// common enough that paying per-render latency for it was
+		// the dominant cost of the retry feature before this
+		// fast-path landed.
+		shouldRetry := func(err error) bool {
+			if len(resources) > 0 {
+				return false
+			}
+
+			return retryableLookupError(classifyLookupError(err))
 		}
 
-		err := multiErr.ErrorOrNil()
-		if err != nil {
-			return map[string]any{}, errors.Wrap(err, "collecting resource lookup errors")
+		attemptErr := retryWithFailFast(ctx, func() error {
+			multiErr = nil
+			resources = resources[:0]
+
+			return firstLookupError(helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID), multiErr)
+		}, shouldRetry, defaultRetryPolicy())
+		if attemptErr != nil {
+			return map[string]any{}, wrapLookupError(attemptErr, kind, namespace, docID, endpoints, commandName)
 		}
 
 		if len(resources) == 0 {
