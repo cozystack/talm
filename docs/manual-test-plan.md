@@ -1571,27 +1571,29 @@ ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
 
 Expected: template render succeeds after retry (1 to 2 retried attempts visible only if `--debug` is on); operator sees the rendered output, no error message.
 
-Same shape against a node that stays down longer than the budget:
+Same shape against a node that stays down longer than the budget. Use `REJECT --reject-with tcp-reset` rather than `-j DROP` — DROP silently discards SYN packets, the talos client retries the TCP handshake until its own deadline expires, and the lookup classifies as deadline (timeout) instead of refused. REJECT sends an RST so the kernel surfaces ECONNREFUSED immediately, matching what an operator typically sees from a firewall-blocked or stopped-service node:
 
 ```bash
-ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j DROP
+ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j REJECT --reject-with tcp-reset
 talm template -f nodes/node0.yaml || true
-ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
+ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j REJECT --reject-with tcp-reset
 ```
 
 Expected: failure after ~600ms+ (3 attempts × backoff); operator sees the `connection refused` class hint pointing at firewall / port / `--offline`.
 
-Ctrl+C should interrupt retries instantly:
+(If you intentionally want the deadline-class path instead, swap REJECT for `-j DROP` — the expected hint then mentions `timed out` rather than `connection refused`.)
+
+Ctrl+C should interrupt retries well before the full retry budget:
 
 ```bash
-ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j DROP
+ssh ${NODE} iptables -A INPUT -p tcp --dport 50000 -j REJECT --reject-with tcp-reset
 talm template -f nodes/node0.yaml &
 sleep 0.1
 kill -INT $!
-ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j DROP
+ssh ${NODE} iptables -D INPUT -p tcp --dport 50000 -j REJECT --reject-with tcp-reset
 ```
 
-Expected: `talm` exits within ~100ms, not after the full 600ms retry budget.
+Expected: `talm` exits well under 1s (the cancellation interrupts the inter-attempt backoff sleep immediately) rather than the full ~600ms retry budget. A hard sub-100ms bound is too brittle across ssh hops and busy hosts — anything visibly faster than the full budget proves the cancellation path is wired correctly.
 
 ### N.4 Lookup error diagnostics — non-network failure
 
