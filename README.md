@@ -226,6 +226,47 @@ talm template -f nodes/node1.yaml -I
 >
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply the same overlay: its output is the rendered template plus the modeline and the auto-generated warning, byte-identical to what the template alone would produce. Routing it through the patcher would drop every YAML comment (including the modeline) and re-sort keys, breaking downstream commands that read the file back. Use `apply --dry-run` if you want to preview the exact bytes that will be sent to the node.
 
+## How talm vendors charts (keeping a project in sync)
+
+The talm binary **embeds** its preset charts (`generic`, `cozystack`) and the `talm` library chart at build time. When you run `talm init`, talm does not keep referring back to the binary — it **vendors a copy** of those charts into your project directory:
+
+```
+your-project/
+  Chart.yaml          # preset config; its `version:` is stamped with the talm version that ran init
+  values.yaml
+  templates/          # preset templates
+  charts/talm/        # the library chart — where the real rendering logic lives (vendored copy)
+```
+
+From then on, `talm template`, `talm apply`, and `talm upgrade` render from the **local copy in your project**, never from the binary's embedded charts. This is what makes a project self-contained and GitOps-friendly: the chart logic is committed alongside your node configs.
+
+The consequence: **upgrading the talm binary does not change your project's `charts/talm/`.** The vendored library chart stays frozen at whatever version last ran `talm init`. A newer binary's chart fixes are not picked up until you explicitly re-vendor:
+
+```bash
+talm init --update -p <preset>
+```
+
+`init --update` overwrites `charts/talm/` (no prompt — it is library code) and refreshes the preset templates (with a confirmation diff per file), then re-stamps the `version:` fields with the current binary version.
+
+### Drift warning
+
+To make this visible, talm compares the running binary version against the `version:` stamped in your project's `Chart.yaml` on every command that loads the project. When they differ you get a non-fatal warning on stderr (rendered output and exit code are unchanged):
+
+```
+WARN: talm binary is 0.30.0 but this project's charts were vendored by talm 0.27.0;
+      run `talm init --update` to sync charts/talm/ (or ignore if this is intentional)
+```
+
+The check stays silent for source builds (`version: dev`), projects that were never stamped by a release, and matching versions — so it never raises a false alarm.
+
+Teams that want this enforced rather than advisory can opt in. Add to `Chart.yaml`:
+
+```yaml
+strictVersion: true
+```
+
+With `strictVersion: true` (committed, so the whole team and CI inherit it) a version mismatch becomes a hard error (exit 1) instead of a warning, refusing to render or apply until the project is synced. The `--strict-version` flag forces the same behavior ad-hoc for a single invocation without editing `Chart.yaml`.
+
 ## Apply with side-patches
 
 `talm apply -f` accepts a chain of files. The FIRST `-f` is the **anchor** — it must carry a `# talm: nodes=[…], templates=[…]` modeline and live under a `talm init`'d project (Chart.yaml + secrets.yaml). Any subsequent `-f` files are **side-patches**: they are merged in order on top of the anchor's rendered config, and a single `ApplyConfiguration` is issued per node carrying the composed result.

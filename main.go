@@ -51,6 +51,14 @@ const cmdNameTalm = "talm"
 //nolint:gochecknoglobals // ldflags-injected build version, idiomatic for go release tooling.
 var Version = "dev"
 
+// strictVersionFlag is bound to the --strict-version persistent flag. When set
+// (or when Chart.yaml carries strictVersion: true), a mismatch between the talm
+// binary version and the project's vendored chart version becomes a hard error
+// instead of a warning.
+//
+//nolint:gochecknoglobals // cobra persistent flag binds to package-level state, consistent with the rest of this file.
+var strictVersionFlag bool
+
 // skipConfigCommands lists commands that should not load Chart.yaml config.
 // - init: creates the config, so it doesn't exist yet
 // - completion: generates shell completion scripts
@@ -121,6 +129,7 @@ func registerRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
 	cmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
 	cmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
+	cmd.PersistentFlags().BoolVar(&strictVersionFlag, "strict-version", false, "fail if the talm binary version differs from the project's vendored chart version (run `talm init --update` to sync)")
 
 	// Shell completion for root persistent flags. --nodes /
 	// --endpoints draw from the in-scope talosconfig contexts.
@@ -184,6 +193,22 @@ func init() {
 			err := loadConfig(configFile)
 			if err != nil {
 				return errors.Wrap(err, "error loading configuration")
+			}
+
+			// Surface vendored-chart drift: the project's charts/talm/ is a
+			// frozen copy from init time, so upgrading the talm binary without
+			// re-running `talm init --update` silently renders with stale chart
+			// logic. Warn by default; hard-fail when the project (or the
+			// operator via --strict-version) opted into strict matching.
+			if mismatch, msg := commands.CheckChartVersion(Version, commands.Config.ChartVersion); mismatch {
+				if commands.Config.StrictVersion || strictVersionFlag {
+					return errors.WithHint(
+						errors.New(msg),
+						"run `talm init --update`, or remove strictVersion / drop --strict-version to downgrade this to a warning",
+					)
+				}
+
+				fmt.Fprintf(os.Stderr, "WARN: %s\n", msg)
 			}
 		}
 

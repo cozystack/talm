@@ -226,6 +226,16 @@ Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator no
 
 When the local `charts/talm/` is older than the talm binary's embedded preset, `talm template` succeeds against the local preset — it does NOT auto-bump. The operator must run `init --update`. Confirm by inspecting `talm version` against `Chart.yaml`.
 
+**Drift warning.** With a release binary (`talm version` is a real `vX.Y.Z`, not `dev`) and a project `Chart.yaml` whose `version:` is a *different* release, any config-loading command (e.g. `talm template`, `talm get`, `talm apply`) prints to **stderr**:
+
+```
+WARN: talm binary is <bin> but this project's charts were vendored by talm <chart>; run `talm init --update` to sync charts/talm/ (or ignore if this is intentional)
+```
+
+Expected: warning on stderr only (piped stdout unchanged), exit code unchanged (0 on an otherwise-successful render). The warning must NOT fire when (a) the binary is a `dev` build, (b) `Chart.yaml` `version:` is `0.1.0` or empty, or (c) the two versions match — confirm each stays silent.
+
+**Strict mode.** Set `strictVersion: true` at the top level of `Chart.yaml` (or pass `--strict-version`). Re-run any config-loading command against the same mismatched project. Expected: hard error, exit 1, the same message plus `hint: run \`talm init --update\`, or remove strictVersion / drop --strict-version to downgrade this to a warning`. Removing the field (and not passing the flag) returns to warning behavior.
+
 **Regression anchor**: `template -I` is rewrite, not merge — verify by adding a `# my comment` line above the modeline in `nodes/node0.yaml`, running B4, and confirming the comment is GONE in the new body. If the comment survives, a behaviour change shipped (could be either an intentional new `--preserve-comments` flag or an undocumented merge mode — neither should appear silently).
 
 ### B6. Scope-filter symmetry across v1.11 and v1.12 renders

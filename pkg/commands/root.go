@@ -42,7 +42,16 @@ var GlobalArgs global.Args
 var Config struct {
 	RootDir         string
 	RootDirExplicit bool // true if --root was explicitly set
-	GlobalOptions   struct {
+	// ChartVersion is the project Chart.yaml `version:` field, stamped with
+	// the talm binary version at `talm init` / `talm init --update` time. It
+	// is compared against the running binary version to surface vendored-chart
+	// drift (see CheckChartVersion).
+	ChartVersion string `yaml:"version"`
+	// StrictVersion turns vendored-chart drift into a hard error instead of a
+	// warning. Opt-in per project via Chart.yaml; absent means false (the
+	// historical behavior). The --strict-version flag can also force it on.
+	StrictVersion bool `yaml:"strictVersion"`
+	GlobalOptions struct {
 		Talosconfig string `yaml:"talosconfig"`
 		Kubeconfig  string `yaml:"kubeconfig"`
 	} `yaml:"globalOptions"`
