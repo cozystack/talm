@@ -630,8 +630,10 @@ func TestContract_Machine_CertSANs_LoopbackUnconditional_Cozystack(t *testing.T)
 //     plugin paths. Required for SR-IOV / GPU device plugins to
 //     surface inside privileged containers.
 //  2. /etc/lvm/lvm.conf — disables LVM backup/archive and sets a
-//     global_filter that excludes drbd, dm-, zd- devices. Required so
-//     LVM does not race the storage stack at boot.
+//     global_filter that excludes drbd, dm-, zd-, loop devices.
+//     Required so LVM does not race the storage stack at boot, and
+//     so the host never activates a volume group living inside a
+//     loop-mounted image.
 //
 // Both files use op: create / op: overwrite respectively. A regression
 // removing either silently breaks GPU/SRIOV or LVM ordering.
@@ -651,6 +653,7 @@ func TestContract_Machine_Files_Cozystack(t *testing.T) {
 			assertContains(t, out, `r|^/dev/drbd.*|`)
 			assertContains(t, out, `r|^/dev/dm-.*|`)
 			assertContains(t, out, `r|^/dev/zd.*|`)
+			assertContains(t, out, `r|^/dev/loop.*|`)
 		})
 	}
 }
