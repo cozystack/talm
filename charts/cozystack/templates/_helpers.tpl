@@ -110,7 +110,7 @@ machine:
         archive = 0
       }
       devices {
-         global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|" ]
+         global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]
       }
   {{- with .Values.extraMachineFiles }}
   {{- toYaml . | nindent 2 }}
