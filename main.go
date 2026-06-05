@@ -278,6 +278,32 @@ func evaluateChartDrift(rawVersion, rootDir string, strict bool) (string, error)
 
 	drift, msg, err := commands.CheckChartDrift(rootDir, version)
 
+	return decideDrift(drift, msg, err, strict)
+}
+
+// evaluatePresetDrift is the preset-template counterpart of
+// evaluateChartDrift. Same release-only gating and warn-vs-fail decision, but
+// it consults CheckPresetDrift: the binary's preset hash vs the baseline
+// pinned in .talm-preset.lock at init. Kept separate (rather than folded into
+// evaluateChartDrift) so the library and preset drift signals stay
+// independently testable and independently silenceable.
+func evaluatePresetDrift(rawVersion, rootDir string, strict bool) (string, error) {
+	version, ok := releaseVersion(rawVersion)
+	if !ok {
+		return "", nil
+	}
+
+	drift, msg, err := commands.CheckPresetDrift(rootDir, version)
+
+	return decideDrift(drift, msg, err, strict)
+}
+
+// decideDrift folds a (drift, msg, err) result into the (warning, error)
+// outcome shared by both drift checks: an I/O error downgrades to a non-fatal
+// warning (best effort, never blocks a command); drift under strict is a hard
+// error with a remediation hint; drift otherwise is a warning; no drift is
+// silent.
+func decideDrift(drift bool, msg string, err error, strict bool) (string, error) {
 	switch {
 	case err != nil:
 		return fmt.Sprintf("could not check chart drift: %v", err), nil
@@ -294,17 +320,26 @@ func evaluateChartDrift(rawVersion, rootDir string, strict bool) (string, error)
 	}
 }
 
-// surfaceChartDrift wires evaluateChartDrift to the package globals and
-// emits the warning to stderr. The strict input is the OR of the committed
-// Chart.yaml field and the per-run flag.
+// surfaceChartDrift wires the drift evaluators to the package globals and
+// emits any warning to stderr. The strict input is the OR of the committed
+// Chart.yaml field and the per-run flag. Both the vendored library
+// (charts/talm/) and the preset baseline (.talm-preset.lock) are checked; a
+// strict failure on either aborts before the command body runs.
 func surfaceChartDrift() error {
-	warning, err := evaluateChartDrift(Version, commands.Config.RootDir, commands.Config.StrictCharts || strictChartsFlag)
-	if err != nil {
-		return err
-	}
+	strict := commands.Config.StrictCharts || strictChartsFlag
 
-	if warning != "" {
-		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+	for _, eval := range []func(string, string, bool) (string, error){
+		evaluateChartDrift,
+		evaluatePresetDrift,
+	} {
+		warning, err := eval(Version, commands.Config.RootDir, strict)
+		if err != nil {
+			return err
+		}
+
+		if warning != "" {
+			fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+		}
 	}
 
 	return nil

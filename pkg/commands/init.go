@@ -778,6 +778,15 @@ var initCmd = &cobra.Command{
 			}
 		}
 
+		// Pin the preset baseline (.talm-preset.lock) so a later talm
+		// upgrade that ships a changed preset is surfaced by
+		// CheckPresetDrift. The baseline is the pristine embedded preset
+		// hash; templates/ is operator-editable and never consulted, so
+		// the check stays false-positive-free.
+		if err := WritePresetLock(Config.RootDir, initCmdFlags.preset); err != nil {
+			return err
+		}
+
 		// Print warning about secrets and key backup (only once, at the end, if key was created)
 		if keyWasCreated {
 			printSecretsWarning()
@@ -1414,6 +1423,14 @@ func updateTalmLibraryChart() error {
 					return err
 				}
 			}
+		}
+
+		// Advance the preset baseline to the refreshed preset so the drift
+		// warning clears: the operator has now reconciled against this
+		// binary's preset, even if they declined individual file diffs to
+		// keep local customizations.
+		if err := WritePresetLock(Config.RootDir, presetName); err != nil {
+			return err
 		}
 	}
 

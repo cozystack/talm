@@ -305,6 +305,21 @@ func hintsContain(err error, substr string) bool {
 	return false
 }
 
+// writeDriftedPresetProject materializes a project whose .talm-preset.lock
+// pins a baseline hash that cannot match the embedded cozystack preset, so
+// CheckPresetDrift reports drift (the older-binary-init scenario).
+func writeDriftedPresetProject(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	lock := "preset: cozystack\npresetHash: " + strings.Repeat("0", 64) + "\n"
+	if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatalf("write preset lock: %v", err)
+	}
+
+	return root
+}
+
 // TestEvaluateChartDrift pins the warn-vs-fail decision that drives the
 // user-facing behavior: strict mode aborts with a remediation hint,
 // non-strict drift warns without blocking, a dev build is silent even with
@@ -353,6 +368,69 @@ func TestEvaluateChartDrift(t *testing.T) {
 		warning, err := evaluateChartDrift("0.31.0", root, true)
 		if err != nil || warning != "" {
 			t.Errorf("a content-identical library must not drift on a version-only difference, got warning=%q err=%v", warning, err)
+		}
+	})
+}
+
+// TestEvaluatePresetDrift mirrors TestEvaluateChartDrift for the preset
+// baseline (.talm-preset.lock): strict mode aborts with a remediation hint,
+// non-strict drift warns without blocking, a dev build is silent, a
+// freshly-pinned preset never drifts, and a project with no lock is silent.
+func TestEvaluatePresetDrift(t *testing.T) {
+	t.Run("strict drift returns a hard error hinting at init --update", func(t *testing.T) {
+		root := writeDriftedPresetProject(t)
+
+		warning, err := evaluatePresetDrift("0.30.0", root, true)
+		if err == nil {
+			t.Fatal("expected a strict-mode error for a drifted preset")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+		if !hintsContain(err, "talm init --update --preset") {
+			t.Errorf("strict-mode error must hint at `talm init --update --preset`, hints: %v", errors.GetAllHints(err))
+		}
+	})
+
+	t.Run("non-strict drift warns without blocking", func(t *testing.T) {
+		root := writeDriftedPresetProject(t)
+
+		warning, err := evaluatePresetDrift("0.30.0", root, false)
+		if err != nil {
+			t.Fatalf("non-strict drift must not block the command: %v", err)
+		}
+		if !strings.Contains(warning, "preset") || !strings.Contains(warning, "cozystack") {
+			t.Errorf("expected a preset drift warning naming the preset, got %q", warning)
+		}
+	})
+
+	t.Run("dev build is silent even with drift present and strict set", func(t *testing.T) {
+		root := writeDriftedPresetProject(t)
+
+		warning, err := evaluatePresetDrift("dev", root, true)
+		if err != nil || warning != "" {
+			t.Errorf("dev build must be a no-op, got warning=%q err=%v", warning, err)
+		}
+	})
+
+	t.Run("freshly-pinned preset is silent under strict mode despite a newer binary version", func(t *testing.T) {
+		root := t.TempDir()
+		if err := commands.WritePresetLock(root, "cozystack"); err != nil {
+			t.Fatalf("WritePresetLock: %v", err)
+		}
+
+		warning, err := evaluatePresetDrift("0.31.0", root, true)
+		if err != nil || warning != "" {
+			t.Errorf("a freshly-pinned preset must not drift, got warning=%q err=%v", warning, err)
+		}
+	})
+
+	t.Run("project without a preset lock is silent", func(t *testing.T) {
+		root := t.TempDir()
+
+		warning, err := evaluatePresetDrift("0.30.0", root, true)
+		if err != nil || warning != "" {
+			t.Errorf("a project with no preset lock must be silent, got warning=%q err=%v", warning, err)
 		}
 	})
 }

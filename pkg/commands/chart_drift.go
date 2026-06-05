@@ -20,8 +20,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/cockroachdb/errors"
+	"gopkg.in/yaml.v3"
 
 	"github.com/cozystack/talm/pkg/generated"
 )
@@ -121,5 +123,132 @@ func CheckChartDrift(rootDir, binaryVersion string) (bool, string, error) {
 		"project's vendored charts/talm/ library differs from the copy built into talm %s; "+
 			"run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)",
 		binaryVersion,
+	), nil
+}
+
+// presetLockName is the project-root file that records the pristine preset a
+// project was generated from. Unlike charts/talm/ (vendored library, never
+// operator-edited, content-checked by CheckChartDrift), the preset templates
+// land in templates/ and ARE meant to be operator-edited — so they cannot be
+// content-checked without false-positiving on every customization. The lock
+// instead pins the hash of the preset AS SHIPPED at init time; drift is the
+// binary's current preset hash diverging from that pinned baseline, which is
+// independent of whatever the operator did to their templates/.
+const presetLockName = ".talm-preset.lock"
+
+// presetLockHeader is prepended to the written lock so an operator who opens
+// it understands it is machine-managed.
+const presetLockHeader = "# Managed by talm. Records the preset this project was generated from and the\n" +
+	"# content hash of that preset at init time, so talm can warn when the installed\n" +
+	"# binary ships a newer preset. Do not edit by hand; run\n" +
+	"# `talm init --update --preset <preset>` to refresh.\n"
+
+// presetLock is the on-disk shape of presetLockName.
+type presetLock struct {
+	Preset     string `yaml:"preset"`
+	PresetHash string `yaml:"presetHash"`
+}
+
+// embeddedPresetHash returns the content digest of the named preset as built
+// into this binary. PresetFiles() returns every preset keyed by a
+// "<preset>/..." path; the subset for one preset is hashed with those keys
+// intact, so the same call at init time (WritePresetLock) and at check time
+// (CheckPresetDrift) yields the same digest for an unchanged preset. Chart
+// metadata is already normalized by PresetFiles, so a pure version bump in
+// the preset's Chart.yaml is not seen as content drift — matching the
+// library check's contract. Returns an error when the preset is unknown to
+// this binary (no files carry its prefix).
+func embeddedPresetHash(preset string) (string, error) {
+	all, err := generated.PresetFiles()
+	if err != nil {
+		return "", errors.Wrap(err, "loading embedded preset files")
+	}
+
+	prefix := preset + "/"
+	subset := make(map[string]string)
+
+	for filePath, content := range all {
+		if strings.HasPrefix(filePath, prefix) {
+			subset[filePath] = content
+		}
+	}
+
+	if len(subset) == 0 {
+		//nolint:wrapcheck // origin error built in-function with cockroachdb/errors.Newf; nothing upstream to wrap.
+		return "", errors.Newf("unknown preset %q: no embedded files carry that prefix", preset)
+	}
+
+	return generated.HashChartFiles(subset), nil
+}
+
+// WritePresetLock pins the current pristine hash of preset into
+// rootDir/.talm-preset.lock. Called after `talm init` (and `init --update`)
+// has materialized the preset into the project, so a later binary upgrade
+// that changes the preset can be surfaced by CheckPresetDrift. The hash is of
+// the EMBEDDED preset, not the project's (possibly operator-edited) copy.
+func WritePresetLock(rootDir, preset string) error {
+	hash, err := embeddedPresetHash(preset)
+	if err != nil {
+		return err
+	}
+
+	body, err := yaml.Marshal(presetLock{Preset: preset, PresetHash: hash})
+	if err != nil {
+		return errors.Wrap(err, "marshaling preset lock")
+	}
+
+	dest := filepath.Join(rootDir, presetLockName)
+	if err := os.WriteFile(dest, append([]byte(presetLockHeader), body...), presetFileMode); err != nil {
+		return errors.Wrapf(err, "writing preset lock %q", dest)
+	}
+
+	return nil
+}
+
+// CheckPresetDrift reports whether the preset built into this talm binary has
+// changed since the project was generated, by comparing the binary's current
+// preset hash against the baseline pinned in rootDir/.talm-preset.lock at
+// init time.
+//
+// It stays silent — (false, "", nil) — for a project with no lock file (one
+// generated before preset pinning existed, or never init'd from a preset):
+// there is no baseline to compare, and inventing drift would nag every such
+// project. binaryVersion is used only for the operator-facing message.
+//
+// Crucially this never reads the project's templates/, so operator edits to
+// the rendered preset are NOT drift: the baseline is the pristine preset hash
+// at init, and the comparison is binary-now vs that baseline.
+func CheckPresetDrift(rootDir, binaryVersion string) (bool, string, error) {
+	data, err := os.ReadFile(filepath.Join(rootDir, presetLockName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "", nil
+		}
+
+		return false, "", errors.Wrapf(err, "reading preset lock in %q", rootDir)
+	}
+
+	var lock presetLock
+	if err := yaml.Unmarshal(data, &lock); err != nil {
+		return false, "", errors.Wrap(err, "parsing preset lock")
+	}
+
+	if lock.Preset == "" || lock.PresetHash == "" {
+		return false, "", errors.New("preset lock is missing preset or presetHash")
+	}
+
+	current, err := embeddedPresetHash(lock.Preset)
+	if err != nil {
+		return false, "", err
+	}
+
+	if current == lock.PresetHash {
+		return false, "", nil
+	}
+
+	return true, fmt.Sprintf(
+		"project's %s preset differs from the copy built into talm %s; "+
+			"run `talm init --update --preset %s` to pull the new preset defaults (your templates/ edits are preserved via the interactive diff)",
+		lock.Preset, binaryVersion, lock.Preset,
 	), nil
 }

@@ -261,6 +261,23 @@ The remediation needs the preset name because `talm init --update` resolves the 
 
 Teams that want this enforced can turn the warning into a hard error (exit 1): set `strictCharts: true` in `Chart.yaml` so the whole team and CI inherit it, or pass `--strict-charts` for a single run. Strict mode applies to every config-loading command, including read-only ones such as `talm get` — run `talm init --update --preset <preset>`, or drop the flag / unset `strictCharts`, to unblock. The check stays silent for `dev`/source builds, whose embedded charts are a moving target the developer controls.
 
+### Preset drift
+
+The vendored library (`charts/talm/`) is not the whole story. `talm init` also copies the **preset** — the `templates/` that render your machine config (sysctls, etcd args, the cozystack opinions) — into the project, and those you are *expected* to edit. That makes content comparison the wrong tool: it would flag every legitimate customization. So the preset is tracked differently. At `init` (and `init --update`) time talm pins the hash of the preset **as shipped** into `.talm-preset.lock`:
+
+```yaml
+preset: cozystack
+presetHash: <hash of the preset built into the binary at init time>
+```
+
+A release build then compares the binary's *current* preset hash against that pinned baseline — never against your edited `templates/` — so operator customizations are never reported as drift. When a newer binary ships changed preset defaults, the baseline no longer matches and talm warns:
+
+```text
+WARN: project's cozystack preset differs from the copy built into talm <version>; run `talm init --update --preset cozystack` to pull the new preset defaults (your templates/ edits are preserved via the interactive diff)
+```
+
+`talm init --update --preset <preset>` shows you an interactive diff of the new preset against your `templates/`, lets you merge what you want, and advances the baseline — which clears the warning even if you decline individual diffs to keep your customizations. `--strict-charts` / `strictCharts: true` escalate this to a hard error exactly as for the library. Projects with no `.talm-preset.lock` (generated before preset pinning) stay silent — there is no baseline to compare. Commit `.talm-preset.lock` so the baseline is shared across your team.
+
 ## Apply with side-patches
 
 `talm apply -f` accepts a chain of files. The FIRST `-f` is the **anchor** — it must carry a `# talm: nodes=[…], templates=[…]` modeline and live under a `talm init`'d project (Chart.yaml + secrets.yaml). Any subsequent `-f` files are **side-patches**: they are merged in order on top of the anchor's rendered config, and a single `ApplyConfiguration` is issued per node carrying the composed result.

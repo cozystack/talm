@@ -158,3 +158,105 @@ func TestCheckChartDrift_MissingVendoredDir_NoDriftNoError(t *testing.T) {
 		t.Errorf("reported drift with no vendored library to compare: %s", msg)
 	}
 }
+
+// === preset drift (.talm-preset.lock) ===
+
+// TestPresetLock_RoundTrip_NoDrift pins the happy path: WritePresetLock pins
+// the current embedded preset hash, and CheckPresetDrift against the same
+// binary reports no drift.
+func TestPresetLock_RoundTrip_NoDrift(t *testing.T) {
+	root := t.TempDir()
+	if err := WritePresetLock(root, "cozystack"); err != nil {
+		t.Fatalf("WritePresetLock: %v", err)
+	}
+
+	drift, msg, err := CheckPresetDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckPresetDrift: %v", err)
+	}
+	if drift {
+		t.Errorf("reported preset drift for a freshly-pinned lock: %s", msg)
+	}
+}
+
+// TestCheckPresetDrift_StaleBaseline_Drift simulates a project pinned by an
+// older binary whose preset content differs: the lock carries a baseline
+// hash that no longer matches the embedded preset, which is real drift and
+// must point the operator at `talm init --update --preset <preset>`.
+func TestCheckPresetDrift_StaleBaseline_Drift(t *testing.T) {
+	root := t.TempDir()
+	// A baseline hash that cannot match the embedded cozystack preset.
+	lock := "preset: cozystack\npresetHash: 0000000000000000000000000000000000000000000000000000000000000000\n"
+	if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	drift, msg, err := CheckPresetDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckPresetDrift: %v", err)
+	}
+	if !drift {
+		t.Fatal("did not detect drift against a stale preset baseline")
+	}
+	if !strings.Contains(msg, "talm init --update --preset cozystack") {
+		t.Errorf("drift message must point at `talm init --update --preset cozystack`; got %q", msg)
+	}
+}
+
+// TestCheckPresetDrift_NoLock_Silent pins that a project with no
+// .talm-preset.lock (generated before preset pinning, or never init'd from a
+// preset) is silent — no baseline, no nag.
+func TestCheckPresetDrift_NoLock_Silent(t *testing.T) {
+	root := t.TempDir()
+
+	drift, msg, err := CheckPresetDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckPresetDrift returned an error with no lock: %v", err)
+	}
+	if drift {
+		t.Errorf("reported preset drift with no baseline lock: %s", msg)
+	}
+}
+
+// TestCheckPresetDrift_OperatorEditedTemplates_NoDrift is the core
+// false-positive guard and the whole reason the preset check is
+// baseline-hash-based rather than content-based: the operator is EXPECTED to
+// edit templates/, and that must never be reported as preset drift. The lock
+// pins the pristine embedded hash; editing the project's templates/ leaves it
+// untouched, so the check stays silent.
+func TestCheckPresetDrift_OperatorEditedTemplates_NoDrift(t *testing.T) {
+	root := t.TempDir()
+	if err := WritePresetLock(root, "cozystack"); err != nil {
+		t.Fatalf("WritePresetLock: %v", err)
+	}
+
+	tmpl := filepath.Join(root, "templates")
+	if err := os.MkdirAll(tmpl, 0o755); err != nil {
+		t.Fatalf("mkdir templates: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, "_helpers.tpl"), []byte("{{- /* heavily customized by the operator */ -}}\n"), 0o644); err != nil {
+		t.Fatalf("write operator template: %v", err)
+	}
+
+	drift, msg, err := CheckPresetDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckPresetDrift: %v", err)
+	}
+	if drift {
+		t.Errorf("operator edits to templates/ were misreported as preset drift: %s", msg)
+	}
+}
+
+// TestWritePresetLock_UnknownPreset_Errors pins that pinning a preset the
+// binary does not ship fails loudly rather than writing an empty baseline.
+func TestWritePresetLock_UnknownPreset_Errors(t *testing.T) {
+	root := t.TempDir()
+
+	err := WritePresetLock(root, "does-not-exist")
+	if err == nil {
+		t.Fatal("expected an error pinning an unknown preset, got nil")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("error should name the offending preset; got: %v", err)
+	}
+}
