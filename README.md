@@ -226,6 +226,41 @@ talm template -f nodes/node1.yaml -I
 >
 > `talm template -f node.yaml` (with or without `-I`) does **not** apply the same overlay: its output is the rendered template plus the modeline and the auto-generated warning, byte-identical to what the template alone would produce. Routing it through the patcher would drop every YAML comment (including the modeline) and re-sort keys, breaking downstream commands that read the file back. Use `apply --dry-run` if you want to preview the exact bytes that will be sent to the node.
 
+## Keeping charts in sync after a binary upgrade
+
+`talm init` **vendors** its preset and library charts into the project directory — the preset templates plus a copy of the talm library chart under `charts/talm/`:
+
+```text
+mycluster/
+├── Chart.yaml
+├── values.yaml
+├── templates/          # preset templates — you own and edit these
+└── charts/
+    └── talm/           # talm library chart — vendored from the binary
+        ├── Chart.yaml
+        └── templates/_helpers.tpl
+```
+
+Render commands (`template`, `apply`, `upgrade`) read this **local** copy, never the binary's built-in charts. That makes a project self-contained and reproducible — but it also means upgrading the `talm` binary does not touch `charts/talm/`. The vendored library stays frozen at whatever version last ran `init`, so a binary upgrade can leave you rendering with stale chart logic.
+
+Re-sync the vendored library with `talm init --update`:
+
+```bash
+talm init --update --preset <your-preset>
+```
+
+This refreshes `charts/talm/` (always) and offers to update the preset templates (interactively, since you may have edited them). Your `values.yaml`, secrets, and node files are left untouched.
+
+To catch drift automatically, a release build compares the vendored `charts/talm/` against its own built-in copy on every config-loading command. The comparison is by **content**, not version number — re-vendoring after a binary bump that did not change the library is a no-op and raises no warning. When the content genuinely differs, talm prints a non-fatal warning to stderr (stdout and the exit code are unchanged):
+
+```text
+WARN: project's vendored charts/talm/ library differs from the copy built into talm <version>; run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)
+```
+
+The remediation needs the preset name because `talm init --update` resolves the preset from `Chart.yaml`, which an init'd project does not record — pass `--preset <your-preset>` (the one you ran `talm init` with) explicitly.
+
+Teams that want this enforced can turn the warning into a hard error (exit 1): set `strictCharts: true` in `Chart.yaml` so the whole team and CI inherit it, or pass `--strict-charts` for a single run. Strict mode applies to every config-loading command, including read-only ones such as `talm get` — run `talm init --update --preset <preset>`, or drop the flag / unset `strictCharts`, to unblock. The check stays silent for `dev`/source builds, whose embedded charts are a moving target the developer controls.
+
 ## Apply with side-patches
 
 `talm apply -f` accepts a chain of files. The FIRST `-f` is the **anchor** — it must carry a `# talm: nodes=[…], templates=[…]` modeline and live under a `talm init`'d project (Chart.yaml + secrets.yaml). Any subsequent `-f` files are **side-patches**: they are merged in order on top of the anchor's rendered config, and a single `ApplyConfiguration` is issued per node carrying the composed result.

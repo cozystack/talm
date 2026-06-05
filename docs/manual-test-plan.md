@@ -222,11 +222,39 @@ Expected: `Updated.` on stdout. The rendered body replaces the previous body of 
 
 Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator note B\n# talm: ...\n<body>`. After `template -I -f nodes/node0.yaml`, the first two lines (`# Operator note A`, `# Operator note B`) MUST still be there, followed by the modeline, the talm-rendered warning header, then the body. Re-run idempotent: a second `template -I` keeps the same prefix structure — leading comments don't drift, multiply, or disappear.
 
-### B5. Render with stale chart preset
+### B5. Render with stale chart preset (chart-drift detection)
 
-When the local `charts/talm/` is older than the talm binary's embedded preset, `talm template` succeeds against the local preset — it does NOT auto-bump. The operator must run `init --update`. Confirm by inspecting `talm version` against `Chart.yaml`.
+`talm` vendors its library chart into `charts/talm/` at `init` time; render commands read that local copy, never the binary's embedded charts. Upgrading the binary therefore leaves `charts/talm/` frozen at the version that last ran `init`. A release build surfaces this drift by **content** — the `Chart.yaml` version stamp is normalized away, so a pure version bump is never flagged.
 
-**Regression anchor**: `template -I` is rewrite, not merge — verify by adding a `# my comment` line above the modeline in `nodes/node0.yaml`, running B4, and confirming the comment is GONE in the new body. If the comment survives, a behaviour change shipped (could be either an intentional new `--preserve-comments` flag or an undocumented merge mode — neither should appear silently).
+Simulate drift by editing the vendored library, then render:
+
+```bash
+printf '\n{{- /* stale edit */ -}}\n' >> charts/talm/templates/_helpers.tpl
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:'
+```
+
+Expected (default): a single line on **stderr** — `WARN: project's vendored charts/talm/ library differs from the copy built into talm <version>; run talm init --update --preset <preset> to re-sync ...` — while stdout (the rendered config) and the exit code are unchanged. Clear it and re-confirm silence:
+
+```bash
+talm init --update --preset generic --force
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:' && echo "FAIL: drift not cleared" || echo "OK: drift cleared"
+```
+
+The `--preset` is required: `talm init --update` alone resolves the preset from `Chart.yaml`, which an init'd project does not record, so it errors with "preset not found in Chart.yaml dependencies" (pinned by A8) and never re-vendors. Expected: `OK: drift cleared`.
+
+Strict mode turns the same drift into a hard error (exit 1) raised before the command body runs. Opt in per project via `strictCharts: true` in `Chart.yaml`, or per invocation via `--strict-charts`:
+
+```bash
+talm template -f nodes/node0.yaml --offline --strict-charts; echo "exit=$?"
+```
+
+Expected: exit 1, the drift message plus a hint pointing at `talm init --update --preset <preset>`, and no rendered output — the command body never runs (no modeline/render errors follow the hint).
+
+No-false-alarm checks — each MUST stay silent (no `WARN:` line):
+
+- A project vendored by an older release, run under a newer binary whose `charts/talm/` is byte-identical: the version stamp differs but the content does not.
+- A `dev`/source build: its embedded charts are a moving target the developer controls, so the check is a no-op.
+- A freshly synced project (`talm init --update --preset <preset>`) under the matching binary.
 
 ### B6. Scope-filter symmetry across v1.11 and v1.12 renders
 
