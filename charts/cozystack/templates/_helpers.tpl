@@ -58,9 +58,43 @@ machine:
       {{- toYaml . | nindent 6 }}
       {{- end }}
   {{- /* extraSysctls MUST NOT collide with the preset's built-in
-         sysctls; same rationale as extraKubeletExtraArgs. */ -}}
+         sysctls; same rationale as extraKubeletExtraArgs. $builtinSysctls
+         is the single source of truth for the preset-owned keys — keep
+         it in sync with the literal sysctls block rendered further down.
+
+         Always-on DRBD/LINSTOR tuning: Cozystack always runs DRBD (the
+         drbd module is loaded unconditionally below), and these knobs
+         resolve the TCP-port exhaustion the Cozystack team observed on
+         production clusters under DRBD reconnect storms (node reboots,
+         resync). tcp_orphan_retries/tcp_fin_timeout speed up reclamation
+         of orphaned and FIN-WAIT sockets so a reconnect storm cannot
+         outrun cleanup; netdev_* widen the receive backlog so bursty
+         replication traffic isn't dropped under load.
+
+         vm.nr_hugepages is treated as preset-owned even when its gate
+         (.Values.nr_hugepages) is inactive, so operators always route it
+         through the dedicated `nr_hugepages` key. The tcp_keepalive_*
+         triplet is preset-owned only while .Values.tcpKeepaliveTuning is
+         set (see below), so it can be operator-supplied via extraSysctls
+         when the toggle is off. */ -}}
+  {{- $builtinSysctls := list
+        "vm.nr_hugepages"
+        "net.ipv4.neigh.default.gc_thresh1"
+        "net.ipv4.neigh.default.gc_thresh2"
+        "net.ipv4.neigh.default.gc_thresh3"
+        "net.ipv4.tcp_orphan_retries"
+        "net.ipv4.tcp_fin_timeout"
+        "net.core.netdev_max_backlog"
+        "net.core.netdev_budget"
+        "net.core.netdev_budget_usecs" }}
+  {{- if $.Values.tcpKeepaliveTuning }}
+  {{- $builtinSysctls = concat $builtinSysctls (list
+        "net.ipv4.tcp_keepalive_time"
+        "net.ipv4.tcp_keepalive_intvl"
+        "net.ipv4.tcp_keepalive_probes") }}
+  {{- end }}
   {{- range $k, $_ := .Values.extraSysctls }}
-    {{- if or (eq $k "vm.nr_hugepages") (eq $k "net.ipv4.neigh.default.gc_thresh1") (eq $k "net.ipv4.neigh.default.gc_thresh2") (eq $k "net.ipv4.neigh.default.gc_thresh3") }}
+    {{- if has $k $builtinSysctls }}
       {{- fail (printf "values.yaml: extraSysctls.%s collides with the cozystack preset's built-in machine.sysctls — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraSysctls, or fork the chart preset if you need a different default." $k) }}
     {{- end }}
   {{- end }}
@@ -71,6 +105,16 @@ machine:
     net.ipv4.neigh.default.gc_thresh1: "4096"
     net.ipv4.neigh.default.gc_thresh2: "8192"
     net.ipv4.neigh.default.gc_thresh3: "16384"
+    net.ipv4.tcp_orphan_retries: "3"
+    net.ipv4.tcp_fin_timeout: "30"
+    net.core.netdev_max_backlog: "5000"
+    net.core.netdev_budget: "600"
+    net.core.netdev_budget_usecs: "8000"
+    {{- if $.Values.tcpKeepaliveTuning }}
+    net.ipv4.tcp_keepalive_time: "600"
+    net.ipv4.tcp_keepalive_intvl: "10"
+    net.ipv4.tcp_keepalive_probes: "6"
+    {{- end }}
     {{- with .Values.extraSysctls }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -187,6 +231,20 @@ cluster:
       - {{ . }}
       {{- end }}
       {{- end }}
+    {{- /* etcd backend quota, tunable via values. Raises etcd's 2GiB
+           default backend ceiling so a LINSTOR-heavy control plane —
+           thousands of DRBD-resource CRDs in aggregate — does not trip
+           etcd's NOSPACE alarm and drop into read-only mode. This is a
+           ceiling, not a reservation: a small cluster's DB stays small
+           and costs no extra RAM/disk. 8GiB is etcd's documented upper
+           bound (it warns above that). Blank the value to fall back to
+           etcd's own default. Note: this governs total DB size, not the
+           size of any single object — per-object writes are still gated
+           by kube-apiserver's fixed 3MiB request-body limit. */ -}}
+    {{- with (.Values.etcd | default dict).quotaBackendBytes }}
+    extraArgs:
+      quota-backend-bytes: {{ . | quote }}
+    {{- end }}
   {{- end }}
 {{- end }}
 

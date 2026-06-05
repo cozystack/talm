@@ -441,6 +441,11 @@ func TestContract_Machine_ExtraSysctls_Cozystack_RejectsCollisionWithBuiltin(t *
 		"net.ipv4.neigh.default.gc_thresh1",
 		"net.ipv4.neigh.default.gc_thresh2",
 		"net.ipv4.neigh.default.gc_thresh3",
+		"net.ipv4.tcp_orphan_retries",
+		"net.ipv4.tcp_fin_timeout",
+		"net.core.netdev_max_backlog",
+		"net.core.netdev_budget",
+		"net.core.netdev_budget_usecs",
 	}
 	for _, key := range cases {
 		t.Run(key, func(t *testing.T) {
@@ -460,6 +465,111 @@ func TestContract_Machine_ExtraSysctls_Cozystack_RejectsCollisionWithBuiltin(t *
 			if !strings.Contains(msg, "extraSysctls") {
 				t.Errorf("error message must name the offending values key extraSysctls; got: %v", err)
 			}
+		})
+	}
+}
+
+// Contract: cozystack ships five always-on DRBD/LINSTOR network sysctls.
+// These resolve TCP-port exhaustion observed on production clusters
+// under DRBD reconnect storms: tcp_orphan_retries/tcp_fin_timeout speed
+// reclamation of orphaned and FIN-WAIT sockets, netdev_* widen the
+// receive backlog. All values are quoted strings (Talos sysctls API
+// requires string-typed values). Unlike the tcp_keepalive_* triplet,
+// these carry no node-wide blast radius and are not gated.
+func TestContract_Machine_Sysctls_DRBDTuning_Cozystack(t *testing.T) {
+	for _, cell := range cozystackCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertContains(t, out, `net.ipv4.tcp_orphan_retries: "3"`)
+			assertContains(t, out, `net.ipv4.tcp_fin_timeout: "30"`)
+			assertContains(t, out, `net.core.netdev_max_backlog: "5000"`)
+			assertContains(t, out, `net.core.netdev_budget: "600"`)
+			assertContains(t, out, `net.core.netdev_budget_usecs: "8000"`)
+		})
+	}
+}
+
+// Contract: the tcp_keepalive_* triplet is opt-in and absent by default
+// (values.tcpKeepaliveTuning: false). These sysctls are kernel-wide —
+// they change failure detection for every idle TCP socket on the node,
+// not just DRBD — so a regression that always emitted them would
+// silently shorten idle timeouts cluster-wide.
+func TestContract_Machine_Sysctls_TCPKeepalive_AbsentByDefault_Cozystack(t *testing.T) {
+	for _, cell := range cozystackCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertNotContains(t, out, "tcp_keepalive")
+		})
+	}
+}
+
+// Contract: when an operator opts in via tcpKeepaliveTuning, cozystack
+// emits the three keepalive sysctls as quoted strings.
+func TestContract_Machine_Sysctls_TCPKeepalive_PresentWhenEnabled_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"tcpKeepaliveTuning": true,
+	})
+	assertContains(t, out, `net.ipv4.tcp_keepalive_time: "600"`)
+	assertContains(t, out, `net.ipv4.tcp_keepalive_intvl: "10"`)
+	assertContains(t, out, `net.ipv4.tcp_keepalive_probes: "6"`)
+}
+
+// Contract: while tcpKeepaliveTuning is off (the default) the keepalive
+// keys are NOT preset-owned, so an operator may supply them via
+// extraSysctls without tripping the collision guard. The operator value
+// renders as the sole keepalive entry.
+func TestContract_Machine_Sysctls_TCPKeepalive_OperatorSettableWhenDisabled_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"extraSysctls": map[string]any{
+			"net.ipv4.tcp_keepalive_time": "1200",
+		},
+	})
+	sysctls := decodeMachineSysctls(t, out)
+	if got, want := sysctls["net.ipv4.tcp_keepalive_time"], "1200"; got != want {
+		t.Errorf("operator keepalive sysctl: got %v, want %v", got, want)
+	}
+}
+
+// Contract: once tcpKeepaliveTuning is on, the keepalive keys become
+// preset-owned and an extraSysctls collision on them MUST fail render —
+// otherwise yaml.v3 would reject the duplicate map key on decode.
+func TestContract_Machine_Sysctls_TCPKeepalive_RejectsCollisionWhenEnabled_Cozystack(t *testing.T) {
+	for _, key := range []string{
+		"net.ipv4.tcp_keepalive_time",
+		"net.ipv4.tcp_keepalive_intvl",
+		"net.ipv4.tcp_keepalive_probes",
+	} {
+		t.Run(key, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets":  []any{testAdvertisedSubnet},
+				"tcpKeepaliveTuning": true,
+				"extraSysctls": map[string]any{
+					key: "operator-value",
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected render error for collision on key %q, got nil", key)
+			}
+			if msg := err.Error(); !strings.Contains(msg, key) || !strings.Contains(msg, "extraSysctls") {
+				t.Errorf("error must name key %q and extraSysctls; got: %v", key, err)
+			}
+		})
+	}
+}
+
+// Contract: the generic preset carries none of cozystack's DRBD sysctl
+// opinions. A regression that leaked the cozystack tuning into the
+// generic helper would surface here.
+func TestContract_Machine_Sysctls_DRBDTuning_AbsentOnGeneric(t *testing.T) {
+	for _, cell := range genericCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertNotContains(t, out, "tcp_orphan_retries")
+			assertNotContains(t, out, "tcp_fin_timeout")
+			assertNotContains(t, out, "netdev_max_backlog")
+			assertNotContains(t, out, "tcp_keepalive")
 		})
 	}
 }

@@ -277,7 +277,7 @@ Expected:
 
 - `.machine.kernel.modules` lists the built-in six (`openvswitch`, `drbd` with `usermode_helper=disabled`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
 - `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
-- `.machine.sysctls` carries the built-in `gc_thresh1/2/3` and `vm.nr_hugepages` (when set) AND `net.core.somaxconn`. Same rejection-on-collision rule.
+- `.machine.sysctls` carries the built-in `gc_thresh1/2/3`, the always-on DRBD tuning (`net.ipv4.tcp_orphan_retries`, `net.ipv4.tcp_fin_timeout`, `net.core.netdev_max_backlog`, `net.core.netdev_budget`, `net.core.netdev_budget_usecs`), `vm.nr_hugepages` (when set), AND `net.core.somaxconn`. Same rejection-on-collision rule (the DRBD keys are preset-owned too). See B9 for the keepalive triplet and etcd quota.
 - `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
 
 Verify the rejection path explicitly. Set an operator key that collides with a built-in (e.g. `extraSysctls: { "net.ipv4.neigh.default.gc_thresh1": "9000" }`) and re-render:
@@ -315,6 +315,51 @@ fi
 Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`, `extraConfig: {}`) shows up as a non-`null` value and trips the FAIL branch.
 
 Regression anchor: contract tests `TestContract_Machine_Extra*_Generic_NonEmptyEmitsBlock` pin the on-state for each block; `TestContract_Machine_NoCozystackOpinionsOnGeneric` pins the off-state at default values. A regression that emits an empty `modules: []` / `sysctls: {}` / `files: []` block in the default render would fail the latter.
+
+### B9. DRBD sysctl tuning, opt-in TCP keepalive, and etcd backend quota (cozystack)
+
+The cozystack preset ships always-on DRBD/LINSTOR network sysctls, an opt-in aggressive TCP-keepalive triplet, and a tunable etcd backend quota. Render the cozystack controlplane preset at defaults:
+
+```bash
+talm template -f nodes/controlplane-0.yaml > /tmp/render.yaml
+yq '.machine.sysctls' /tmp/render.yaml
+yq '.cluster.etcd' /tmp/render.yaml
+```
+
+Expected at defaults:
+
+- `.machine.sysctls` includes `net.ipv4.tcp_orphan_retries: "3"`, `net.ipv4.tcp_fin_timeout: "30"`, `net.core.netdev_max_backlog: "5000"`, `net.core.netdev_budget: "600"`, `net.core.netdev_budget_usecs: "8000"` (always on).
+- `.machine.sysctls` does NOT contain any `net.ipv4.tcp_keepalive_*` key — the triplet is opt-in (`tcpKeepaliveTuning: false` by default).
+- `.cluster.etcd.extraArgs.quota-backend-bytes` is `"8589934592"` (8 GiB) on a controlplane render.
+
+Render the worker preset (`yq '.cluster.etcd' /tmp/render-worker.yaml` → `null`): the whole `etcd` block, and thus `quota-backend-bytes`, is controlplane-only.
+
+Enable the keepalive triplet and lower the etcd quota:
+
+```yaml
+# values.yaml additions:
+tcpKeepaliveTuning: true
+etcd:
+  quotaBackendBytes: "2147483648"   # 2 GiB
+```
+
+Re-render and verify:
+
+- `.machine.sysctls` now also carries `net.ipv4.tcp_keepalive_time: "600"`, `net.ipv4.tcp_keepalive_intvl: "10"`, `net.ipv4.tcp_keepalive_probes: "6"`.
+- `.cluster.etcd.extraArgs.quota-backend-bytes` is now `"2147483648"`.
+
+Blank the quota to fall back to etcd's own default:
+
+```bash
+# values.yaml: etcd: { quotaBackendBytes: "" }
+talm template -f nodes/controlplane-0.yaml | yq '.cluster.etcd.extraArgs'
+```
+
+Expected: `null` — a blank quota omits the `extraArgs` block entirely rather than emitting an empty value.
+
+Collision check: with `tcpKeepaliveTuning: true`, set `extraSysctls: { "net.ipv4.tcp_keepalive_time": "1200" }` and re-render — the render fails with the `collides with the cozystack preset's built-in machine.sysctls` error (the keepalive keys become preset-owned once the toggle is on). With `tcpKeepaliveTuning: false`, the same `extraSysctls` entry is accepted and renders as the sole keepalive sysctl.
+
+Regression anchor: `TestContract_Machine_Sysctls_DRBDTuning_Cozystack`, `TestContract_Machine_Sysctls_TCPKeepalive_*`, and `TestContract_Cluster_Etcd_QuotaBackendBytes_*` pin every branch above; `TestContract_Machine_Sysctls_DRBDTuning_AbsentOnGeneric` / `TestContract_Cluster_Etcd_QuotaBackendBytes_AbsentOnGeneric` pin that the generic preset stays free of these opinions.
 
 ## C. Apply (auth path)
 

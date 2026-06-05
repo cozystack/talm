@@ -220,6 +220,7 @@ func TestContract_Cluster_NoControlplaneBlocksOnWorker(t *testing.T) {
 			assertNotContains(t, out, "controllerManager:")
 			assertNotContains(t, out, "scheduler:")
 			assertNotContains(t, out, "etcd:")
+			assertNotContains(t, out, "quota-backend-bytes")
 			assertNotContains(t, out, "allowSchedulingOnControlPlanes")
 			assertNotContains(t, out, "proxy:")
 			assertNotContains(t, out, "discovery:")
@@ -367,6 +368,64 @@ func TestContract_Cluster_DiscoveryDisabled_Cozystack(t *testing.T) {
 			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
 			assertContains(t, out, "discovery:")
 			assertContains(t, out, "enabled: false")
+		})
+	}
+}
+
+// Contract: cozystack control-plane nodes raise etcd's backend quota to
+// 8GiB (values.etcd.quotaBackendBytes default) via etcd.extraArgs. This
+// lifts etcd's own 2GiB ceiling so a LINSTOR-heavy cluster doesn't trip
+// the NOSPACE alarm. Quoted string (Talos etcd extraArgs are string
+// maps). Controlplane only — the block sits inside the controlplane
+// guard, so worker configs never carry it.
+func TestContract_Cluster_Etcd_QuotaBackendBytes_Default_Cozystack(t *testing.T) {
+	for _, cell := range cozystackControlplaneCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertContains(t, out, "etcd:")
+			assertContains(t, out, "extraArgs:")
+			assertContains(t, out, `quota-backend-bytes: "8589934592"`)
+		})
+	}
+}
+
+// Contract: the quota is tunable — an operator override on
+// etcd.quotaBackendBytes renders verbatim, so a small cluster can lower
+// the ceiling (or a larger one raise it) without forking the chart.
+func TestContract_Cluster_Etcd_QuotaBackendBytes_Tunable_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"etcd": map[string]any{
+			"quotaBackendBytes": "2147483648",
+		},
+	})
+	assertContains(t, out, `quota-backend-bytes: "2147483648"`)
+	assertNotContains(t, out, `quota-backend-bytes: "8589934592"`)
+}
+
+// Contract: blanking etcd.quotaBackendBytes omits the extraArg entirely
+// (falls back to etcd's built-in default) rather than emitting an empty
+// or malformed value. The whole etcd.extraArgs block is gated on a
+// non-empty quota.
+func TestContract_Cluster_Etcd_QuotaBackendBytes_OmittedWhenBlank_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"etcd": map[string]any{
+			"quotaBackendBytes": "",
+		},
+	})
+	assertContains(t, out, "etcd:")
+	assertNotContains(t, out, "quota-backend-bytes")
+}
+
+// Contract: the generic preset carries no etcd quota opinion — a
+// regression that leaked the cozystack default into the generic helper
+// would surface here.
+func TestContract_Cluster_Etcd_QuotaBackendBytes_AbsentOnGeneric(t *testing.T) {
+	for _, cell := range genericControlplaneCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertNotContains(t, out, "quota-backend-bytes")
 		})
 	}
 }

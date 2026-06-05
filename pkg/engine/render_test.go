@@ -236,6 +236,9 @@ func TestLegacyCozystack_ControlPlane(t *testing.T) {
 
 	// Legacy format: cozystack-specific sections present
 	assertContains(t, output, "sysctls:")
+	assertContains(t, output, `net.ipv4.tcp_orphan_retries: "3"`)
+	assertContains(t, output, `net.core.netdev_max_backlog: "5000"`)
+	assertNotContains(t, output, "tcp_keepalive") // opt-in, off by default
 	assertContains(t, output, "kernel:")
 	assertContains(t, output, "kubelet:")
 	assertContains(t, output, "certSANs:")
@@ -244,6 +247,7 @@ func TestLegacyCozystack_ControlPlane(t *testing.T) {
 	// Legacy format: controlplane-specific settings
 	assertContains(t, output, "allowSchedulingOnControlPlanes:")
 	assertContains(t, output, "etcd:")
+	assertContains(t, output, `quota-backend-bytes: "8589934592"`)
 	assertContains(t, output, "proxy:")
 
 	// Legacy format: no v1.12 multi-doc types
@@ -333,6 +337,9 @@ func TestMultiDocCozystack_ControlPlane(t *testing.T) {
 	assertContains(t, output, "type: controlplane")
 	assertContains(t, output, "kubelet:")
 	assertContains(t, output, "sysctls:")
+	assertContains(t, output, `net.ipv4.tcp_orphan_retries: "3"`)
+	assertContains(t, output, `net.core.netdev_max_backlog: "5000"`)
+	assertNotContains(t, output, "tcp_keepalive") // opt-in, off by default
 	assertContains(t, output, "kernel:")
 	assertContains(t, output, "certSANs:")
 	assertContains(t, output, "install:")
@@ -348,6 +355,7 @@ func TestMultiDocCozystack_ControlPlane(t *testing.T) {
 	assertContains(t, output, "controlPlane:")
 	assertContains(t, output, "allowSchedulingOnControlPlanes:")
 	assertContains(t, output, "etcd:")
+	assertContains(t, output, `quota-backend-bytes: "8589934592"`)
 	assertContains(t, output, "proxy:")
 
 	// Multi-doc: new document types present
