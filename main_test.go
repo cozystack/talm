@@ -8,7 +8,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/cozystack/talm/pkg/commands"
+	"github.com/cozystack/talm/pkg/generated"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // buildCommandHierarchy creates a cobra command hierarchy from a path like
@@ -217,6 +219,144 @@ func TestRegisterRootFlags_NodesHasNoShorthand(t *testing.T) {
 	}
 }
 
+// TestRegisterRootFlags_StrictChartsRendersWithoutValuePlaceholder pins that
+// --strict-charts renders in --help as a plain bool flag, not as one taking
+// an argument. pflag's UnquoteUsage treats the first backtick-quoted word in
+// a flag's usage string as the flag's value-placeholder name; a backtick in
+// the --strict-charts usage made --help show `--strict-charts talm init
+// --update`, as if the bool flag took a string argument.
+func TestRegisterRootFlags_StrictChartsRendersWithoutValuePlaceholder(t *testing.T) {
+	snapshotConfigState(t)
+
+	cmd := &cobra.Command{Use: "talm-test"}
+	registerRootFlags(cmd)
+
+	flag := cmd.PersistentFlags().Lookup("strict-charts")
+	if flag == nil {
+		t.Fatal("expected --strict-charts to be registered, got nil")
+	}
+
+	name, _ := pflag.UnquoteUsage(flag)
+	if name != "" {
+		t.Errorf("--strict-charts (a bool flag) renders with value placeholder %q; remove backticks from its usage string", name)
+	}
+}
+
+// writeDriftedTalmProject creates a project whose vendored charts/talm/
+// cannot match the binary's embedded library (the helpers template carries
+// a local edit), so CheckChartDrift reports drift.
+func writeDriftedTalmProject(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "charts", "talm", "templates")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "charts", "talm", "Chart.yaml"),
+		[]byte("apiVersion: v2\nname: talm\nversion: 0.30.0\ntype: library\n"), 0o644); err != nil {
+		t.Fatalf("write Chart.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "_helpers.tpl"),
+		[]byte("{{- /* drifted local edit, not the embedded copy */ -}}\n"), 0o644); err != nil {
+		t.Fatalf("write helpers: %v", err)
+	}
+
+	return root
+}
+
+// writeMatchingTalmProject materializes a vendored charts/talm/ that is
+// byte-identical to the embedded library (stamping version into Chart.yaml),
+// so CheckChartDrift reports no drift.
+func writeMatchingTalmProject(t *testing.T, version string) string {
+	t.Helper()
+
+	files, err := generated.TalmLibraryFiles()
+	if err != nil {
+		t.Fatalf("TalmLibraryFiles: %v", err)
+	}
+
+	root := t.TempDir()
+	for rel, content := range files {
+		if filepath.Base(rel) == "Chart.yaml" {
+			content = strings.ReplaceAll(content, "name: %s", "name: talm")
+			content = strings.ReplaceAll(content, "version: %s", "version: "+version)
+		}
+
+		dest := filepath.Join(root, "charts", "talm", filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	return root
+}
+
+func hintsContain(err error, substr string) bool {
+	for _, hint := range errors.GetAllHints(err) {
+		if strings.Contains(hint, substr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestEvaluateChartDrift pins the warn-vs-fail decision that drives the
+// user-facing behavior: strict mode aborts with a remediation hint,
+// non-strict drift warns without blocking, a dev build is silent even with
+// drift present, and a content-identical library never trips on a
+// version-only difference.
+func TestEvaluateChartDrift(t *testing.T) {
+	t.Run("strict drift returns a hard error hinting at init --update", func(t *testing.T) {
+		root := writeDriftedTalmProject(t)
+
+		warning, err := evaluateChartDrift("0.30.0", root, true)
+		if err == nil {
+			t.Fatal("expected a strict-mode error for a drifted project")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+		if !hintsContain(err, "talm init --update --preset") {
+			t.Errorf("strict-mode error must hint at `talm init --update --preset`, hints: %v", errors.GetAllHints(err))
+		}
+	})
+
+	t.Run("non-strict drift warns without blocking", func(t *testing.T) {
+		root := writeDriftedTalmProject(t)
+
+		warning, err := evaluateChartDrift("0.30.0", root, false)
+		if err != nil {
+			t.Fatalf("non-strict drift must not block the command: %v", err)
+		}
+		if !strings.Contains(warning, "charts/talm") {
+			t.Errorf("expected a drift warning mentioning charts/talm, got %q", warning)
+		}
+	})
+
+	t.Run("dev build is silent even with drift present and strict set", func(t *testing.T) {
+		root := writeDriftedTalmProject(t)
+
+		warning, err := evaluateChartDrift("dev", root, true)
+		if err != nil || warning != "" {
+			t.Errorf("dev build must be a no-op, got warning=%q err=%v", warning, err)
+		}
+	})
+
+	t.Run("matching library is silent under strict mode despite a newer binary version", func(t *testing.T) {
+		root := writeMatchingTalmProject(t, "0.30.0")
+
+		warning, err := evaluateChartDrift("0.31.0", root, true)
+		if err != nil || warning != "" {
+			t.Errorf("a content-identical library must not drift on a version-only difference, got warning=%q err=%v", warning, err)
+		}
+	})
+}
+
 func TestSkipConfigCommands(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -279,6 +419,40 @@ func TestSkipConfigCommands(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("skipConfigCommands check = %v, want %v (skipConfigCommands = %v)",
 					result, tt.expected, skipConfigCommands)
+			}
+		})
+	}
+}
+
+// TestReleaseVersion pins that both release build paths are recognized.
+// goreleaser injects the version WITHOUT the "v" prefix (`-X
+// main.Version={{.Version}}` → "0.30.0") while the Makefile's `git describe
+// --tags` keeps it ("v0.30.0"). A previous gate accepted only the
+// "v"-prefixed form, which silently disabled the chart-drift check and the
+// init version stamp on every downloaded release. Both forms must parse to
+// the same version and report isRelease=true; dev/empty builds must not.
+func TestReleaseVersion(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		wantVersion string
+		wantRelease bool
+	}{
+		{"goreleaser form (no v)", "0.30.0", "0.30.0", true},
+		{"makefile form (with v)", "v0.30.0", "0.30.0", true},
+		{"dev source build", "dev", "", false},
+		{"empty version", "", "", false},
+		{"prerelease no v", "0.30.0-rc.1", "0.30.0-rc.1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version, isRelease := releaseVersion(tt.raw)
+			if isRelease != tt.wantRelease {
+				t.Errorf("releaseVersion(%q) isRelease = %v, want %v", tt.raw, isRelease, tt.wantRelease)
+			}
+			if version != tt.wantVersion {
+				t.Errorf("releaseVersion(%q) version = %q, want %q", tt.raw, version, tt.wantVersion)
 			}
 		})
 	}
