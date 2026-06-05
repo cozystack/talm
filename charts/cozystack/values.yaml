@@ -103,6 +103,31 @@ certSANs: []
 nr_hugepages: 0
 allocateNodeCIDRs: true
 
+# Opt-in aggressive TCP keepalive tuning, OFF by default. When true the
+# preset adds net.ipv4.tcp_keepalive_time=600 / intvl=10 / probes=6,
+# reaping a dead idle socket in ~660s instead of the kernel default
+# ~2h. These sysctls are kernel-wide: they change failure detection for
+# EVERY long-lived idle TCP connection on the node (NFS mounts, DB
+# clients, MQ consumers), not just DRBD. DRBD already detects dead peers
+# in seconds via its own protocol-level ping (ping-int/ping-timeout), so
+# this is a generic socket backstop rather than a DRBD requirement —
+# hence opt-in. Enable on clusters where faster node-wide dead-socket
+# detection is worth the shorter idle timeout.
+tcpKeepaliveTuning: false
+
+# Control-plane etcd tuning. Emitted only on controlplane nodes.
+etcd:
+  # Max etcd backend DB size before etcd raises a NOSPACE alarm and
+  # rejects writes. The default raises etcd's own 2GiB ceiling to 8GiB
+  # (etcd's documented upper bound) so a LINSTOR-heavy cluster — many
+  # DRBD-resource CRDs in aggregate — doesn't exhaust the backend. This
+  # is a ceiling, not a reservation: a small DB stays small and costs no
+  # extra RAM/disk, so it is safe to leave at the default. Set to "" to
+  # fall back to etcd's built-in default. Governs total DB size only —
+  # single-object writes are gated by kube-apiserver's fixed 3MiB
+  # request-body limit, which is not configurable.
+  quotaBackendBytes: "8589934592"
+
 # Operator-supplied extension points: each `extra*` key ADDS to a
 # load-bearing default the cozystack preset ships. For every key
 # below: leaving it at the empty default is a no-op; the preset's
@@ -135,11 +160,17 @@ extraKernelModules: []
 extraKubeletExtraArgs: {}
 
 # Extra kernel sysctls added to machine.sysctls alongside the
-# preset's built-ins (net.ipv4.neigh.default.gc_thresh{1,2,3} and
-# vm.nr_hugepages — the latter is gated by the dedicated `nr_hugepages`
-# values key above; set THAT key, not extraSysctls.vm.nr_hugepages,
-# even when the gate is currently inactive — the collision check
-# treats vm.nr_hugepages as preset-owned regardless of the gate state).
+# preset's built-ins. Preset-owned keys (collision-protected):
+#   - net.ipv4.neigh.default.gc_thresh{1,2,3}
+#   - vm.nr_hugepages (gated by the dedicated `nr_hugepages` key above;
+#     set THAT key, not extraSysctls.vm.nr_hugepages — the collision
+#     check treats vm.nr_hugepages as preset-owned regardless of gate)
+#   - net.ipv4.tcp_orphan_retries, net.ipv4.tcp_fin_timeout,
+#     net.core.netdev_max_backlog, net.core.netdev_budget,
+#     net.core.netdev_budget_usecs (always-on DRBD/LINSTOR tuning)
+#   - net.ipv4.tcp_keepalive_{time,intvl,probes} — preset-owned ONLY
+#     while `tcpKeepaliveTuning` below is true; when it is false these
+#     three are free for you to set here.
 # Operator keys must be DISJOINT from the built-in set; a collision
 # fails the render. Values must be YAML strings (Talos expects
 # strings even for numeric sysctls). Example:
