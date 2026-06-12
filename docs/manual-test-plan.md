@@ -272,7 +272,7 @@ talm init --update --preset <your-preset> --force
 talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:.*preset' && echo "FAIL: preset drift not cleared" || echo "OK: preset drift cleared"
 ```
 
-`init --update` rewrites `.talm-preset.lock` to the current baseline, so the warning clears even if you declined individual preset-file diffs. Expected: `OK: preset drift cleared`.
+`init --update` rewrites `.talm-preset.lock` to the current baseline, so the warning clears even if you declined individual preset-file diffs. Expected: `OK: preset drift cleared`. Note: `--force` auto-accepts every preset-file diff, overwriting the operator edit made earlier in this scenario — the "edits are preserved via the interactive diff" promise holds only without `--force`; this test stand is disposable, a real project should run the clear step interactively.
 
 Regression anchors: `TestPresetLock_RoundTrip_NoDrift`, `TestCheckPresetDrift_StaleBaseline_Drift`, `TestCheckPresetDrift_OperatorEditedTemplates_NoDrift` (the false-positive guard), `TestCheckPresetDrift_NoLock_NoBaselineSentinel`, and `TestEvaluatePresetDrift` pin every branch above.
 
