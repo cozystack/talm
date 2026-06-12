@@ -247,6 +247,70 @@ func TestCheckPresetDrift_OperatorEditedTemplates_NoDrift(t *testing.T) {
 	}
 }
 
+// TestCheckPresetDrift_MalformedLock_ErrorsGracefully pins the failure mode
+// for a corrupted .talm-preset.lock: unparseable YAML must surface as an
+// error with drift=false — never a panic, never a spurious drift verdict.
+// Callers (evaluatePresetDrift → decideDrift) downgrade the error to a
+// non-fatal warning, so a mangled lock never blocks a command.
+func TestCheckPresetDrift_MalformedLock_ErrorsGracefully(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte("preset: [unclosed\n"), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	drift, _, err := CheckPresetDrift(root, "0.30.0")
+	if err == nil {
+		t.Error("expected an error for an unparseable lock, got nil")
+	}
+
+	if drift {
+		t.Error("must not report drift when the lock cannot be parsed")
+	}
+}
+
+// TestCheckPresetDrift_LockMissingFields_ErrorsGracefully pins that a lock
+// which parses as YAML but lacks preset or presetHash (hand-edited, or
+// truncated by a bad merge) is an error with drift=false. Treating it as
+// "no drift" would silently disable the check; inventing drift would nag on
+// a baseline that was never pinned.
+func TestCheckPresetDrift_LockMissingFields_ErrorsGracefully(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte("preset: cozystack\n"), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	drift, _, err := CheckPresetDrift(root, "0.30.0")
+	if err == nil {
+		t.Error("expected an error for a lock without presetHash, got nil")
+	}
+
+	if drift {
+		t.Error("must not report drift for a lock with no pinned baseline")
+	}
+}
+
+// TestCheckPresetDrift_LockUnknownPreset_ErrorsGracefully pins the
+// cross-binary shape: a well-formed lock naming a preset this binary does
+// not ship (pinned by a different talm build) is an error with drift=false,
+// so the caller's warning names the unknown preset instead of fabricating a
+// drift verdict against a baseline that cannot be recomputed.
+func TestCheckPresetDrift_LockUnknownPreset_ErrorsGracefully(t *testing.T) {
+	root := t.TempDir()
+	lock := "preset: does-not-exist\npresetHash: 0000000000000000000000000000000000000000000000000000000000000000\n"
+	if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	drift, _, err := CheckPresetDrift(root, "0.30.0")
+	if err == nil {
+		t.Error("expected an error for a lock naming an unknown preset, got nil")
+	}
+
+	if drift {
+		t.Error("must not report drift when the baseline preset is not embedded")
+	}
+}
+
 // TestWritePresetLock_UnknownPreset_Errors pins that pinning a preset the
 // binary does not ship fails loudly rather than writing an empty baseline.
 func TestWritePresetLock_UnknownPreset_Errors(t *testing.T) {
