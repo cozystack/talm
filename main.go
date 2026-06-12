@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -244,15 +245,33 @@ func init() {
 	}
 }
 
+// describeSuffixRegex matches the suffixes `git describe --tags --dirty`
+// appends for a non-release tree: "-<commits>-g<hash>" on a non-tag commit
+// and/or "-dirty" for local edits — including bare "-dirty" on an exact tag,
+// where the edits may be to the embedded charts themselves. A version
+// carrying either is a developer's WIP tree, not a release.
+var describeSuffixRegex = regexp.MustCompile(`(-\d+-g[0-9a-f]+)?-dirty$|-\d+-g[0-9a-f]+$`)
+
 // releaseVersion interprets the ldflags-injected build version. It returns
 // the version with any leading "v" stripped and true for a tagged release
 // build, or ("", false) for a dev/source build. Both release build paths
-// must be accepted: goreleaser injects "0.30.0" (no "v") and the Makefile's
-// `git describe --tags` injects "v0.30.0". Gating on the "v" prefix alone
-// would silently disable release-only behavior on the goreleaser artifacts
-// users actually download.
+// must be accepted: goreleaser injects "0.30.0" (no "v") and the Makefile
+// injects "v0.30.0" on an exact tag. Gating on the "v" prefix alone would
+// silently disable release-only behavior on the goreleaser artifacts users
+// actually download.
+//
+// A `git describe` suffix ("v0.29.0-5-gabc1234") marks a build from a
+// non-tag commit: its embedded charts are a moving target the developer
+// controls, so release-only behavior (the drift checks) must stay off —
+// otherwise every contributor build raises false drift in any real project
+// and hard-fails strict ones. The Makefile emits "dev" off-tag, but the
+// parser rejects the describe shape regardless of how it was injected.
 func releaseVersion(raw string) (string, bool) {
 	if raw == "" || raw == devVersion {
+		return "", false
+	}
+
+	if describeSuffixRegex.MatchString(raw) {
 		return "", false
 	}
 

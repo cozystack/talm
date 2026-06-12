@@ -642,6 +642,21 @@ func TestReleaseVersion(t *testing.T) {
 		{"dev source build", "dev", "", false},
 		{"empty version", "", "", false},
 		{"prerelease no v", "0.30.0-rc.1", "0.30.0-rc.1", true},
+		// git describe on a non-tag commit appends "-<commits>-g<hash>".
+		// Such a build is a developer's WIP tree, not a release: its
+		// embedded charts are a moving target, so treating it as a
+		// release would raise false drift on every command (and hard-
+		// fail strict projects). The Makefile now emits "dev" off-tag,
+		// but the parser must reject the describe shape regardless of
+		// how the string was injected.
+		{"describe suffix (with v)", "v0.29.0-5-gabc1234", "", false},
+		{"describe suffix (no v)", "0.29.0-5-gabc1234", "", false},
+		{"describe suffix dirty", "v0.29.0-5-gabc1234-dirty", "", false},
+		// git describe --dirty on an EXACT tag with local edits yields
+		// "v0.29.0-dirty" (no commit suffix). Local edits can include the
+		// embedded charts themselves, so this build must not pose as the
+		// release it was forked from.
+		{"dirty at exact tag", "v0.29.0-dirty", "", false},
 	}
 
 	for _, tt := range tests {
