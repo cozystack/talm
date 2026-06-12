@@ -184,6 +184,83 @@ func TestLoadConfig_EmptyApplyTimeoutResolvesDefault(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_StrictChartsParses pins the Chart.yaml → Config channel
+// of strict enforcement: `strictCharts: true` must land in
+// commands.Config.StrictCharts. This is the team/CI-wide form the README
+// recommends; a yaml-tag typo would silently disable it while the
+// per-invocation --strict-charts flag kept working, and no other test
+// would notice.
+func TestLoadConfig_StrictChartsParses(t *testing.T) {
+	dir := t.TempDir()
+	chartPath := filepath.Join(dir, "Chart.yaml")
+	body := "apiVersion: v2\nname: test\nversion: 0.1.0\nstrictCharts: true\n"
+	if err := os.WriteFile(chartPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write Chart.yaml: %v", err)
+	}
+
+	snapshotConfigState(t)
+
+	if err := loadConfig(chartPath); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	if !commands.Config.StrictCharts {
+		t.Error("strictCharts: true in Chart.yaml did not set Config.StrictCharts; the committed enforcement channel is broken")
+	}
+}
+
+// TestSurfaceChartDrift_StrictSources pins the OR between the two strict
+// opt-ins consumed by surfaceChartDrift: the committed Chart.yaml field
+// (Config.StrictCharts) and the per-invocation --strict-charts flag. Either
+// alone must block on a drifted project; with both off the same project
+// must only warn.
+func TestSurfaceChartDrift_StrictSources(t *testing.T) {
+	snapshot := func(t *testing.T, root string) {
+		t.Helper()
+		snapshotConfigState(t)
+
+		savedVersion := Version
+		savedFlag := strictChartsFlag
+		t.Cleanup(func() {
+			Version = savedVersion
+			strictChartsFlag = savedFlag
+		})
+
+		Version = "0.30.0"
+		commands.Config.RootDir = root
+	}
+
+	t.Run("Chart.yaml strictCharts alone blocks", func(t *testing.T) {
+		snapshot(t, writeDriftedTalmProject(t))
+		commands.Config.StrictCharts = true
+		strictChartsFlag = false
+
+		if err := surfaceChartDrift(); err == nil {
+			t.Error("strictCharts: true from Chart.yaml must block on drift without the flag")
+		}
+	})
+
+	t.Run("--strict-charts flag alone blocks", func(t *testing.T) {
+		snapshot(t, writeDriftedTalmProject(t))
+		commands.Config.StrictCharts = false
+		strictChartsFlag = true
+
+		if err := surfaceChartDrift(); err == nil {
+			t.Error("--strict-charts must block on drift without the Chart.yaml field")
+		}
+	})
+
+	t.Run("neither source set only warns", func(t *testing.T) {
+		snapshot(t, writeDriftedTalmProject(t))
+		commands.Config.StrictCharts = false
+		strictChartsFlag = false
+
+		if err := surfaceChartDrift(); err != nil {
+			t.Errorf("drift without strict opt-in must warn, not block: %v", err)
+		}
+	})
+}
+
 // TestRegisterRootFlags_NodesHasNoShorthand pins that talm's
 // root `--nodes` does NOT claim the `-n` shorthand. With `-n`
 // registered as the alias for `--nodes`, the global captures any
