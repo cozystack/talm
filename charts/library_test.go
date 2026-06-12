@@ -117,6 +117,42 @@ func TestNormalizeChartMeta_LeavesNonChartYamlUntouched(t *testing.T) {
 	}
 }
 
+// TestNormalizeChartMeta_PreservesNestedNameVersion pins that only the
+// TOP-LEVEL name/version metadata lines are folded to placeholders. Nested
+// occurrences — dependencies[].name/version, maintainers[].name — must
+// survive verbatim: rewriting them would (a) mask real dependency drift in
+// the content comparison and (b) inject extra %s verbs into the fmt
+// template the init flow renders with exactly two arguments, writing
+// %!s(MISSING) into the project's Chart.yaml.
+func TestNormalizeChartMeta_PreservesNestedNameVersion(t *testing.T) {
+	const chart = "apiVersion: v2\n" +
+		"name: cozystack\n" +
+		"version: 0.1.0\n" +
+		"dependencies:\n" +
+		"  - name: talm\n" +
+		"    version: 1.2.3\n" +
+		"maintainers:\n" +
+		"  - name: maintainer-handle\n"
+
+	got := NormalizeChartMeta("Chart.yaml", chart)
+
+	if !strings.Contains(got, "name: %s\nversion: %s\n") {
+		t.Errorf("top-level name/version not normalized:\n%s", got)
+	}
+
+	if !strings.Contains(got, "  - name: talm\n    version: 1.2.3\n") {
+		t.Errorf("nested dependency name/version were rewritten:\n%s", got)
+	}
+
+	if !strings.Contains(got, "  - name: maintainer-handle\n") {
+		t.Errorf("nested maintainer name was rewritten:\n%s", got)
+	}
+
+	if n := strings.Count(got, "%s"); n != 2 {
+		t.Errorf("expected exactly 2 placeholders for the init-time fmt template, got %d:\n%s", n, got)
+	}
+}
+
 // TestNormalizeChartMeta_PreservesApiAndAppVersion pins that only the
 // `name`/`version` metadata is folded to a placeholder. The camelCase
 // `apiVersion`/`appVersion` keys must survive verbatim — otherwise a real

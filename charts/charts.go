@@ -28,11 +28,15 @@ const chartYamlName = "Chart.yaml"
 //go:embed all:cozystack all:generic all:talm
 var embeddedCharts embed.FS
 
-// chartMetaRegex matches the `name:`/`version:` metadata lines of a
-// Chart.yaml. Both are rewritten to a %s placeholder so the init flow can
+// chartMetaRegex matches the TOP-LEVEL `name:`/`version:` metadata lines of
+// a Chart.yaml. Both are rewritten to a %s placeholder so the init flow can
 // substitute the real project name/version, and so the drift check can
-// compare two chart trees without a version stamp counting as content.
-var chartMetaRegex = regexp.MustCompile(`(name|version): \S+`)
+// compare two chart trees without a version stamp counting as content. The
+// `(?m)^` anchor keeps nested occurrences (dependencies[].name/version,
+// maintainers[].name) intact: rewriting those would mask real dependency
+// drift and inject extra verbs into the two-argument fmt template the init
+// flow writes Chart.yaml with.
+var chartMetaRegex = regexp.MustCompile(`(?m)^(name|version): \S+`)
 
 // NormalizeChartMeta rewrites the name/version lines of a Chart.yaml to %s
 // placeholders. Files other than Chart.yaml pass through unchanged. base is
