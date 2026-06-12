@@ -1602,6 +1602,17 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		helmEngine.LookupFunc = newLookupFunction(ctx, c, cmdName, opts.TalosEndpoints)
 	}
 
+	// Require at least one template before loading and rendering the chart.
+	// Rendering it first would be wasted (the output is discarded when no
+	// template is selected) and, worse, the render fires live lookups whose
+	// "connection refused" then masks the real problem: the operator forgot
+	// --file / --template. Fail fast with the actionable error instead. This
+	// runs after the online multi-node guard, which is a cheaper precondition
+	// with no network I/O.
+	if len(opts.TemplateFiles) == 0 {
+		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
+	}
+
 	chartPath, err := os.Getwd()
 	if err != nil {
 		return nil, errors.Wrap(err, "resolving working directory")
@@ -1631,10 +1642,6 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	out, err := eng.Render(chrt, rootValues)
 	if err != nil {
 		return nil, errors.Wrap(err, "rendering chart")
-	}
-
-	if len(opts.TemplateFiles) == 0 {
-		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
 	}
 
 	configPatches := []string{}
