@@ -68,9 +68,17 @@ func vendoredTalmFiles(rootDir string) (map[string]string, bool, error) {
 			return errors.Wrapf(err, "reading vendored talm file %q", filePath)
 		}
 
+		// Normalize CRLF to LF before comparing: a Windows clone with
+		// core.autocrlf=true (the Git for Windows default) materializes the
+		// vendored tree with CRLF while the embedded library is LF-only.
+		// Line endings are checkout artifacts, not chart content — without
+		// this, every command on such a clone reports false drift, and
+		// strictCharts: true hard-fails a byte-identical-modulo-EOL tree.
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+
 		// root.FS() keys are already "/"-separated and relative to base, so
 		// they match the embedded TalmLibraryFiles output on every platform.
-		filesMap[filePath] = generated.NormalizeChartMeta(path.Base(filePath), string(data))
+		filesMap[filePath] = generated.NormalizeChartMeta(path.Base(filePath), content)
 
 		return nil
 	})

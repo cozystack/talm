@@ -15,6 +15,7 @@
 package commands
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,52 @@ func TestCheckChartDrift_ContentChange_Drift(t *testing.T) {
 	// command that does not clear the drift.
 	if !strings.Contains(msg, "talm init --update --preset") {
 		t.Errorf("drift message must point at `talm init --update --preset`; got %q", msg)
+	}
+}
+
+// TestCheckChartDrift_CRLFVendoredCopy_NoDrift pins EOL-insensitivity: a
+// project cloned on Windows with core.autocrlf=true (the Git for Windows
+// default) materializes the vendored charts/talm/ with CRLF endings while
+// the embedded library is LF. Line endings are checkout artifacts, not
+// chart content — flagging them would WARN on every command for a
+// byte-identical-modulo-EOL tree, and hard-fail teams that set
+// strictCharts: true precisely for CI enforcement.
+func TestCheckChartDrift_CRLFVendoredCopy_NoDrift(t *testing.T) {
+	root := writeVendoredTalmLibrary(t, "0.30.0")
+
+	base := filepath.Join(root, "charts", "talm")
+	walkErr := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			t.Fatalf("walking vendored tree at %q: %v", p, err)
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		data, readErr := os.ReadFile(p)
+		if readErr != nil {
+			t.Fatalf("read %q: %v", p, readErr)
+		}
+
+		crlf := strings.ReplaceAll(string(data), "\n", "\r\n")
+		if writeErr := os.WriteFile(p, []byte(crlf), 0o644); writeErr != nil {
+			t.Fatalf("write %q: %v", p, writeErr)
+		}
+
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("converting vendored tree to CRLF: %v", walkErr)
+	}
+
+	drift, msg, err := CheckChartDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckChartDrift: %v", err)
+	}
+
+	if drift {
+		t.Errorf("CRLF line endings were misreported as drift: %s", msg)
 	}
 }
 
