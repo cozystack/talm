@@ -1343,6 +1343,23 @@ func updateTalmLibraryChart() error {
 			// the same fact.
 			return err
 		}
+
+		// Validate the inferred preset BEFORE any writes. Without this
+		// fail-fast, an unknown preset only surfaces in WritePresetLock —
+		// after Step 1 has already rewritten charts/talm/, leaving the
+		// project half-updated.
+		availablePresets, err := generated.AvailablePresets()
+		if err != nil {
+			return errors.Wrap(err, "failed to get available presets")
+		}
+
+		if !isValidPreset(presetName, availablePresets) {
+			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+			return errors.WithHint(
+				errors.Newf("preset %q from Chart.yaml is not embedded in this talm binary. Valid presets are: %v", presetName, availablePresets),
+				"pass --preset with one of the embedded presets, or use a talm build that ships your project's preset",
+			)
+		}
 	}
 
 	presetFiles, err := generated.PresetFiles()

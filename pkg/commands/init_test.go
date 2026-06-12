@@ -419,6 +419,59 @@ func TestInitUpdate_PresetNotFoundError_SingleWrapped(t *testing.T) {
 	}
 }
 
+// TestInitUpdate_UnknownInferredPreset_FailsBeforeWrites pins the fail-fast
+// contract for `talm init --update` with the preset inferred from
+// Chart.yaml: a preset this binary does not embed must be rejected BEFORE
+// Step 1 touches charts/talm/. Without up-front validation the inferred
+// path rewrites the whole vendored library and only then fails in
+// WritePresetLock, leaving the project half-updated.
+func TestInitUpdate_UnknownInferredPreset_FailsBeforeWrites(t *testing.T) {
+	imageOrig := initCmdFlags.image
+	presetOrig := initCmdFlags.preset
+	rootOrig := Config.RootDir
+	t.Cleanup(func() {
+		initCmdFlags.image = imageOrig
+		initCmdFlags.preset = presetOrig
+		Config.RootDir = rootOrig
+	})
+
+	initCmdFlags.image = ""
+	initCmdFlags.preset = ""
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+
+	chartYaml := "apiVersion: v2\nname: test\nversion: 0.1.0\n" +
+		"dependencies:\n" +
+		"  - name: talm\n" +
+		"    version: 0.1.0\n" +
+		"  - name: no-such-preset\n" +
+		"    version: 0.1.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(chartYaml), 0o644); err != nil {
+		t.Fatalf("seed Chart.yaml: %v", err)
+	}
+
+	err := updateTalmLibraryChart()
+	if err == nil {
+		t.Fatal("expected --update with an unknown inferred preset to error; got nil")
+	}
+
+	if !strings.Contains(err.Error(), "no-such-preset") {
+		t.Errorf("error must name the offending preset; got: %v", err)
+	}
+
+	hints := errors.GetAllHints(err)
+	if len(hints) == 0 {
+		t.Fatalf("expected a hint guiding the operator to a valid preset; got bare error: %v", err)
+	}
+
+	// Fail-fast contract: nothing may have been written before the
+	// validation fired.
+	if _, statErr := os.Stat(filepath.Join(dir, "charts")); !os.IsNotExist(statErr) {
+		t.Error("charts/ was created before the inferred preset was validated; --update must fail before any writes")
+	}
+}
+
 // TestValidateImageRefShape_RejectsMalformed pins the shape check
 // that runs before any --image value reaches the preset rewrite.
 // Catches operator typos (::malformed, no-slash:tag, trailing
