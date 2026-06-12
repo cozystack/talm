@@ -339,6 +339,9 @@ func TestEvaluateChartDrift(t *testing.T) {
 		if !hintsContain(err, "talm init --update --preset") {
 			t.Errorf("strict-mode error must hint at `talm init --update --preset`, hints: %v", errors.GetAllHints(err))
 		}
+		if strings.Contains(err.Error(), "or ignore if this is intentional") {
+			t.Errorf("strict-mode error must not carry the warning's ignore suggestion — the command just refused to run: %v", err)
+		}
 	})
 
 	t.Run("non-strict drift warns without blocking", func(t *testing.T) {
@@ -350,6 +353,73 @@ func TestEvaluateChartDrift(t *testing.T) {
 		}
 		if !strings.Contains(warning, "charts/talm") {
 			t.Errorf("expected a drift warning mentioning charts/talm, got %q", warning)
+		}
+	})
+
+	t.Run("unreadable vendored tree under strict blocks the command", func(t *testing.T) {
+		// charts/talm as a file: the drift check cannot read the tree.
+		// Strict mode exists for enforcement; an unverifiable baseline
+		// passing silently would defeat it exactly when the project is
+		// broken.
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "charts"), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "charts", "talm"), []byte("not a directory"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		warning, err := evaluateChartDrift("0.30.0", root, true)
+		if err == nil {
+			t.Fatal("a drift check failure must block under strict mode, not silently pass")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+	})
+
+	t.Run("unreadable vendored tree without strict downgrades to a warning", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "charts"), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "charts", "talm"), []byte("not a directory"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		warning, err := evaluateChartDrift("0.30.0", root, false)
+		if err != nil {
+			t.Fatalf("a non-strict drift check failure must not block the command: %v", err)
+		}
+		if !strings.Contains(warning, "could not check drift") {
+			t.Errorf("expected a could-not-check warning, got %q", warning)
+		}
+	})
+
+	t.Run("missing vendored library under strict blocks the command", func(t *testing.T) {
+		// Deleting charts/talm/ is the cheapest bypass of the check —
+		// under opt-in enforcement a missing baseline must block, not
+		// pass more quietly than a corrupted one.
+		root := t.TempDir()
+
+		warning, err := evaluateChartDrift("0.30.0", root, true)
+		if err == nil {
+			t.Fatal("a missing vendored library must block under strict mode, not silently pass")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+		if !hintsContain(err, "talm init --update --preset") {
+			t.Errorf("strict-mode error must hint at `talm init --update --preset`, hints: %v", errors.GetAllHints(err))
+		}
+	})
+
+	t.Run("missing vendored library without strict is silent", func(t *testing.T) {
+		root := t.TempDir()
+
+		warning, err := evaluateChartDrift("0.30.0", root, false)
+		if err != nil || warning != "" {
+			t.Errorf("a project with nothing vendored must stay silent without strict, got warning=%q err=%v", warning, err)
 		}
 	})
 
@@ -425,12 +495,63 @@ func TestEvaluatePresetDrift(t *testing.T) {
 		}
 	})
 
-	t.Run("project without a preset lock is silent", func(t *testing.T) {
+	t.Run("project without a preset lock is silent without strict", func(t *testing.T) {
+		root := t.TempDir()
+
+		warning, err := evaluatePresetDrift("0.30.0", root, false)
+		if err != nil || warning != "" {
+			t.Errorf("a project with no preset lock must be silent without strict, got warning=%q err=%v", warning, err)
+		}
+	})
+
+	t.Run("missing preset lock under strict blocks the command", func(t *testing.T) {
+		// A merge conflict resolved as "delete .talm-preset.lock" must
+		// not pass MORE quietly than a corrupted lock — under opt-in
+		// enforcement a missing baseline is indistinguishable from a
+		// deleted one.
 		root := t.TempDir()
 
 		warning, err := evaluatePresetDrift("0.30.0", root, true)
-		if err != nil || warning != "" {
-			t.Errorf("a project with no preset lock must be silent, got warning=%q err=%v", warning, err)
+		if err == nil {
+			t.Fatal("a missing preset baseline must block under strict mode, not silently pass")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+		if !hintsContain(err, "talm init --update --preset") {
+			t.Errorf("strict-mode error must hint at `talm init --update --preset`, hints: %v", errors.GetAllHints(err))
+		}
+	})
+
+	t.Run("malformed lock under strict blocks the command", func(t *testing.T) {
+		// A lock corrupted by a bad merge is exactly the moment the
+		// team's strictCharts enforcement must fire, not silently pass.
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte("preset: [unclosed\n"), 0o644); err != nil {
+			t.Fatalf("write lock: %v", err)
+		}
+
+		warning, err := evaluatePresetDrift("0.30.0", root, true)
+		if err == nil {
+			t.Fatal("an unreadable preset baseline must block under strict mode, not silently pass")
+		}
+		if warning != "" {
+			t.Errorf("strict error path must not also emit a warning, got %q", warning)
+		}
+	})
+
+	t.Run("malformed lock without strict downgrades to a warning", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".talm-preset.lock"), []byte("preset: [unclosed\n"), 0o644); err != nil {
+			t.Fatalf("write lock: %v", err)
+		}
+
+		warning, err := evaluatePresetDrift("0.30.0", root, false)
+		if err != nil {
+			t.Fatalf("a non-strict drift check failure must not block the command: %v", err)
+		}
+		if !strings.Contains(warning, "could not check drift") {
+			t.Errorf("expected a could-not-check warning, got %q", warning)
 		}
 	})
 }

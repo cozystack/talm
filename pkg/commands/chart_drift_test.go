@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/errors"
+
 	"github.com/cozystack/talm/pkg/generated"
 )
 
@@ -190,16 +192,18 @@ func TestCheckChartDrift_VendoredTalmIsFile_ErrorsGracefully(t *testing.T) {
 	}
 }
 
-// TestCheckChartDrift_MissingVendoredDir_NoDriftNoError pins graceful
-// handling: a project without a charts/talm/ directory (nothing vendored
-// yet) yields no drift and no error, so the check never blocks a command
-// on a tree it cannot compare.
-func TestCheckChartDrift_MissingVendoredDir_NoDriftNoError(t *testing.T) {
+// TestCheckChartDrift_MissingVendoredDir_NoBaselineSentinel pins the
+// missing-baseline contract: a project without a charts/talm/ directory
+// (nothing vendored yet) yields no drift and an error matching
+// ErrNoBaseline, so the caller can keep non-strict runs silent while
+// strict runs block — deleting the vendored tree must not be a quieter
+// bypass than corrupting it.
+func TestCheckChartDrift_MissingVendoredDir_NoBaselineSentinel(t *testing.T) {
 	root := t.TempDir()
 
 	drift, msg, err := CheckChartDrift(root, "0.30.0")
-	if err != nil {
-		t.Fatalf("CheckChartDrift returned an error for a missing vendored dir: %v", err)
+	if !errors.Is(err, ErrNoBaseline) {
+		t.Fatalf("expected an ErrNoBaseline-matching error for a missing vendored dir, got: %v", err)
 	}
 	if drift {
 		t.Errorf("reported drift with no vendored library to compare: %s", msg)
@@ -250,15 +254,18 @@ func TestCheckPresetDrift_StaleBaseline_Drift(t *testing.T) {
 	}
 }
 
-// TestCheckPresetDrift_NoLock_Silent pins that a project with no
-// .talm-preset.lock (generated before preset pinning, or never init'd from a
-// preset) is silent — no baseline, no nag.
-func TestCheckPresetDrift_NoLock_Silent(t *testing.T) {
+// TestCheckPresetDrift_NoLock_NoBaselineSentinel pins the missing-baseline
+// contract: a project with no .talm-preset.lock (generated before preset
+// pinning, or never init'd from a preset) yields no drift and an error
+// matching ErrNoBaseline. The caller keeps non-strict runs silent — no
+// baseline, no nag — while strict runs block, so a lock deleted by a bad
+// merge resolution cannot pass more quietly than a corrupted one.
+func TestCheckPresetDrift_NoLock_NoBaselineSentinel(t *testing.T) {
 	root := t.TempDir()
 
 	drift, msg, err := CheckPresetDrift(root, "0.30.0")
-	if err != nil {
-		t.Fatalf("CheckPresetDrift returned an error with no lock: %v", err)
+	if !errors.Is(err, ErrNoBaseline) {
+		t.Fatalf("expected an ErrNoBaseline-matching error with no lock, got: %v", err)
 	}
 	if drift {
 		t.Errorf("reported preset drift with no baseline lock: %s", msg)

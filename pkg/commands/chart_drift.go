@@ -28,12 +28,20 @@ import (
 	"github.com/cozystack/talm/pkg/generated"
 )
 
+// ErrNoBaseline marks the "nothing to compare" drift outcome: the project
+// has no vendored charts/talm/ or no .talm-preset.lock. Non-strict callers
+// treat it as silence — a project generated before baseline pinning should
+// not nag. Strict callers escalate instead: under opt-in enforcement a
+// missing baseline is indistinguishable from a deleted one, and letting it
+// pass would make deletion the cheapest bypass of the check.
+var ErrNoBaseline = errors.New("no drift baseline to compare")
+
 // vendoredTalmFiles reads a project's vendored talm library from
 // rootDir/charts/talm/, keyed by forward-slash path relative to that
 // directory (so the keys line up with the embedded TalmLibraryFiles output)
 // and with Chart.yaml metadata normalized the same way. The bool is false
 // when no vendored library exists — an unconfigured or freshly cloned
-// project the drift check should simply skip rather than treat as an error.
+// project; the caller decides whether that is silence or a strict blocker.
 //
 // Reads go through an os.Root rooted at charts/talm/, confining traversal to
 // that subtree so a symlink inside it cannot redirect a read outside the
@@ -43,7 +51,7 @@ func vendoredTalmFiles(rootDir string) (map[string]string, bool, error) {
 
 	root, err := os.OpenRoot(base)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
 		}
 
@@ -104,10 +112,11 @@ func vendoredTalmFiles(rootDir string) (map[string]string, bool, error) {
 // byte-identical is NOT reported as drift. binaryVersion is used only for
 // the operator-facing message.
 //
-// It returns (false, "", nil) — staying silent — when the project has no
-// vendored library to compare. A read or walk failure is returned as an
-// error; callers treat drift detection as best-effort and must not block a
-// command on it.
+// When the project has no vendored library to compare, it returns an error
+// matching ErrNoBaseline (errors.Is) so the caller can choose silence
+// (non-strict) or a blocker (strict). A read or walk failure is returned as
+// a plain error; non-strict callers treat drift detection as best-effort
+// and must not block a command on it.
 func CheckChartDrift(rootDir, binaryVersion string) (bool, string, error) {
 	vendored, ok, err := vendoredTalmFiles(rootDir)
 	if err != nil {
@@ -115,7 +124,7 @@ func CheckChartDrift(rootDir, binaryVersion string) (bool, string, error) {
 	}
 
 	if !ok {
-		return false, "", nil
+		return false, "", errors.Wrap(ErrNoBaseline, "project has no vendored charts/talm/ library")
 	}
 
 	embedded, err := generated.TalmLibraryFiles()
@@ -218,10 +227,12 @@ func WritePresetLock(rootDir, preset string) error {
 // preset hash against the baseline pinned in rootDir/.talm-preset.lock at
 // init time.
 //
-// It stays silent — (false, "", nil) — for a project with no lock file (one
-// generated before preset pinning existed, or never init'd from a preset):
-// there is no baseline to compare, and inventing drift would nag every such
-// project. binaryVersion is used only for the operator-facing message.
+// For a project with no lock file (one generated before preset pinning
+// existed, or never init'd from a preset) it returns an error matching
+// ErrNoBaseline (errors.Is): non-strict callers stay silent — there is no
+// baseline to compare, and inventing drift would nag every such project —
+// while strict callers escalate. binaryVersion is used only for the
+// operator-facing message.
 //
 // Crucially this never reads the project's templates/, so operator edits to
 // the rendered preset are NOT drift: the baseline is the pristine preset hash
@@ -229,8 +240,8 @@ func WritePresetLock(rootDir, preset string) error {
 func CheckPresetDrift(rootDir, binaryVersion string) (bool, string, error) {
 	data, err := os.ReadFile(filepath.Join(rootDir, presetLockName))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, "", nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, "", errors.Wrap(ErrNoBaseline, "project has no "+presetLockName)
 		}
 
 		return false, "", errors.Wrapf(err, "reading preset lock in %q", rootDir)

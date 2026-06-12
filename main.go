@@ -299,15 +299,41 @@ func evaluatePresetDrift(rawVersion, rootDir string, strict bool) (string, error
 }
 
 // decideDrift folds a (drift, msg, err) result into the (warning, error)
-// outcome shared by both drift checks: an I/O error downgrades to a non-fatal
-// warning (best effort, never blocks a command); drift under strict is a hard
-// error with a remediation hint; drift otherwise is a warning; no drift is
-// silent.
+// outcome shared by both drift checks: a check failure downgrades to a
+// non-fatal warning (best effort, never blocks a command) — except under
+// strict, where an unverifiable baseline is a hard error: the operator opted
+// into enforcement, and a corrupted lock or unreadable vendored tree passing
+// silently would defeat it exactly when the baseline broke; a MISSING
+// baseline (commands.ErrNoBaseline) is silence without strict — projects
+// from before baseline pinning should not nag — but a blocker under strict,
+// where deleting the baseline must not pass more quietly than corrupting
+// it; drift under strict is a hard error with a remediation hint; drift
+// otherwise is a warning; no drift is silent.
 func decideDrift(drift bool, msg string, err error, strict bool) (string, error) {
 	switch {
+	case errors.Is(err, commands.ErrNoBaseline) && !strict:
+		return "", nil
+	case errors.Is(err, commands.ErrNoBaseline):
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary; project idiom.
+		return "", errors.WithHint(
+			errors.Wrap(err, "drift baseline missing under strict mode"),
+			"run `talm init --update --preset <preset>` to vendor the library and pin the preset baseline, or unset strictCharts / drop --strict-charts",
+		)
+	case err != nil && strict:
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary; project idiom.
+		return "", errors.WithHint(
+			errors.Wrap(err, "drift check failed under strict mode"),
+			"repair the baseline (re-run `talm init --update --preset <preset>`), or unset strictCharts / drop --strict-charts to downgrade this to a warning",
+		)
 	case err != nil:
-		return fmt.Sprintf("could not check chart drift: %v", err), nil
+		return fmt.Sprintf("could not check drift: %v", err), nil
 	case drift && strict:
+		// The shared drift message ends with "(or ignore if this is
+		// intentional)" — sound advice on a warning, contradictory on an
+		// error the command just refused to run past. Strip it here
+		// rather than threading a second message through both checkers.
+		msg = strings.Replace(msg, " (or ignore if this is intentional)", "", 1)
+
 		//nolint:wrapcheck // originating error built with errors.New; WithHint adds operator-facing guidance and is the project idiom.
 		return "", errors.WithHint(
 			errors.New(msg),
