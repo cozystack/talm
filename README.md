@@ -234,6 +234,7 @@ talm template -f nodes/node1.yaml -I
 mycluster/
 ├── Chart.yaml
 ├── values.yaml
+├── .talm-preset.lock   # pinned preset baseline — commit it (see "Preset drift")
 ├── templates/          # preset templates — you own and edit these
 └── charts/
     └── talm/           # talm library chart — vendored from the binary
