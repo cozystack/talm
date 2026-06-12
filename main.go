@@ -141,7 +141,7 @@ func registerRootFlags(cmd *cobra.Command) {
 	// first backtick-quoted word as the flag's value-placeholder name, which
 	// on a bool flag misrenders --help as `--strict-charts talm init --update`
 	// (as if it took an argument).
-	cmd.PersistentFlags().BoolVar(&strictChartsFlag, "strict-charts", false, "fail if the project's vendored charts/talm/ differs from the talm binary's built-in copy (run talm init --update to re-sync)")
+	cmd.PersistentFlags().BoolVar(&strictChartsFlag, "strict-charts", false, "fail if the project's vendored charts/talm/ or pinned preset baseline differs from the talm binary (run talm init --update --preset <preset> to re-sync)")
 
 	// Shell completion for root persistent flags. --nodes /
 	// --endpoints draw from the in-scope talosconfig contexts.
