@@ -123,6 +123,58 @@ func TestCheckChartDrift_ContentChange_Drift(t *testing.T) {
 	}
 }
 
+// TestCheckChartDrift_ExtraneousFile_DriftNamesPath pins two contracts for
+// the "extra file in the talm-owned tree" shape (.DS_Store, editor backup,
+// a file a newer library dropped): it IS drift — the vendored tree no
+// longer matches the binary — and the message must name the offending
+// path. Without the path the operator gets a warning that
+// `init --update --preset` alone cannot clear and no way to locate why.
+func TestCheckChartDrift_ExtraneousFile_DriftNamesPath(t *testing.T) {
+	root := writeVendoredTalmLibrary(t, "0.30.0")
+
+	if err := os.WriteFile(filepath.Join(root, "charts", "talm", ".DS_Store"), []byte{0x00, 0x01}, 0o644); err != nil {
+		t.Fatalf("write extraneous file: %v", err)
+	}
+
+	drift, msg, err := CheckChartDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckChartDrift: %v", err)
+	}
+
+	if !drift {
+		t.Fatal("an extraneous file in the vendored tree must be reported as drift")
+	}
+
+	if !strings.Contains(msg, "extra: .DS_Store") {
+		t.Errorf("drift message must name the extraneous path; got %q", msg)
+	}
+}
+
+// TestCheckChartDrift_ModifiedFile_DriftNamesPath pins that a content
+// change is reported with the modified path, so the operator can see WHAT
+// drifted instead of diffing the tree by hand.
+func TestCheckChartDrift_ModifiedFile_DriftNamesPath(t *testing.T) {
+	root := writeVendoredTalmLibrary(t, "0.30.0")
+
+	helpers := filepath.Join(root, "charts", "talm", "templates", "_helpers.tpl")
+	if err := os.WriteFile(helpers, []byte("{{- /* divergent */ -}}\n"), 0o644); err != nil {
+		t.Fatalf("write helpers: %v", err)
+	}
+
+	drift, msg, err := CheckChartDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckChartDrift: %v", err)
+	}
+
+	if !drift {
+		t.Fatal("a modified vendored file must be reported as drift")
+	}
+
+	if !strings.Contains(msg, "modified: templates/_helpers.tpl") {
+		t.Errorf("drift message must name the modified path; got %q", msg)
+	}
+}
+
 // TestCheckChartDrift_CRLFVendoredCopy_NoDrift pins EOL-insensitivity: a
 // project cloned on Windows with core.autocrlf=true (the Git for Windows
 // default) materializes the vendored charts/talm/ with CRLF endings while

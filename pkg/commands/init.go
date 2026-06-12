@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -75,12 +76,13 @@ const (
 	// secret-bearing files so an over-permissive umask cannot widen
 	// access.
 	secureDirMode os.FileMode = 0o700
-	// reportVerbCreated and reportVerbUpdated are the operator-facing
-	// verbs the init flow prints when materialising or rewriting a
-	// project artefact. Hoisted so goconst sees a single canonical
-	// reference for each.
+	// reportVerbCreated, reportVerbUpdated, and reportVerbRemoved are
+	// the operator-facing verbs the init flow prints when materialising,
+	// rewriting, or pruning a project artefact. Hoisted so goconst sees
+	// a single canonical reference for each.
 	reportVerbCreated = "Created"
 	reportVerbUpdated = "Updated"
+	reportVerbRemoved = "Removed"
 )
 
 // resolveTalosconfigEndpoints picks the endpoint list to embed in
@@ -817,6 +819,81 @@ func writeSecretsBundleToFile(bundle *secrets.Bundle) error {
 	return writeSecureToDestination(bundleBytes, secretsFile)
 }
 
+// pruneVendoredTalmLibrary removes files under charts/talm/ that the
+// embedded library does not ship — leftovers from an older talm release or
+// strays (.DS_Store, editor backups). The tree is talm-owned and never
+// operator-edited (see talmLibraryName in charts/charts.go), so removal is
+// safe; keeping such files would leave the content-drift check permanently
+// firing on a tree that `init --update` claims to have re-synced.
+// presetFiles is the embedded set keyed "<chart>/<path>"; a vendored file
+// survives iff "talm/<rel>" is a key. Directories the prune leaves empty
+// are removed too, so the tree matches the embedded library exactly. A
+// missing charts/talm/ is a no-op. All operations go through an os.Root
+// scoped to charts/talm/ (mirroring vendoredTalmFiles), so a symlink inside
+// the tree cannot redirect a removal outside the project; symlinks are
+// removed as entries, never followed.
+func pruneVendoredTalmLibrary(presetFiles map[string]string) error {
+	base := filepath.Join(Config.RootDir, "charts", "talm")
+
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
+		return errors.Wrapf(err, "opening vendored talm library %q", base)
+	}
+	defer root.Close()
+
+	var seenDirs []string
+
+	walkErr := fs.WalkDir(root.FS(), ".", func(filePath string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return errors.Wrapf(err, "walking vendored talm library at %q", filePath)
+		}
+
+		if entry.IsDir() {
+			if filePath != "." {
+				seenDirs = append(seenDirs, filePath)
+			}
+
+			return nil
+		}
+
+		// root.FS() keys are "/"-separated and relative to base, matching
+		// the "<chart>/<path>" shape of the embedded set.
+		if _, ok := presetFiles[presetTalmLibrary+"/"+filePath]; ok {
+			return nil
+		}
+
+		if err := root.Remove(filePath); err != nil {
+			return errors.Wrapf(err, "pruning extraneous vendored file %q", filePath)
+		}
+
+		fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbRemoved, filepath.Join("charts", "talm", filepath.FromSlash(filePath)))
+
+		return nil
+	})
+	if walkErr != nil {
+		return errors.Wrap(walkErr, "pruning vendored talm library")
+	}
+
+	// Drop directories the prune emptied, deepest-first (reverse
+	// lexicographic order puts "a/b" before "a"). Remove refuses
+	// non-empty directories, which is exactly the keep signal — failures
+	// are the expected outcome for live dirs, so they are not errors.
+	slices.Sort(seenDirs)
+	slices.Reverse(seenDirs)
+
+	for _, dir := range seenDirs {
+		if err := root.Remove(dir); err == nil {
+			fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbRemoved, filepath.Join("charts", "talm", filepath.FromSlash(dir)))
+		}
+	}
+
+	return nil
+}
+
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies.
 func readChartYamlPreset() (string, error) {
 	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
@@ -1400,6 +1477,15 @@ func updateTalmLibraryChart() error {
 			relPath, _ := filepath.Rel(Config.RootDir, file)
 			fmt.Fprintf(os.Stderr, "%s %s\n", reportVerbUpdated, relPath)
 		}
+	}
+
+	// Prune files the embedded library no longer ships (and strays like
+	// .DS_Store or editor backups). charts/talm/ is talm-owned and never
+	// operator-edited, so an exact re-sync is safe — and without it the
+	// content-drift warning (or the strictCharts hard error) stays on
+	// forever while its hint keeps pointing at this very command.
+	if err := pruneVendoredTalmLibrary(presetFiles); err != nil {
+		return err
 	}
 
 	// Step 2: Update preset template files (with interactive confirmation)

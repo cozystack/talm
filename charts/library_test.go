@@ -117,6 +117,30 @@ func TestNormalizeChartMeta_LeavesNonChartYamlUntouched(t *testing.T) {
 	}
 }
 
+// TestEmbeddedCharts_NoCRLF makes the LF-only invariant of the embedded
+// tree explicit. The drift comparison normalizes CRLF on the vendored side
+// only, relying on .gitattributes (`* text=auto eol=lf`) to keep the
+// embedded side LF on every checkout; an embedded file that ever ships
+// CRLF would drift against every project forever, and `init --update`
+// could not clear it (the vendored copy normalizes to LF on read).
+func TestEmbeddedCharts_NoCRLF(t *testing.T) {
+	for name, files := range map[string]func() (map[string]string, error){
+		"PresetFiles":      PresetFiles,
+		"TalmLibraryFiles": TalmLibraryFiles,
+	} {
+		all, err := files()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		for filePath, content := range all {
+			if strings.Contains(content, "\r\n") {
+				t.Errorf("%s: embedded %s contains CRLF; the drift check assumes an LF-only embedded tree (enforced by .gitattributes)", name, filePath)
+			}
+		}
+	}
+}
+
 // TestNormalizeChartMeta_PreservesNestedNameVersion pins that only the
 // TOP-LEVEL name/version metadata lines are folded to placeholders. Nested
 // occurrences — dependencies[].name/version, maintainers[].name — must

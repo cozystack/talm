@@ -233,7 +233,7 @@ printf '\n{{- /* stale edit */ -}}\n' >> charts/talm/templates/_helpers.tpl
 talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:'
 ```
 
-Expected (default): a single line on **stderr** — `WARN: project's vendored charts/talm/ library differs from the copy built into talm <version>; run talm init --update --preset <preset> to re-sync ...` — while stdout (the rendered config) and the exit code are unchanged. Clear it and re-confirm silence:
+Expected (default): a single line on **stderr** — `WARN: project's vendored charts/talm/ library differs from the copy built into talm <version> (modified: templates/_helpers.tpl); run talm init --update --preset <preset> to re-sync ...` — while stdout (the rendered config) and the exit code are unchanged. The parenthesised sample names up to 5 differing paths (`modified:` / `extra:` / `missing:`) so the cause is locatable without a manual tree diff. Clear it and re-confirm silence:
 
 ```bash
 talm init --update --preset cozystack --force
@@ -241,6 +241,8 @@ talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:' && e
 ```
 
 The `--preset` is required: `talm init --update` alone resolves the preset from `Chart.yaml`, which an init'd project does not record, so it errors with "preset not found in Chart.yaml dependencies" (pinned by A8) and never re-vendors. Expected: `OK: drift cleared`.
+
+`init --update` re-syncs `charts/talm/` exactly: files the embedded library does not ship (an `extra:` path in the WARN — e.g. `.DS_Store`, an editor backup, a file a newer release dropped) are pruned with a `Removed charts/talm/<path>` line. Verify by dropping a stray file in `charts/talm/`, observing the `extra:` WARN, and re-running the clear step above (pinned by `TestInitUpdate_PrunesExtraneousVendoredFiles`, `TestCheckChartDrift_ExtraneousFile_DriftNamesPath`).
 
 ### B5a. Render with stale preset templates (preset-drift detection)
 

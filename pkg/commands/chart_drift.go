@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/cockroachdb/errors"
@@ -137,10 +138,52 @@ func CheckChartDrift(rootDir, binaryVersion string) (bool, string, error) {
 	}
 
 	return true, fmt.Sprintf(
-		"project's vendored charts/talm/ library differs from the copy built into talm %s; "+
+		"project's vendored charts/talm/ library differs from the copy built into talm %s (%s); "+
 			"run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)",
-		binaryVersion,
+		binaryVersion, summarizeChartDiff(vendored, embedded),
 	), nil
+}
+
+// diffSampleLimit caps how many differing paths the drift message carries.
+// Enough to locate the cause at a glance without turning a one-line WARN
+// into a page when a whole release's worth of templates changed.
+const diffSampleLimit = 5
+
+// summarizeChartDiff renders the paths where two chart trees diverge —
+// modified (both sides, different content), extra (vendored only), missing
+// (embedded only) — sorted, capped at diffSampleLimit with a "+N more"
+// tail. Without the paths, the operator cannot tell a stale library from
+// an extraneous file (.DS_Store) that `init --update` re-vendoring alone
+// would not have cleared.
+func summarizeChartDiff(vendored, embedded map[string]string) string {
+	var diffs []string
+
+	for filePath, content := range vendored {
+		embeddedContent, ok := embedded[filePath]
+
+		switch {
+		case !ok:
+			diffs = append(diffs, "extra: "+filePath)
+		case content != embeddedContent:
+			diffs = append(diffs, "modified: "+filePath)
+		}
+	}
+
+	for filePath := range embedded {
+		if _, ok := vendored[filePath]; !ok {
+			diffs = append(diffs, "missing: "+filePath)
+		}
+	}
+
+	sort.Strings(diffs)
+
+	more := ""
+	if len(diffs) > diffSampleLimit {
+		more = fmt.Sprintf(", +%d more", len(diffs)-diffSampleLimit)
+		diffs = diffs[:diffSampleLimit]
+	}
+
+	return strings.Join(diffs, ", ") + more
 }
 
 // presetLockName is the project-root file that records the pristine preset a

@@ -472,6 +472,82 @@ func TestInitUpdate_UnknownInferredPreset_FailsBeforeWrites(t *testing.T) {
 	}
 }
 
+// TestInitUpdate_PrunesExtraneousVendoredFiles pins the re-sync promise:
+// after `talm init --update`, the talm-owned charts/talm/ tree matches the
+// embedded library exactly. Without pruning, an extraneous file (.DS_Store,
+// editor backup, a file a newer library dropped) survives every update and
+// keeps the drift warning — or the strictCharts hard error — permanently
+// on, while the remediation hint keeps pointing at the very command that
+// cannot clear it.
+func TestInitUpdate_PrunesExtraneousVendoredFiles(t *testing.T) {
+	imageOrig := initCmdFlags.image
+	presetOrig := initCmdFlags.preset
+	forceOrig := initCmdFlags.force
+	rootOrig := Config.RootDir
+	versionOrig := Config.InitOptions.Version
+	t.Cleanup(func() {
+		initCmdFlags.image = imageOrig
+		initCmdFlags.preset = presetOrig
+		initCmdFlags.force = forceOrig
+		Config.RootDir = rootOrig
+		Config.InitOptions.Version = versionOrig
+	})
+
+	initCmdFlags.image = ""
+	initCmdFlags.preset = "generic"
+	initCmdFlags.force = true
+	// An empty version would render "version: " in the rewritten library
+	// Chart.yaml, which the \S+ normalizer cannot fold to a placeholder —
+	// masking the pruning assertion behind a bogus Chart.yaml mismatch.
+	Config.InitOptions.Version = "0.30.0"
+
+	dir := writeVendoredTalmLibrary(t, "0.30.0")
+	Config.RootDir = dir
+
+	// Step 2 of --update substitutes the cluster name from the existing
+	// project Chart.yaml.
+	chartYaml := "apiVersion: v2\nname: test\nversion: 0.1.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(chartYaml), 0o644); err != nil {
+		t.Fatalf("seed Chart.yaml: %v", err)
+	}
+
+	stray := filepath.Join(dir, "charts", "talm", ".DS_Store")
+	if err := os.WriteFile(stray, []byte{0x00, 0x01}, 0o644); err != nil {
+		t.Fatalf("write extraneous file: %v", err)
+	}
+
+	// A whole stray subtree — e.g. a directory a newer library release
+	// dropped — must disappear as well, including the emptied directory.
+	strayDir := filepath.Join(dir, "charts", "talm", "templates", "dropped")
+	if err := os.MkdirAll(strayDir, 0o755); err != nil {
+		t.Fatalf("mkdir stray dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(strayDir, "leftover.tpl"), []byte("{{- /* gone upstream */ -}}\n"), 0o644); err != nil {
+		t.Fatalf("write stray subtree file: %v", err)
+	}
+
+	if err := updateTalmLibraryChart(); err != nil {
+		t.Fatalf("updateTalmLibraryChart: %v", err)
+	}
+
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Error("extraneous charts/talm/.DS_Store survived init --update; the talm-owned tree must be re-synced exactly")
+	}
+
+	if _, err := os.Stat(strayDir); !os.IsNotExist(err) {
+		t.Error("emptied stray directory survived init --update; the talm-owned tree must match the embedded library exactly")
+	}
+
+	drift, msg, err := CheckChartDrift(dir, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckChartDrift after update: %v", err)
+	}
+
+	if drift {
+		t.Errorf("drift not cleared by init --update: %s", msg)
+	}
+}
+
 // TestValidateImageRefShape_RejectsMalformed pins the shape check
 // that runs before any --image value reaches the preset rewrite.
 // Catches operator typos (::malformed, no-slash:tag, trailing

@@ -254,7 +254,7 @@ This refreshes `charts/talm/` (always) and offers to update the preset templates
 To catch drift automatically, a release build compares the vendored `charts/talm/` against its own built-in copy on every config-loading command. The comparison is by **content**, not version number — re-vendoring after a binary bump that did not change the library is a no-op and raises no warning. When the content genuinely differs, talm prints a non-fatal warning to stderr (stdout and the exit code are unchanged):
 
 ```text
-WARN: project's vendored charts/talm/ library differs from the copy built into talm <version>; run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)
+WARN: project's vendored charts/talm/ library differs from the copy built into talm <version> (modified: templates/_helpers.tpl); run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)
 ```
 
 The remediation needs the preset name because `talm init --update` resolves the preset from `Chart.yaml`, which an init'd project does not record — pass `--preset <your-preset>` (the one you ran `talm init` with) explicitly.
