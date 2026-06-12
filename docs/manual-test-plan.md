@@ -236,7 +236,7 @@ talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:'
 Expected (default): a single line on **stderr** — `WARN: project's vendored charts/talm/ library differs from the copy built into talm <version>; run talm init --update --preset <preset> to re-sync ...` — while stdout (the rendered config) and the exit code are unchanged. Clear it and re-confirm silence:
 
 ```bash
-talm init --update --preset generic --force
+talm init --update --preset cozystack --force
 talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:' && echo "FAIL: drift not cleared" || echo "OK: drift cleared"
 ```
 
