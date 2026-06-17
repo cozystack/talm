@@ -49,6 +49,7 @@ var templateCmdFlags struct {
 	offline           bool
 	kubernetesVersion string
 	inplace           bool
+	showSecrets       bool
 	nodesFromArgs     bool
 	endpointsFromArgs bool
 	templatesFromArgs bool
@@ -328,6 +329,18 @@ func generateOutput(ctx context.Context, c *client.Client, _ []string) (string, 
 		return "", errors.Wrap(err, "failed to render templates")
 	}
 
+	// persistedValueFiles is the Chart.yaml-declared subset that `talm apply`
+	// re-reads on its own (resolved the same way the PreRunE merge resolved
+	// them). An encrypted file outside this set, passed only via
+	// `template --values`, would have its omitted secret lost at apply — so
+	// sealRenderedSecrets warns about it in -I mode.
+	persistedValueFiles := resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir)
+
+	result, err = sealRenderedSecrets(result, templateCmdFlags.valueFiles, persistedValueFiles, Config.RootDir, templateCmdFlags.inplace, templateCmdFlags.showSecrets)
+	if err != nil {
+		return "", err
+	}
+
 	templatePathsForModeline := buildModelineTemplatePaths(templateCmdFlags.templateFiles, Config.RootDir)
 
 	mline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templatePathsForModeline)
@@ -485,6 +498,7 @@ func init() {
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.full, "full", "", false, "show full resulting config, not only patch")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.debug, "debug", "", false, "show only rendered patches")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.offline, "offline", "", false, "disable gathering information and lookup functions")
+	templateCmd.Flags().BoolVar(&templateCmdFlags.showSecrets, "show-secrets", false, "print values from encrypted value files (*.encrypted.yaml) verbatim in stdout output (default: redacted to ***; never affects -I, which always omits them). Counterpart on apply is --show-secrets-in-drift, which governs the same values in apply's drift preview.")
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
 	// Shell completion for `talm template` flags. `--file` uses the

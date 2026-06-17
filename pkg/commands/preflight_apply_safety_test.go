@@ -192,7 +192,7 @@ up: true
 		desired,
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -218,7 +218,7 @@ func TestPreviewDrift_InsecurePath_DegradesGracefully(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Errorf("previewDrift on insecure path should not block, got err=%v", err)
@@ -239,7 +239,7 @@ func TestVerifyAppliedState_Match_NoError(t *testing.T) {
 		sent,
 		"",
 		&bytes.Buffer{},
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Errorf("verifyAppliedState should accept matching configs, got err=%v", err)
@@ -275,7 +275,7 @@ up: false
 		sent,
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err == nil {
 		t.Fatal("verifyAppliedState should block on divergence, got nil error")
@@ -301,7 +301,7 @@ func TestVerifyAppliedState_ReaderError_Blocks(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		&bytes.Buffer{},
-		false,
+		secretRedactor{},
 	)
 	if err == nil {
 		t.Fatal("expected error on reader failure, got nil")
@@ -322,7 +322,7 @@ func TestVerifyAppliedState_InsecurePath_NoBlock(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Errorf("verifyAppliedState on insecure path should not block, got err=%v", err)
@@ -483,7 +483,7 @@ func TestPrintDriftPreview_SliceSetDiff_RemovesDuplicate(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if !strings.Contains(out, "removed [127.0.0.1]") {
@@ -519,7 +519,7 @@ func TestPrintDriftPreview_SliceSetDiff_AddOnly(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if !strings.Contains(out, "added [192.0.2.5]") {
@@ -553,7 +553,7 @@ func TestPrintDriftPreview_SliceSetDiff_ReorderOnly(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if !strings.Contains(out, "reordered") {
@@ -591,7 +591,7 @@ machine:
 		desired,
 		"192.0.2.10",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -636,7 +636,7 @@ up: false
 		sent,
 		"192.0.2.11",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err == nil {
 		t.Fatal("expected divergence to surface as an error")
@@ -673,7 +673,7 @@ machine:
 		desired,
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Fatalf("previewDrift error: %v", err)
@@ -707,7 +707,7 @@ func TestPrintDriftPreview_SliceFlowStyle_AbsentOnOneSide(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if strings.Contains(out, "[127.0.0.1 192.0.2.5]") {
@@ -744,7 +744,7 @@ func TestPrintDriftPreview_MapFieldChange_RendersFlowStyle(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if strings.Contains(out, "map[role:control-plane]") {
@@ -777,7 +777,7 @@ func TestPrintDriftPreview_ScalarFieldChange_StaysInline(t *testing.T) {
 	}}
 
 	buf := &bytes.Buffer{}
-	printDriftPreview(buf, "drift:", changes, false)
+	printDriftPreview(buf, "drift:", changes, secretRedactor{})
 
 	out := buf.String()
 	if !strings.Contains(out, "cozy.local -> cozy.example") {
@@ -898,7 +898,7 @@ func TestPreviewDrift_MaintenanceMessage_CarriesNodePrefix(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"192.0.2.10",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Fatalf("previewDrift on insecure path should not block, got err=%v", err)
@@ -925,7 +925,7 @@ func TestVerifyAppliedState_MaintenanceMessage_CarriesNodePrefix(t *testing.T) {
 		[]byte(renderedV1_12Multidoc),
 		"192.0.2.11",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Errorf("verifyAppliedState on insecure path should not block, got err=%v", err)
@@ -1154,7 +1154,7 @@ func TestPreviewDrift_MaintenanceMessage_EmptyNodeIDPreservesBareLine(t *testing
 		[]byte(renderedV1_12Multidoc),
 		"",
 		buf,
-		false,
+		secretRedactor{},
 	)
 	if err != nil {
 		t.Fatalf("previewDrift on insecure path should not block, got err=%v", err)

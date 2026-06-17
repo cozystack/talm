@@ -482,7 +482,7 @@ func buildApplyClosure() applyFunc {
 
 		preflightCheckTalosVersion(cosiCtx, cosiVersionReader(c), applyCmdFlags.talosVersion, os.Stderr)
 
-		if err := runPreApplyGates(cosiCtx, c, data, nodeID, os.Stderr); err != nil {
+		if err := runPreApplyGates(cosiCtx, c, data, nodeID, os.Stderr, true); err != nil {
 			return err
 		}
 
@@ -498,7 +498,7 @@ func buildApplyClosure() applyFunc {
 
 		helpers.PrintApplyResults(resp)
 
-		if err := runPostApplyGate(cosiCtx, c, data, nodeID, os.Stderr); err != nil {
+		if err := runPostApplyGate(cosiCtx, c, data, nodeID, os.Stderr, true); err != nil {
 			return err
 		}
 
@@ -589,7 +589,7 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			nodeCtx := client.WithNode(ctx, node)
 			preflightCheckTalosVersion(nodeCtx, read, applyCmdFlags.talosVersion, os.Stderr)
 
-			if err := runPreApplyGates(nodeCtx, c, result, node, os.Stderr); err != nil {
+			if err := runPreApplyGates(nodeCtx, c, result, node, os.Stderr, false); err != nil {
 				return err
 			}
 		}
@@ -614,7 +614,7 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 
 		helpers.PrintApplyResults(resp)
 
-		return runPostApplyGates(ctx, c, result, targetNodes)
+		return runPostApplyGates(ctx, c, result, targetNodes, false)
 	})
 }
 
@@ -623,11 +623,11 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 // already happened on every node — short-circuiting on the first
 // divergence would hide later nodes' state. Mirrors ValidateRefs's
 // collect-then-block pattern.
-func runPostApplyGates(ctx context.Context, c *client.Client, result []byte, targetNodes []string) error {
+func runPostApplyGates(ctx context.Context, c *client.Client, result []byte, targetNodes []string, rendersUserValues bool) error {
 	var perNodeErrs []error
 
 	for _, node := range targetNodes {
-		if err := runPostApplyGate(client.WithNode(ctx, node), c, result, node, os.Stderr); err != nil {
+		if err := runPostApplyGate(client.WithNode(ctx, node), c, result, node, os.Stderr, rendersUserValues); err != nil {
 			perNodeErrs = append(perNodeErrs, errors.Wrapf(err, "node %s", node))
 		}
 	}
@@ -645,7 +645,7 @@ func runPostApplyGates(ctx context.Context, c *client.Client, result []byte, tar
 // and "show me what would change" is precisely what dry-run is for.
 // Skipping it would leave operators with no way to preview drift
 // short of a real apply.
-func runPreApplyGates(ctx context.Context, c *client.Client, rendered []byte, nodeID string, w io.Writer) error {
+func runPreApplyGates(ctx context.Context, c *client.Client, rendered []byte, nodeID string, w io.Writer, rendersUserValues bool) error {
 	if !applyCmdFlags.skipResourceValidation {
 		if err := preflightValidateResources(ctx, cosiLinksDisksReader(c), rendered, w); err != nil {
 			return err
@@ -656,7 +656,44 @@ func runPreApplyGates(ctx context.Context, c *client.Client, rendered []byte, no
 		return nil
 	}
 
-	return previewDrift(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), rendered, nodeID, w, applyCmdFlags.showSecretsInDrift)
+	redactor, err := buildDriftRedactor(rendersUserValues)
+	if err != nil {
+		return err
+	}
+
+	return previewDrift(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), rendered, nodeID, w, redactor)
+}
+
+// buildDriftRedactor assembles the redaction policy for the drift preview /
+// post-apply divergence output. --show-secrets-in-drift bypasses redaction
+// entirely. Otherwise the policy carries the user secret set decrypted from
+// the encrypted value files in scope, so a secret authored in
+// values-secret.encrypted.yaml is masked wherever it surfaces in the diff —
+// not just on the static Talos-bootstrap path allowlist.
+//
+// rendersUserValues says whether the path that produced the diffed bytes
+// actually rendered value files into them. Only the template-rendering path
+// does; the direct-patch path applies a raw patch onto a secrets-generated
+// base and renders none of them. Collecting (decrypting) the secret set on the
+// direct-patch path would be pure overhead — there is nothing in the diff to
+// match — and worse, it would hard-fail an apply that legitimately has no
+// talm.key (e.g. recovery into a maintenance image) just to set up a redactor
+// with no work to do. So skip collection there and redact paths only.
+func buildDriftRedactor(rendersUserValues bool) (secretRedactor, error) {
+	if applyCmdFlags.showSecretsInDrift {
+		return secretRedactor{show: true}, nil
+	}
+
+	if !rendersUserValues {
+		return secretRedactor{}, nil
+	}
+
+	secrets, err := collectEncryptedValueLeaves(applyValueFilePaths(), Config.RootDir)
+	if err != nil {
+		return secretRedactor{}, errors.Wrap(err, "collecting secret values for drift redaction")
+	}
+
+	return secretRedactor{userSecrets: secrets}, nil
 }
 
 // shouldRunDriftPreview is the testable predicate for Phase 2A
@@ -688,12 +725,17 @@ func shouldRunDriftPreview(skip bool) bool {
 // was sent is what is on the node now after success was reported"
 // (or guarantee the on-node state is inaccessible for verification);
 // the gate respects them.
-func runPostApplyGate(ctx context.Context, c *client.Client, sent []byte, nodeID string, w io.Writer) error {
+func runPostApplyGate(ctx context.Context, c *client.Client, sent []byte, nodeID string, w io.Writer, rendersUserValues bool) error {
 	if !shouldRunPostApplyVerify(applyCmdFlags.Mode.Mode, applyCmdFlags.dryRun, applyCmdFlags.skipPostApplyVerify) {
 		return nil
 	}
 
-	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w, applyCmdFlags.showSecretsInDrift)
+	redactor, err := buildDriftRedactor(rendersUserValues)
+	if err != nil {
+		return err
+	}
+
+	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w, redactor)
 }
 
 // shouldRunPostApplyVerify is the testable predicate for runPostApplyGate.
@@ -1046,6 +1088,14 @@ func buildApplyPatchOptions(withSecretsPath string) engine.Options {
 	}
 }
 
+// applyValueFilePaths returns the resolved --values / templateOptions.valueFiles
+// set for an apply: Chart.yaml-declared files resolved against the project
+// root, then CLI --values (CWD-relative) appended. Shared by the render
+// options and the drift redactor so both consume the exact same file list.
+func applyValueFilePaths() []string {
+	return append(resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir), applyCmdFlags.valueFiles...)
+}
+
 // setApplyValueOptions populates the six value sources on opts by merging
 // Chart.yaml's templateOptions.* (the base layer) with apply's CLI flags (the
 // override layer). Ordering matches `talm template` (config first, CLI
@@ -1054,7 +1104,7 @@ func buildApplyPatchOptions(withSecretsPath string) engine.Options {
 // value files are resolved against the project root; CLI --values paths stay
 // CWD-relative.
 func setApplyValueOptions(opts *engine.Options) {
-	opts.ValueFiles = append(resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir), applyCmdFlags.valueFiles...)
+	opts.ValueFiles = applyValueFilePaths()
 	opts.Values = slices.Concat(Config.TemplateOptions.Values, applyCmdFlags.values)
 	opts.StringValues = slices.Concat(Config.TemplateOptions.StringValues, applyCmdFlags.stringValues)
 	opts.FileValues = slices.Concat(Config.TemplateOptions.FileValues, applyCmdFlags.fileValues)
@@ -1184,7 +1234,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands)")
-	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted; cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.)")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers both the Talos bootstrap allowlist (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 
 	// Shell completion for `talm apply` flags. `--file` returns the

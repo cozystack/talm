@@ -247,6 +247,24 @@ Expected: `Updated.` on stdout. The rendered body replaces the previous body of 
 
 Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator note B\n# talm: ...\n<body>`. After `template -I -f nodes/node0.yaml`, the first two lines (`# Operator note A`, `# Operator note B`) MUST still be there, followed by the modeline, the talm-rendered warning header, then the body. Re-run idempotent: a second `template -I` keeps the same prefix structure — leading comments don't drift, multiply, or disappear.
 
+### B4a. In-place omits secret values; stdout redacts them
+
+With an encrypted value file in scope (see B2a) and a template that injects a secret into the body (e.g. a `machine.pods[]` env, or a `machine.registries.config.<reg>.auth.password`):
+
+```bash
+cd $PROJECT
+talm template -I -f nodes/node0.yaml
+grep -q hunter2 nodes/node0.yaml && echo "FAIL: secret baked into node file" || echo "OK: secret omitted"
+talm template -I -f nodes/node0.yaml && git diff --quiet nodes/node0.yaml && echo "OK: idempotent (no churn)" || echo "churn on 2nd -I"
+talm template -f nodes/node0.yaml | grep -c hunter2          # 0 — redacted by default
+talm template --show-secrets -f nodes/node0.yaml | grep -c hunter2   # >=1 — verbatim opt-in
+talm apply --dry-run -f nodes/node0.yaml                     # real secret re-injected at apply
+```
+
+Expected: `template -I` writes a node file with NO plaintext (or ciphertext) secret — the secret field is omitted, the real value is re-rendered only at apply. A second `-I` produces no git churn (age is randomized; omission sidesteps it). Plain `template` to stdout redacts the secret to `***`; `--show-secrets` prints it. At `apply`, the drift/dry-run shows the real secret value (re-rendered in memory from the encrypted file), and a secret nested in `machine.pods[]` is NOT duplicated in the applied config.
+
+Regression anchor (replace-semantic lists): put a secret as one element of a multi-element list at a `merge:"replace"` path — `cluster.network.podSubnets`, `serviceSubnets`, `cluster.apiServer.auditPolicy`, an ingress rule, or `portSelector/ports`. After `template -I`, the whole key must be absent from the node file (NOT a partial list with the secret element removed). After `talm apply`, the applied config must contain BOTH the secret element and its non-secret siblings — a partial body list would overwrite the rendered list and silently drop the secret element. Verify the secret value is present in `talm apply --dry-run --show-secrets-in-drift` output and the sibling is not lost.
+
 ### B5. Render with stale chart preset
 
 When the local `charts/talm/` is older than the talm binary's embedded preset, `talm template` succeeds against the local preset — it does NOT auto-bump. The operator must run `init --update`. Confirm by inspecting `talm version` against `Chart.yaml`.
@@ -439,7 +457,7 @@ cd /tmp && talm apply --dry-run -f "$PROJECT/nodes/node0.yaml"
 # A "failed to read values file" error here is the pre-fix regression.
 ```
 
-Regression anchor: `talm template` and `talm apply` must render the SAME config for the same value inputs (`--values` / `--set` / Chart.yaml `templateOptions.valueFiles`). A value that renders under `template` but is empty / `required`-fails under `apply` is the #221 blocker resurfacing.
+Regression anchor: `talm template` and `talm apply` must render the SAME config for the same value inputs (`--values` / `--set` / Chart.yaml `templateOptions.valueFiles`). A value that renders under `template` but is empty / `required`-fails under `apply` is a regression of the template↔apply value consistency.
 
 ### C4. Stage mode
 
@@ -460,6 +478,19 @@ talm apply --dry-run -f nodes/node0.yaml
 Expected: the drift preview line for `machine.token` reads `machine.token: ***redacted (len=N)*** -> ***redacted (len=M)***`. The literal `old-token-value` / `new-token-value` strings MUST NOT appear in stderr. Non-secret paths (e.g. `machine.network.hostname` if it changed) render verbatim.
 
 Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,aescbcEncryptionSecret,secretboxEncryptionSecret}`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `cluster.acceptedCAs[].key`, `machine.{token,ca.key}`, `machine.acceptedCAs[].key`) MUST redact. A regression that silently leaks a secret value into stderr is a security-class bug — verify the substring with `grep -F` against the captured output.
+
+### C5a. Drift preview redacts user secret values (encrypted value files)
+
+With an encrypted value file in scope (B2a) injecting a secret into a NON-allowlisted field (e.g. a `machine.pods[]` env, or `machine.registries.config.<reg>.auth.password`):
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -F hunter2 && echo "FAIL: user secret leaked" || echo "OK: redacted"
+talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml 2>&1 | grep -cF hunter2   # >=1 with explicit opt-in
+```
+
+Expected: a value authored in `values-secret.encrypted.yaml` is redacted in the drift preview by default — symmetric with `talm template`, which redacts the same value on stdout. The value appears verbatim only under `--show-secrets-in-drift`. This is value-based (not path-based) redaction, so it covers user secrets wherever a template places them. A leak here is a security-class bug — `apply --dry-run` is the common CI pre-apply command.
+
+Regression anchor: the redaction is value-based and exact-match. A secret whose plaintext coincides with an ordinary structural string (e.g. a password literally set to `controlplane` or a bare port) will also redact that unrelated field — a documented sharp edge of value-based sealing, not a bug. Do not encrypt low-entropy values that collide with config strings.
 
 ### C6. Drift preview shows secrets with explicit opt-in
 

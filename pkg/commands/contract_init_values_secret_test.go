@@ -89,6 +89,30 @@ func TestContract_InitEncryptDecrypt_ValuesSecretRoundTrip(t *testing.T) {
 	}
 }
 
+// TestContract_SecurityInfoBox_NamesEveryGitignoredFile pins that the
+// `talm init` Security Information box enumerates every secret-bearing file
+// writeGitignoreFile adds to .gitignore (default kubeconfig name). The box and
+// the gitignore set must not drift — an under-listed box would make an
+// operator believe a plaintext file (e.g. values-secret.yaml) is unprotected.
+func TestContract_SecurityInfoBox_NamesEveryGitignoredFile(t *testing.T) {
+	withConfigSnapshot(t)
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+	Config.GlobalOptions.Kubeconfig = "" // default kubeconfig name
+
+	// printSecretsWarning early-returns unless talm.key exists.
+	writeFile(t, dir, talmKeyName, "AGE-SECRET-KEY-1PLACEHOLDER\n")
+
+	out := captureStderr(t, printSecretsWarning)
+
+	for _, name := range []string{secretsYamlName, talosconfigName, talmKeyName, valuesSecretYamlName, defaultKubeconfigName} {
+		if !strings.Contains(out, name) {
+			t.Errorf("Security Information box must name %q (it is git-ignored by writeGitignoreFile); box:\n%s", name, out)
+		}
+	}
+}
+
 func resetInitFlags() {
 	initCmdFlags.encrypt = false
 	initCmdFlags.decrypt = false

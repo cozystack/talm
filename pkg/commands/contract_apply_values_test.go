@@ -22,14 +22,14 @@ import (
 // applyValueFlagNames is the set of value-source flags `talm apply` must
 // expose so it renders identically to `talm template`. apply re-renders from
 // the modeline at apply time, so a value supplied only at template time would
-// otherwise be silently dropped (issue #221).
+// otherwise be silently dropped.
 //
 //nolint:gochecknoglobals // test fixture: shared flag-name list for the table tests below.
 var applyValueFlagNames = []string{"values", "set", "set-string", "set-file", "set-json", "set-literal"}
 
 // TestApplyFlags_ValueSourcesRegistered pins that apply registers every value
 // source template has. Without these flags, the template↔apply value
-// inconsistency (#221) cannot be closed.
+// inconsistency cannot be closed.
 func TestApplyFlags_ValueSourcesRegistered(t *testing.T) {
 	for _, name := range applyValueFlagNames {
 		if applyCmd.Flags().Lookup(name) == nil {

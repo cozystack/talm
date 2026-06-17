@@ -193,6 +193,7 @@ func TestContract_GenerateOutput_ComposesModelineWarningAndRender(t *testing.T) 
 		offline           bool
 		kubernetesVersion string
 		inplace           bool
+		showSecrets       bool
 		nodesFromArgs     bool
 		endpointsFromArgs bool
 		templatesFromArgs bool
