@@ -391,6 +391,31 @@ talm apply --dry-run \
 
 Expected: each node renders / diffs independently; per-node gate output sections.
 
+### C3a. Value files and `--set` honored at apply (consistent with template)
+
+Add a value-consuming line to a template (e.g. `clusterDomain: {{ .Values.clusterDomain | quote }}` in `templates/controlplane.yaml`), then:
+
+```bash
+# 1. A value supplied only via --set must apply, not just template.
+talm template -f nodes/node0.yaml --set clusterDomain=set.example | grep dnsDomain
+talm apply --dry-run -f nodes/node0.yaml --set clusterDomain=set.example
+# Expected: the dry-run drift shows dnsDomain -> set.example. Before this
+# change, apply re-rendered from the modeline and dropped --set entirely.
+
+# 2. A Chart.yaml templateOptions.valueFiles entry must apply too.
+echo 'clusterDomain: fromfile.example' > extra-values.yaml
+# add `valueFiles: [extra-values.yaml]` under templateOptions in Chart.yaml
+talm apply --dry-run -f nodes/node0.yaml   # expect dnsDomain -> fromfile.example
+
+# 3. Chart.yaml-relative value files resolve against the project root,
+#    not the caller's CWD — run apply from elsewhere with an absolute -f:
+cd /tmp && talm apply --dry-run -f "$PROJECT/nodes/node0.yaml"
+# Expected: still finds extra-values.yaml (joined with the project root).
+# A "failed to read values file" error here is the pre-fix regression.
+```
+
+Regression anchor: `talm template` and `talm apply` must render the SAME config for the same value inputs (`--values` / `--set` / Chart.yaml `templateOptions.valueFiles`). A value that renders under `template` but is empty / `required`-fails under `apply` is the #221 blocker resurfacing.
+
 ### C4. Stage mode
 
 ```bash

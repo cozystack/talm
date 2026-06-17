@@ -304,6 +304,39 @@ func applyExplicitFilesRoot(filePaths []string) (bool, error) {
 	return true, nil
 }
 
+// resolveProjectValueFiles resolves value-file paths that originate from
+// Chart.yaml's templateOptions.valueFiles. Such an entry is a project-relative
+// declaration, so a relative path is joined with the detected project root —
+// it must resolve identically regardless of the caller's CWD, the same way
+// ResolveSecretsPath and resolveTemplatePaths anchor on Config.RootDir. This
+// is what keeps `talm apply -f /abs/project/nodes/cp01.yaml` working when run
+// from outside the project, and what keeps template and apply pointed at the
+// same value file (a prerequisite for the secret-sealing path).
+//
+// Absolute entries pass through unchanged. CLI-supplied --values paths are NOT
+// routed through here: by convention they stay relative to the shell's CWD
+// (matching every other CLI tool), so the caller appends them after the
+// resolved Chart.yaml entries.
+func resolveProjectValueFiles(files []string, rootDir string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+
+	resolved := make([]string, len(files))
+
+	for i, file := range files {
+		if file == "" || filepath.IsAbs(file) {
+			resolved[i] = file
+
+			continue
+		}
+
+		resolved[i] = filepath.Join(rootDir, file)
+	}
+
+	return resolved
+}
+
 // ResolveSecretsPath resolves secrets.yaml path relative to project root if not absolute.
 func ResolveSecretsPath(withSecrets string) string {
 	if withSecrets == "" {

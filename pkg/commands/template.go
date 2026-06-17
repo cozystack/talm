@@ -69,7 +69,11 @@ beside the source" workflow, while apply's chain models "compose a
 single MachineConfig and apply it once".`,
 	Args: cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, _ []string) error {
-		templateCmdFlags.valueFiles = append(Config.TemplateOptions.ValueFiles, templateCmdFlags.valueFiles...)
+		// Chart.yaml-declared value files are project-relative; resolve
+		// them against the detected root so template and apply point at
+		// the same file regardless of CWD. CLI --values stay CWD-relative
+		// (appended after).
+		templateCmdFlags.valueFiles = append(resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir), templateCmdFlags.valueFiles...)
 		templateCmdFlags.values = append(Config.TemplateOptions.Values, templateCmdFlags.values...)
 		templateCmdFlags.stringValues = append(Config.TemplateOptions.StringValues, templateCmdFlags.stringValues...)
 		templateCmdFlags.fileValues = append(Config.TemplateOptions.FileValues, templateCmdFlags.fileValues...)

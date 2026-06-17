@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,6 +67,12 @@ var applyCmdFlags struct {
 	certFingerprints       []string
 	insecure               bool
 	configFiles            []string // -f/--files
+	valueFiles             []string // --values
+	stringValues           []string // --set-string
+	values                 []string // --set
+	fileValues             []string // --set-file
+	jsonValues             []string // --set-json
+	literalValues          []string // --set-literal
 	talosVersion           string
 	withSecrets            string
 	debug                  bool
@@ -1007,7 +1014,7 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string) engine.Options {
 	resolvedTemplates := resolveTemplatePaths(modelineTemplates, Config.RootDir)
 
-	return engine.Options{
+	opts := engine.Options{
 		TalosVersion:      applyCmdFlags.talosVersion,
 		WithSecrets:       withSecretsPath,
 		KubernetesVersion: applyCmdFlags.kubernetesVersion,
@@ -1018,9 +1025,18 @@ func buildApplyRenderOptions(modelineTemplates []string, withSecretsPath string)
 		CommandName:       applyCommandName,
 		TalosEndpoints:    append([]string(nil), GlobalArgs.Endpoints...),
 	}
+	setApplyValueOptions(&opts)
+
+	return opts
 }
 
-// buildApplyPatchOptions constructs engine.Options for the direct patch path.
+// buildApplyPatchOptions constructs engine.Options for the direct-patch path
+// (a non-modelined `-f` file). This path does NOT render chart templates — it
+// generates the base config from secrets and applies the file as a patch via
+// FullConfigProcess, which never calls loadValues. So value sources
+// (--values / --set* / templateOptions.valueFiles) have nothing to render into
+// and are intentionally not carried here; they apply only on the
+// template-rendering path (buildApplyRenderOptions).
 func buildApplyPatchOptions(withSecretsPath string) engine.Options {
 	return engine.Options{
 		TalosVersion:      applyCmdFlags.talosVersion,
@@ -1028,6 +1044,22 @@ func buildApplyPatchOptions(withSecretsPath string) engine.Options {
 		KubernetesVersion: applyCmdFlags.kubernetesVersion,
 		Debug:             applyCmdFlags.debug,
 	}
+}
+
+// setApplyValueOptions populates the six value sources on opts by merging
+// Chart.yaml's templateOptions.* (the base layer) with apply's CLI flags (the
+// override layer). Ordering matches `talm template` (config first, CLI
+// appended): the engine's loadValues applies sources left-to-right, so the CLI
+// flags appended here win over the Chart.yaml defaults. Chart.yaml-declared
+// value files are resolved against the project root; CLI --values paths stay
+// CWD-relative.
+func setApplyValueOptions(opts *engine.Options) {
+	opts.ValueFiles = append(resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir), applyCmdFlags.valueFiles...)
+	opts.Values = slices.Concat(Config.TemplateOptions.Values, applyCmdFlags.values)
+	opts.StringValues = slices.Concat(Config.TemplateOptions.StringValues, applyCmdFlags.stringValues)
+	opts.FileValues = slices.Concat(Config.TemplateOptions.FileValues, applyCmdFlags.fileValues)
+	opts.JsonValues = slices.Concat(Config.TemplateOptions.JsonValues, applyCmdFlags.jsonValues)
+	opts.LiteralValues = slices.Concat(Config.TemplateOptions.LiteralValues, applyCmdFlags.literalValues)
 }
 
 // wrapWithNodeContext wraps a client action function to resolve and inject node
@@ -1135,6 +1167,12 @@ func resolveTemplatePaths(templates []string, rootDir string) []string {
 func init() {
 	applyCmd.Flags().BoolVarP(&applyCmdFlags.insecure, "insecure", "i", false, "apply using the insecure (encrypted with no auth) maintenance service")
 	applyCmd.Flags().StringSliceVarP(&applyCmdFlags.configFiles, "file", "f", nil, "node config files / patches (`.yaml` / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere.")
+	applyCmd.Flags().StringSliceVar(&applyCmdFlags.valueFiles, "values", []string{}, "specify values in a YAML file (can specify multiple). Must match `talm template` — apply re-renders from the modeline and would otherwise drop value files supplied at template time.")
+	applyCmd.Flags().StringArrayVar(&applyCmdFlags.values, "set", []string{}, "set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). For IP / CIDR / version literals use --set-string — dots in --set values are interpreted as YAML key nesting.")
+	applyCmd.Flags().StringArrayVar(&applyCmdFlags.stringValues, "set-string", []string{}, "set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Use for IP addresses, CIDR blocks, version strings, or any literal value where dots must NOT be interpreted as YAML key nesting.")
+	applyCmd.Flags().StringArrayVar(&applyCmdFlags.fileValues, "set-file", []string{}, "set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)")
+	applyCmd.Flags().StringArrayVar(&applyCmdFlags.jsonValues, "set-json", []string{}, "set JSON values on the command line (can specify multiple or separate values with commas: key1=jsonval1,key2=jsonval2)")
+	applyCmd.Flags().StringArrayVar(&applyCmdFlags.literalValues, "set-literal", []string{}, "set a literal STRING value on the command line")
 	applyCmd.Flags().StringVar(&applyCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	applyCmd.Flags().StringVar(&applyCmdFlags.withSecrets, "with-secrets", "", "use a secrets file generated using 'gen secrets'")
 	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
@@ -1158,6 +1196,7 @@ func init() {
 	// in cobra's __complete path; wiring it would pin dead surface.
 	_ = applyCmd.RegisterFlagCompletionFunc("mode", completeApplyMode)
 	_ = applyCmd.RegisterFlagCompletionFunc("file", completeNodeFiles)
+	_ = applyCmd.RegisterFlagCompletionFunc("values", completeYAMLFiles)
 	_ = applyCmd.RegisterFlagCompletionFunc("with-secrets", completeYAMLFiles)
 
 	addCommand(applyCmd)
