@@ -79,13 +79,19 @@ Expected: one `Overwriting <path> (--force)` line per diff; no prompt; exit zero
 
 ```bash
 cd /tmp/talm-init-test
-talm init --decrypt
-test -f secrets.yaml && test -f talosconfig
+echo 'registryPassword: hunter2' > values-secret.yaml
 talm init --encrypt
-test -f secrets.encrypted.yaml && test -f talosconfig.encrypted
+test -f secrets.encrypted.yaml && test -f talosconfig.encrypted && test -f values-secret.encrypted.yaml
+grep -q 'ENC\[AGE,data:' values-secret.encrypted.yaml   # value encrypted
+! grep -q hunter2 values-secret.encrypted.yaml          # plaintext not present
+grep -q '^values-secret.yaml$' .gitignore               # plaintext git-ignored
+rm values-secret.yaml secrets.yaml talosconfig
+talm init --decrypt
+test -f secrets.yaml && test -f talosconfig && test -f values-secret.yaml
+grep -q 'registryPassword: hunter2' values-secret.yaml  # decrypts back
 ```
 
-Expected: per-file `Decrypting X -> Y` / `Encrypting X -> Y` lines; both round-trips succeed.
+Expected: per-file `Decrypting X -> Y` / `Encrypting X -> Y` lines (now including `values-secret.yaml`); both round-trips succeed.
 
 ### A6. Decrypt without `talm.key`
 
@@ -200,6 +206,25 @@ talm template -f nodes/node0.yaml \
 ```
 
 Expected: `dnsDomain: overridden.local` appears in output.
+
+### B2a. Render with encrypted user values (in-memory decryption)
+
+Author a secret value, encrypt it, reference the encrypted file, and have a template consume it (e.g. `clusterDomain: {{ .Values.clusterDomain | quote }}`):
+
+```bash
+cd $PROJECT
+echo 'clusterDomain: secret.example' > values-secret.yaml
+talm init --encrypt                       # produces values-secret.encrypted.yaml
+# add `valueFiles: [values-secret.encrypted.yaml]` under templateOptions in Chart.yaml
+talm template -f nodes/node0.yaml | grep dnsDomain   # expect secret.example
+talm apply --dry-run -f nodes/node0.yaml             # same value at apply (re-render decrypts in-memory)
+
+# Recovery-hint path: with the key gone, the encrypted value file must fail loudly.
+mv talm.key /tmp/talm.key.bak
+talm template -f nodes/node0.yaml ; mv /tmp/talm.key.bak talm.key
+```
+
+Expected: the encrypted file decrypts in memory at both template and apply — no plaintext `values-secret.yaml` is needed at render time and none is written. With `talm.key` missing, the error names `values-secret.encrypted.yaml` and carries the talm.key recovery hint (not a bare "file not found"). A value file whose name ends `.encrypted.yaml` but contains no `ENC[AGE,...]` envelope must error rather than render as empty plaintext.
 
 ### B3. Render against missing file
 
