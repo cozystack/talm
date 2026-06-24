@@ -1,13 +1,26 @@
-# talm meta
+# talm wipe vg
 
-Write and delete keys in the META partition
+Remove an LVM volume group (cascades to its LVs)
+
+## Synopsis
+
+Remove an LVM volume group.
+
+WARNING: this is destructive. Every logical volume inside the group is
+removed first, then the volume group itself. There is no separate
+confirmation per LV. The underlying physical volumes keep their LVM
+labels and remain claimable until you run "talosctl wipe pv".
+
+```
+talm wipe vg <name> [flags]
+```
 
 ## Options
 
 ```
       --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
   -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
-  -h, --help                       help for meta
+  -h, --help                       help for vg
   -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
@@ -27,7 +40,5 @@ Write and delete keys in the META partition
 
 ## SEE ALSO
 
-* [talm](index.md)	 - Manage Talos the GitOps Way!
-* [talm meta delete](meta_delete.md)	 - Delete a key from the META partition.
-* [talm meta write](meta_write.md)	 - Write a key-value pair to the META partition.
+* [talm wipe](wipe.md)	 - Wipe block device or volumes
 

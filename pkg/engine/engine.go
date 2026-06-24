@@ -29,8 +29,6 @@ import (
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	"helm.sh/helm/v4/pkg/strvals"
 
-	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
-
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/bundle"
@@ -39,6 +37,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // Options encapsulates all parameters necessary for rendering.
@@ -159,8 +158,8 @@ func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.
 
 	// Updating parameters after applying patches
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
-	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
-	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+	clusterName := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterName()
+	clusterEndpoint := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterEndpoint()
 
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
@@ -193,6 +192,24 @@ func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.
 	return configBundle, machineType, nil
 }
 
+// kubeVersion returns the Kubernetes version (without the leading "v") for the
+// config bundle, falling back to the version this binary's machinery was built
+// against when unset.
+//
+// Talos v1.14's config/generate errors on an empty version, where earlier
+// machinery emitted no image fields at all and left every component to the
+// node's own default. The fallback is therefore a behaviour change for a project
+// that pins nothing: it gets this binary's Kubernetes version instead of the
+// node's. Both shipped presets pin the key, and docs/configuration/talos-versions.md
+// tells operators to do the same.
+func kubeVersion(v string) string {
+	if v == "" {
+		v = constants.DefaultKubernetesVersion
+	}
+
+	return strings.TrimPrefix(v, "v")
+}
+
 // InitializeConfigBundle initializes a Talos configuration bundle from opts.
 //
 //nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
@@ -222,7 +239,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 			&bundle.InputOptions{
 				ClusterName: opts.ClusterName,
 				Endpoint:    opts.Endpoint,
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1595,7 +1612,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 			cmdName = cmdNameTalm
 		}
 
-		err := helpers.FailIfMultiNodes(ctx, cmdName)
+		err := failIfMultiNodes(ctx, cmdName)
 		if err != nil {
 			return nil, errors.Wrap(err, "checking node selector")
 		}
@@ -1880,7 +1897,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	configBundleOpts := []bundle.Option{
 		bundle.WithInputOptions(
 			&bundle.InputOptions{
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1912,8 +1929,8 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
-	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
-	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+	clusterName := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterName()
+	clusterEndpoint := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterEndpoint()
 
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
@@ -1929,7 +1946,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			&bundle.InputOptions{
 				ClusterName: clusterName,
 				Endpoint:    clusterEndpoint.String(),
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -2121,10 +2138,10 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 
 		var resources []map[string]any
 
-		// Signature is fixed by helpers.ForEachResource; the callback
+		// Signature is fixed by forEachResource; the callback
 		// always returns nil because per-item errors are accumulated
 		// into multiErr / passed through for retry classification.
-		//nolint:unparam // callback shape fixed by helpers.ForEachResource API
+		//nolint:unparam // callback shape fixed by forEachResource API
 		callbackResource := func(_ context.Context, _ string, r resource.Resource, callError error) error {
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
@@ -2163,7 +2180,7 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 		// half-collected partial result from a failed attempt does not
 		// leak into the next one.
 		//
-		// helpers.ForEachResource routes per-node dial failures (the
+		// forEachResource routes per-node dial failures (the
 		// dominant transient class — a single node briefly partitioned
 		// from the rest of a multi-node lookup) through callbackResource
 		// as callError, where they land in multiErr and ForEachResource
@@ -2199,7 +2216,7 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 			multiErr = nil
 			resources = resources[:0]
 
-			return firstLookupError(helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID), multiErr)
+			return firstLookupError(forEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID), multiErr)
 		}, shouldRetry, defaultRetryPolicy())
 		if attemptErr != nil {
 			return map[string]any{}, wrapLookupError(attemptErr, kind, namespace, docID, endpoints, commandName)

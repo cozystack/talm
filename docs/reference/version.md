@@ -9,11 +9,12 @@ talm version [flags]
 ## Options
 
 ```
-      --client         Print client version only
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -h, --help           help for version
-  -i, --insecure       use Talos maintenance mode API
-      --short          Print the short version
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+      --client                     Print client version only
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for version
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
+      --short                      Print the short version
 ```
 
 ## Options inherited from parent commands

@@ -1,13 +1,23 @@
-# talm meta
+# talm wipe lv
 
-Write and delete keys in the META partition
+Remove an LVM logical volume
+
+## Synopsis
+
+Remove an LVM logical volume.
+
+The argument is the qualified logical-volume name, e.g. vg0/lv0.
+
+```
+talm wipe lv <vg/lv> [flags]
+```
 
 ## Options
 
 ```
       --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
   -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
-  -h, --help                       help for meta
+  -h, --help                       help for lv
   -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
@@ -27,7 +37,5 @@ Write and delete keys in the META partition
 
 ## SEE ALSO
 
-* [talm](index.md)	 - Manage Talos the GitOps Way!
-* [talm meta delete](meta_delete.md)	 - Delete a key from the META partition.
-* [talm meta write](meta_write.md)	 - Write a key-value pair to the META partition.
+* [talm wipe](wipe.md)	 - Wipe block device or volumes
 

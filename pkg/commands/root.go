@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,10 +53,36 @@ var SkipVerify bool
 // talosconfig.
 var errContextNotFound = errors.New("context not found in talosconfig")
 
-// signalContext returns a context cancelled on SIGINT/SIGTERM so a --skip-verify
-// client connection can be interrupted cleanly, mirroring talosctl's own wrappers.
+// signalContext returns a context cancelled on SIGINT/SIGTERM, mirroring the
+// wrappers talosctl builds its own clients with.
+//
+// It unregisters the handler on the first signal, so a second Ctrl+C kills the
+// process outright. signal.NotifyContext would keep the registration, and the
+// second signal would land in a full channel and be discarded, leaving a stuck
+// call with no way out from the keyboard.
+//
+// Follows siderolabs/talos pkg/cli/context.go, which is licensed under MPL-2.0:
+// https://github.com/siderolabs/talos/blob/v1.14.0/pkg/cli/context.go
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		select {
+		case <-sigCh:
+			signal.Stop(sigCh)
+			fmt.Fprintln(os.Stderr, "Signal received, aborting, press Ctrl+C once again to abort immediately...")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	return ctx, func() {
+		signal.Stop(sigCh)
+		cancel()
+	}
 }
 
 // skipVerifyTLSConfig builds a TLS config that skips server-certificate
@@ -154,8 +181,62 @@ func WithClientNoNodes(action func(context.Context, *client.Client) error, dialO
 		return WithClientSkipVerify(action, dialOptions...)
 	}
 
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientNoNodes(action, dialOptions...)
+	ctx, stop := signalContext()
+	defer stop()
+
+	// Built on pkg/machinery/client rather than the talosctl wrapper: Talos
+	// v1.14 replaced that wrapper with a ClientFactory which refuses to
+	// construct without nodes, which is the one thing this function allows.
+	//
+	// The option set follows siderolabs/talos
+	// cmd/talosctl/pkg/talos/global/client.go (MPL-2.0):
+	// https://github.com/siderolabs/talos/blob/v1.13.7/cmd/talosctl/pkg/talos/global/client.go
+	cfg, err := clientconfig.Open(GlobalArgs.Talosconfig)
+	if err != nil {
+		return errors.Wrapf(err, "opening talosconfig %q", GlobalArgs.Talosconfig)
+	}
+
+	opts := []client.OptionFunc{
+		client.WithConfig(cfg),
+		client.WithDefaultGRPCDialOptions(),
+		client.WithGRPCDialOptions(dialOptions...),
+		client.WithSideroV1KeysDir(clientconfig.CustomSideroV1KeysDirPath(GlobalArgs.SideroV1KeysDir)),
+	}
+
+	if GlobalArgs.CmdContext != "" {
+		opts = append(opts, client.WithContextName(GlobalArgs.CmdContext))
+	}
+
+	if len(GlobalArgs.Endpoints) > 0 {
+		opts = append(opts, client.WithEndpoints(GlobalArgs.Endpoints...))
+	}
+
+	if GlobalArgs.Cluster != "" {
+		opts = append(opts, client.WithCluster(GlobalArgs.Cluster))
+	}
+
+	c, err := client.New(ctx, opts...)
+	if err != nil {
+		return errors.Wrap(err, "constructing Talos client")
+	}
+
+	defer func() { _ = c.Close() }()
+
+	return action(ctx, c)
+}
+
+// withNodesMetadata attaches the plural "nodes" key to the request context.
+//
+// Upstream deprecated client.WithNodes in favor of WithNode plus client-side
+// multiplexing, but the plural key is what forEachResource and failIfMultiNodes
+// read (pkg/engine/talos_helpers.go); with only the singular key a template
+// `lookup` resolves against an empty target and fails at the RPC. Migrating
+// means moving those two off the metadata, so the deprecated call is kept here
+// as the single place that has to change.
+//
+//nolint:staticcheck // SA1019: see above — the plural key is load-bearing for template lookups.
+func withNodesMetadata(ctx context.Context, nodes ...string) context.Context {
+	return client.WithNodes(ctx, nodes...)
 }
 
 // WithClient builds upon WithClientNoNodes to provide set of nodes on request context based on config & flags.
@@ -174,7 +255,7 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 				GlobalArgs.Nodes = configContext.Nodes
 			}
 
-			ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+			ctx = withNodesMetadata(ctx, GlobalArgs.Nodes...)
 
 			return action(ctx, cli)
 		},
@@ -183,9 +264,35 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 }
 
 // WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).
+//
+// One client spans every node in GlobalArgs.Nodes, as the talosctl wrapper did
+// before v1.14 hid it behind a per-node ClientFactory; callers that need a
+// single-endpoint client narrow the list themselves (openClientPerNodeMaintenance).
+// GlobalArgs.Nodes is read synchronously because that narrowing restores the
+// saved list as soon as action returns.
+//
+// Follows the same upstream file as WithClientNoNodes above (MPL-2.0).
 func WithClientMaintenance(enforceFingerprints []string, action func(context.Context, *client.Client) error) error {
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
+	ctx, stop := signalContext()
+	defer stop()
+
+	nodes := GlobalArgs.Nodes
+
+	c, err := client.New(ctx,
+		client.WithDefaultGRPCDialOptions(),
+		// Taken for the insecure TLS config and the fingerprint pinning. Its node
+		// argument is inert here: options are applied in order, and WithEndpoints
+		// below overwrites the single endpoint it sets.
+		client.WithMaintenanceMode("", enforceFingerprints),
+		client.WithEndpoints(nodes...),
+	)
+	if err != nil {
+		return errors.Wrap(err, "constructing maintenance client")
+	}
+
+	defer func() { _ = c.Close() }()
+
+	return action(ctx, c)
 }
 
 // skipVerifyClientOptions assembles the client options for a --skip-verify

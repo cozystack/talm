@@ -290,6 +290,7 @@ func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.C
 	case templateCmdFlags.offline:
 		return tmpl(ctx, nil)
 	case templateCmdFlags.insecure:
+		//nolint:contextcheck // WithClientMaintenance owns its signal-rooted context, as the talosctl wrappers did
 		return WithClientMaintenance(nil, tmpl)
 	default:
 		// WithClient handles --skip-verify (via WithClientNoNodes routing) and

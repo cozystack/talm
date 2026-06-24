@@ -632,13 +632,19 @@ func TestWrapTalosCommand_RealCrashdumpPopulatesNodesFromControlPlane(t *testing
 	}
 }
 
-// TestWrapTalosCommand_RealMetaWritePropagatesInsecure pins the
-// persistent-shorthand path: metaCmd.PersistentFlags() registers
-// -i / --insecure with shorthand "i". Through the wrapper, both
-// the long and short forms must resolve on `meta write`. Pinning
-// the shorthand catches a future regression where the wrapper
-// might copy the long flag but lose the shorthand attribute.
-func TestWrapTalosCommand_RealMetaWritePropagatesInsecure(t *testing.T) {
+// TestWrapTalosCommand_RealMetaPropagatesInsecure pins that the wrapper copies
+// the upstream meta command's --insecure across, long form and -i shorthand
+// both, so a future regression that copies the flag but drops the shorthand
+// attribute is caught.
+//
+// It asserts on `meta`, not on `meta write`. Talos v1.14.0 moved --insecure
+// from metaCmd.PersistentFlags() to metaCmd.Flags() when it introduced
+// global.InsecureFlags, and a local flag does not reach a subcommand, so
+// `talosctl meta write --insecure` stopped parsing upstream as well. talm
+// mirrors upstream here rather than papering over it; compensating would mean
+// talm accepting a flag talosctl rejects. Reported as
+// https://github.com/siderolabs/talos/issues/14346.
+func TestWrapTalosCommand_RealMetaPropagatesInsecure(t *testing.T) {
 	var metaCmd *cobra.Command
 
 	for _, cmd := range taloscommands.Commands {
@@ -655,22 +661,23 @@ func TestWrapTalosCommand_RealMetaWritePropagatesInsecure(t *testing.T) {
 
 	wrapped := wrapTalosCommand(metaCmd, "meta")
 
-	writeCmd, _, err := wrapped.Find([]string{"write"})
-	if err != nil {
-		t.Fatalf("Find write under wrapped meta: %v", err)
-	}
-
 	// Long form.
-	if err := writeCmd.ParseFlags([]string{"--insecure"}); err != nil {
-		t.Fatalf("ParseFlags --insecure on wrapped meta write: %v", err)
+	if err := wrapped.ParseFlags([]string{"--insecure"}); err != nil {
+		t.Fatalf("ParseFlags --insecure on wrapped meta: %v", err)
 	}
 
-	if writeCmd.Flags().Lookup("insecure") == nil {
-		t.Fatal("wrapped meta write must see --insecure from metaCmd.PersistentFlags()")
+	if wrapped.Flags().Lookup("insecure") == nil {
+		t.Fatal("wrapped meta must carry --insecure across from the upstream command")
 	}
 
 	// Short form. Re-parse to exercise the -i alias path.
-	if err := writeCmd.ParseFlags([]string{"-i"}); err != nil {
-		t.Errorf("ParseFlags -i on wrapped meta write: %v — shorthand attribute lost during copy?", err)
+	if err := wrapped.ParseFlags([]string{"-i"}); err != nil {
+		t.Errorf("ParseFlags -i on wrapped meta: %v — shorthand attribute lost during copy?", err)
+	}
+
+	// The subcommands still exist and still do not see the parent's local flag,
+	// exactly as upstream leaves them.
+	if _, _, err := wrapped.Find([]string{"write"}); err != nil {
+		t.Fatalf("Find write under wrapped meta: %v", err)
 	}
 }

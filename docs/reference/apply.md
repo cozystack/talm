@@ -33,28 +33,28 @@ talm apply [flags]
 ## Options
 
 ```
-      --cert-fingerprint strings                    list of server certificate fingeprints to accept (defaults to no check)
-      --debug                                       show only rendered patches
-      --dry-run                                     check how the config change will be applied in dry-run mode
-  -f, --file .yaml                                  node config files / patches (.yaml / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere.
-      --force                                       will overwrite existing files
-  -h, --help                                        help for apply
-  -i, --insecure                                    apply using the insecure (encrypted with no auth) maintenance service
-      --kubernetes-version string                   desired kubernetes version to run (default "1.36.2")
-  -m, --mode auto, no-reboot, reboot, staged, try   apply config mode (default auto)
-      --set stringArray                             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
-      --set-file stringArray                        set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)
-      --set-json stringArray                        set JSON values on the command line (can specify multiple or separate values with commas: key1=jsonval1,key2=jsonval2)
-      --set-literal stringArray                     set a literal STRING value on the command line
-      --set-string stringArray                      set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Nothing is type-converted, so the value reaches the template exactly as typed.
-      --show-secrets-in-drift                       show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers both the Talos bootstrap allowlist (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.
-      --skip-drift-preview                          skip the pre-apply diff of on-node vs rendered MachineConfig
-      --skip-post-apply-verify                      skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands) (default true)
-      --skip-resource-validation                    skip the pre-apply check that declared host resources (links, disks) exist on the target node
-      --talos-version string                        the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)
-      --timeout duration                            the config will be rolled back after specified timeout (if try mode is selected) (default 1m0s)
-      --values talm template                        specify values in a YAML file (can specify multiple). Must match talm template — apply re-renders from the modeline and would otherwise drop value files supplied at template time.
-      --with-secrets string                         use a secrets file generated using 'gen secrets'
+      --cert-fingerprint strings            list of server certificate fingeprints to accept (defaults to no check)
+      --debug                               show only rendered patches
+      --dry-run                             check how the config change will be applied in dry-run mode
+  -f, --file .yaml                          node config files / patches (.yaml / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere.
+      --force                               will overwrite existing files
+  -h, --help                                help for apply
+  -i, --insecure                            apply using the insecure (encrypted with no auth) maintenance service
+      --kubernetes-version string           desired kubernetes version to run (default "1.37.0")
+  -m, --mode auto, no-reboot, staged, try   apply config mode (default auto)
+      --set stringArray                     set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
+      --set-file stringArray                set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)
+      --set-json stringArray                set JSON values on the command line (can specify multiple or separate values with commas: key1=jsonval1,key2=jsonval2)
+      --set-literal stringArray             set a literal STRING value on the command line
+      --set-string stringArray              set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Nothing is type-converted, so the value reaches the template exactly as typed.
+      --show-secrets-in-drift               show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers both the Talos bootstrap allowlist (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.
+      --skip-drift-preview                  skip the pre-apply diff of on-node vs rendered MachineConfig
+      --skip-post-apply-verify              skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands) (default true)
+      --skip-resource-validation            skip the pre-apply check that declared host resources (links, disks) exist on the target node
+      --talos-version string                the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)
+      --timeout duration                    the config will be rolled back after specified timeout (if try mode is selected) (default 1m0s)
+      --values talm template                specify values in a YAML file (can specify multiple). Must match talm template — apply re-renders from the modeline and would otherwise drop value files supplied at template time.
+      --with-secrets string                 use a secrets file generated using 'gen secrets'
 ```
 
 ## Options inherited from parent commands

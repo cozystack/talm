@@ -19,7 +19,6 @@ talm meta delete key [flags]
       --cluster string       Cluster to connect to if a proxy endpoint is used.
       --context string       Context to be used in command
   -e, --endpoints strings    override default endpoints in Talos configuration
-  -i, --insecure             write|delete meta using the insecure (encrypted with no auth) maintenance service
       --nodes strings        target the specified nodes
       --root string          root directory of the project (default ".")
       --skip-verify          skip TLS certificate verification (keeps client authentication)

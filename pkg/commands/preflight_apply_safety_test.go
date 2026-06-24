@@ -801,7 +801,7 @@ func TestShouldRunDriftPreview_ModeAgnostic(t *testing.T) {
 	t.Parallel()
 
 	modes := []machineapi.ApplyConfigurationRequest_Mode{
-		machineapi.ApplyConfigurationRequest_REBOOT,
+		modeReboot,
 		machineapi.ApplyConfigurationRequest_NO_REBOOT,
 		machineapi.ApplyConfigurationRequest_AUTO,
 		machineapi.ApplyConfigurationRequest_STAGED,
@@ -854,7 +854,7 @@ func TestShouldRunPostApplyVerify_RespectsModeAndDryRun(t *testing.T) {
 		{"no_reboot runs", machineapi.ApplyConfigurationRequest_NO_REBOOT, false, false, true},
 		// Modes that reach the node only intermittently or never on
 		// ActiveID: skipped.
-		{"reboot skipped", machineapi.ApplyConfigurationRequest_REBOOT, false, false, false},
+		{"reboot skipped", modeReboot, false, false, false},
 		{"staged skipped", machineapi.ApplyConfigurationRequest_STAGED, false, false, false},
 		{"try skipped", machineapi.ApplyConfigurationRequest_TRY, false, false, false},
 		// AUTO is skipped because Talos's apply-server promotes it to

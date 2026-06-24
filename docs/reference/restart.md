@@ -9,9 +9,9 @@ talm restart <id> [flags]
 ## Options
 
 ```
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -h, --help           help for restart
-  -k, --kubernetes     use the k8s.io containerd namespace
+  -f, --file strings       specify config files or patches in a YAML file (can specify multiple)
+  -h, --help               help for restart
+      --namespace string   namespace to use: "system" (default, Talos service containers), "cri" for Kubernetes workloads, "taloscontainers" for containers declared via ContainerConfig (default "system")
 ```
 
 ## Options inherited from parent commands

@@ -13,7 +13,7 @@ talm image integration [flags]
   -h, --help                       help for integration
       --installer-tag string       tag of the installer image to use
       --registry-and-user string   registry and user to use for the images
-      --talos-tag string           tag of the installer image to use (default "v1.13.7")
+      --talos-tag string           tag of the installer image to use (default "v1.14.0")
 ```
 
 ## Options inherited from parent commands
@@ -22,7 +22,7 @@ talm image integration [flags]
       --cluster string       Cluster to connect to if a proxy endpoint is used.
       --context string       Context to be used in command
   -e, --endpoints strings    override default endpoints in Talos configuration
-      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "cri")
+      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance, "taloscontainers" for containers declared via ContainerConfig (default "cri")
       --nodes strings        target the specified nodes
       --root string          root directory of the project (default ".")
       --skip-verify          skip TLS certificate verification (keeps client authentication)

@@ -279,7 +279,7 @@ func TestRetryWithFailFast_BoundedTime(t *testing.T) {
 // Contract: firstLookupError surfaces per-node multierror failures
 // to the retry classifier, which closes the gap that would otherwise
 // leave the "brief partition against one node in a multi-node
-// lookup" case unretried. helpers.ForEachResource itself returns nil
+// lookup" case unretried. forEachResource itself returns nil
 // when only callback (per-node) errors occurred; pre-fix the
 // closure returned that nil, retryWithFailFast exited successfully,
 // and the multiErr was wrapped+hinted without a second attempt.

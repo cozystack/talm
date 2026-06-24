@@ -146,10 +146,10 @@ func TestSkipVerifyTLSConfig_MismatchedKeyPair(t *testing.T) {
 // "present", points GlobalArgs at it while requesting the absent context
 // "absent", and toggles SkipVerify — restoring every mutated global on cleanup.
 //
-// It is a routing probe: a wrapper that reaches the local WithClientSkipVerify
-// fails with errContextNotFound before dialing, whereas one that falls through
-// to upstream global.Args surfaces a different error. That lets a test assert
-// which path a client wrapper took without needing a live node.
+// It is a routing probe: a wrapper that reaches WithClientSkipVerify fails with
+// errContextNotFound before dialing, whereas the plain path builds a client
+// against the default context and surfaces a different error. That lets a test
+// assert which path a client wrapper took without needing a live node.
 func stageMissingContextTalosconfig(t *testing.T, skipVerify bool) {
 	t.Helper()
 

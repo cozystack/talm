@@ -15,11 +15,12 @@ talm wipe disk <device names>... [flags]
 ## Options
 
 ```
-      --drop-partition   drop partition after wipe (if applicable)
-  -f, --file strings     specify config files or patches in a YAML file (can specify multiple)
-  -h, --help             help for disk
-  -i, --insecure         use Talos maintenance mode API
-      --method string    wipe method to use [FAST ZEROES] (default "FAST")
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+      --drop-partition             drop partition after wipe (if applicable)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for disk
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
+      --method string              wipe method to use [FAST ZEROES] (default "FAST")
 ```
 
 ## Options inherited from parent commands

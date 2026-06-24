@@ -1,13 +1,25 @@
-# talm meta
+# talm wipe pv
 
-Write and delete keys in the META partition
+Remove an LVM physical volume label
+
+## Synopsis
+
+Wipe LVM metadata from a block device.
+
+The PV must not be part of an active volume group; remove the VG first with "talosctl wipe vg".
+
+The argument is a full device path, e.g. /dev/sda1.
+
+```
+talm wipe pv <device> [flags]
+```
 
 ## Options
 
 ```
       --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
   -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
-  -h, --help                       help for meta
+  -h, --help                       help for pv
   -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
@@ -27,7 +39,5 @@ Write and delete keys in the META partition
 
 ## SEE ALSO
 
-* [talm](index.md)	 - Manage Talos the GitOps Way!
-* [talm meta delete](meta_delete.md)	 - Delete a key from the META partition.
-* [talm meta write](meta_write.md)	 - Write a key-value pair to the META partition.
+* [talm wipe](wipe.md)	 - Wipe block device or volumes
 

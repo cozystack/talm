@@ -9,9 +9,11 @@ talm memory [flags]
 ## Options
 
 ```
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -h, --help           help for memory
-  -v, --verbose        display extended memory statistics
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for memory
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
+  -v, --verbose                    display extended memory statistics
 ```
 
 ## Options inherited from parent commands

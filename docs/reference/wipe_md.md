@@ -1,13 +1,25 @@
-# talm meta
+# talm wipe md
 
-Write and delete keys in the META partition
+Destroy an MD (software RAID) array
+
+## Synopsis
+
+Stop an MD (software RAID) array and clear the superblock on every member device.
+
+WARNING: this is destructive. The array must not be in use (mounted or claimed
+by another device). The argument is the full array device path, e.g.
+/dev/disk/by-id/md-name-data.
+
+```
+talm wipe md <device> [flags]
+```
 
 ## Options
 
 ```
       --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
   -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
-  -h, --help                       help for meta
+  -h, --help                       help for md
   -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
@@ -27,7 +39,5 @@ Write and delete keys in the META partition
 
 ## SEE ALSO
 
-* [talm](index.md)	 - Manage Talos the GitOps Way!
-* [talm meta delete](meta_delete.md)	 - Delete a key from the META partition.
-* [talm meta write](meta_write.md)	 - Write a key-value pair to the META partition.
+* [talm wipe](wipe.md)	 - Wipe block device or volumes
 

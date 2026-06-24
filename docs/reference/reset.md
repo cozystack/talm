@@ -13,7 +13,6 @@ talm reset [flags]
   -f, --file strings                             specify config files or patches in a YAML file (can specify multiple)
       --graceful                                 if true, attempt to cordon/drain node and leave etcd (if applicable) (default true)
   -h, --help                                     help for reset
-      --insecure                                 reset using the insecure (encrypted with no auth) maintenance service
       --reboot                                   if true, reboot the node after resetting instead of shutting down
       --system-labels-to-wipe strings            wipe selected system disk partitions by label, keeping others intact (talm default when no wipe flag is set: STATE,EPHEMERAL)
       --timeout duration                         time to wait for the operation is complete if --debug or --wait is set (default 30m0s)

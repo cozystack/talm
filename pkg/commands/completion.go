@@ -21,6 +21,7 @@ import (
 
 	"github.com/cozystack/talm/pkg/generated"
 	"github.com/cozystack/talm/pkg/modeline"
+	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
 	"github.com/siderolabs/talos/pkg/machinery/client/config"
 	"github.com/spf13/cobra"
 )
@@ -36,14 +37,26 @@ const (
 	nodesDirName      = "nodes"
 )
 
-// applyModeOptions enumerates the apply / patch / edit `--mode`
-// values upstream talosctl exposes via helpers.AddModeFlags. Pinned
-// here rather than imported because upstream's keys live inside a
-// per-call map, not a package-level constant — we cannot reflect
-// them at completion time without instantiating the Mode flag.
-//
-//nolint:gochecknoglobals // immutable lookup table used by completeApplyMode at completion time.
-var applyModeOptions = []string{"auto", "no-reboot", "reboot", "staged", "try"}
+// applyModeOptions enumerates the apply / patch / edit `--mode` values upstream
+// talosctl accepts. Upstream keeps them in a per-call map with no exported
+// accessor, but Mode.Type() renders that map as its flag-usage string, so the
+// list is read back from a throwaway registration instead of being restated
+// here. A pinned copy silently drifts on a Talos bump: v1.14 dropped "reboot",
+// and a stale copy would tab-complete a value the flag then rejects.
+func applyModeOptions() []string {
+	var mode helpers.Mode
+
+	helpers.AddModeFlags(&mode, &cobra.Command{})
+
+	// Guard against a future shape where Type() renders nothing: Split would
+	// hand back one empty string, which completion would offer as a value.
+	rendered := mode.Type()
+	if rendered == "" {
+		return nil
+	}
+
+	return strings.Split(rendered, ", ")
+}
 
 // completePresetNames implements shell completion for the `--preset`
 // flag of `talm init`: the available presets are baked into the
@@ -63,7 +76,7 @@ func completePresetNames(_ *cobra.Command, _ []string, _ string) ([]string, cobr
 // completeApplyMode implements shell completion for the `--mode`
 // flag of `talm apply`. Fixed enum, no file fallback.
 func completeApplyMode(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	return applyModeOptions, cobra.ShellCompDirectiveNoFileComp
+	return applyModeOptions(), cobra.ShellCompDirectiveNoFileComp
 }
 
 // completeYAMLFiles implements shell completion for flags that

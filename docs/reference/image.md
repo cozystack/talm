@@ -7,7 +7,7 @@ Manage container images
 ```
   -f, --file strings       specify config files or patches in a YAML file (can specify multiple)
   -h, --help               help for image
-      --namespace string   namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "cri")
+      --namespace string   namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance, "taloscontainers" for containers declared via ContainerConfig (default "cri")
 ```
 
 ## Options inherited from parent commands
