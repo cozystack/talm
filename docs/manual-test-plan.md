@@ -492,6 +492,21 @@ Expected: a value authored in `values-secret.encrypted.yaml` is redacted in the 
 
 Regression anchor: the redaction is value-based and exact-match. A secret whose plaintext coincides with an ordinary structural string (e.g. a password literally set to `controlplane` or a bare port) will also redact that unrelated field — a documented sharp edge of value-based sealing, not a bug. Do not encrypt low-entropy values that collide with config strings.
 
+### C5b. Server dry-run diff (`Config diff:`) redacts secrets too
+
+`talm apply --dry-run` prints TWO diffs: talm's own structured drift preview (C5/C5a) AND the server-returned `Config diff:` block (Talos's `ModeDetails`, emitted after `Dry run summary:`). The second one is opaque diff text, so it is redacted by VALUE — covering both the Talos bootstrap allowlist and user encrypted values. With the C5a setup (a user secret rendered into a non-allowlisted field), and on a node whose config carries bootstrap key material:
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -F hunter2 && echo "FAIL: user secret leaked in Config diff" || echo "OK"
+# bootstrap key material must not appear verbatim in the Config diff either:
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -E '^\s*key: LS0t' && echo "FAIL: bootstrap key leaked" || echo "OK"
+talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml 2>&1 | grep -cF hunter2   # >=1 with explicit opt-in
+```
+
+Expected: in the `Config diff:` block, a user secret renders as `value: ***` and a bootstrap `*.key` / `token` / encryption-secret renders as `key: ***` (etc.) by default. `--show-secrets-in-drift` prints the block verbatim (the same flag that governs the structured drift preview governs this surface too). A leak here is a security-class bug: `talm` prints the server-computed diff verbatim, so an unredacted `ModeDetails` would expose CA private keys and user secrets in CI logs.
+
+Regression anchor: the `Config diff:` shows secrets as context lines too (an unchanged `key:` adjacent to a change hunk), not only on `+`/`-` lines — value-based masking covers both. Public material adjacent to a secret slice (an `acceptedCAs[].crt`) is redacted alongside its key by design (the slice is masked whole); `--show-secrets-in-drift` restores it.
+
 ### C6. Drift preview shows secrets with explicit opt-in
 
 ```bash

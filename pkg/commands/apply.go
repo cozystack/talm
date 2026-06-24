@@ -496,7 +496,9 @@ func buildApplyClosure() applyFunc {
 			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 		}
 
-		helpers.PrintApplyResults(resp)
+		if err := emitApplyResults(resp, data, true); err != nil {
+			return err
+		}
 
 		if err := runPostApplyGate(cosiCtx, c, data, nodeID, os.Stderr, true); err != nil {
 			return err
@@ -612,7 +614,9 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 		}
 
-		helpers.PrintApplyResults(resp)
+		if err := emitApplyResults(resp, result, false); err != nil {
+			return err
+		}
 
 		return runPostApplyGates(ctx, c, result, targetNodes, false)
 	})
