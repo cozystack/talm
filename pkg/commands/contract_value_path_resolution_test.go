@@ -25,7 +25,10 @@ import (
 // (so they resolve identically from any CWD, like ResolveSecretsPath), and
 // absolute entries pass through unchanged. An empty input yields nil.
 func TestResolveProjectValueFiles(t *testing.T) {
-	abs := filepath.Join(testProjectRoot, "abs.yaml")
+	// crossPlatformAbs so the "absolute passthrough" cases use a path that
+	// satisfies filepath.IsAbs on Windows too (a bare /project is not absolute
+	// without a volume there, so resolveProjectValueFiles would re-join it).
+	abs := crossPlatformAbs("project", "abs.yaml")
 
 	cases := []struct {
 		name string

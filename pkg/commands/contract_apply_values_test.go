@@ -15,6 +15,7 @@
 package commands
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -97,15 +98,20 @@ func TestSetApplyValueOptions_ResolvesConfigValueFilesAgainstRoot(t *testing.T) 
 	restore := snapshotApplyValueState()
 	defer restore()
 
+	// crossPlatformAbs so the config-origin absolute entry satisfies
+	// filepath.IsAbs on Windows too; want[0] uses filepath.Join to match the
+	// host separator the resolver emits.
+	absExtra := crossPlatformAbs("abs", "extra.yaml")
+
 	Config.RootDir = testProjectRoot
-	Config.TemplateOptions.ValueFiles = []string{"values-secret.encrypted.yaml", "/abs/extra.yaml"}
+	Config.TemplateOptions.ValueFiles = []string{"values-secret.encrypted.yaml", absExtra}
 	applyCmdFlags.valueFiles = []string{"cli-relative.yaml"}
 
 	opts := buildApplyRenderOptions([]string{testTemplateControlplaneRel}, testProjectRoot+"/secrets.yaml")
 
 	want := []string{
-		testProjectRoot + "/values-secret.encrypted.yaml", // config-origin relative → joined with root
-		"/abs/extra.yaml",   // config-origin absolute → passthrough
+		filepath.Join(testProjectRoot, "values-secret.encrypted.yaml"), // config-origin relative → joined with root
+		absExtra,            // config-origin absolute → passthrough
 		"cli-relative.yaml", // CLI-origin → CWD-relative, appended last
 	}
 	if !slices.Equal(opts.ValueFiles, want) {
