@@ -1839,6 +1839,74 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 	return talosPatches, extraDocs, nil
 }
 
+// controlPlaneComponentImages maps the cluster.* control-plane component whose
+// image is version-critical to its enforced image repository. If the image is
+// absent from the applied config the node defaults it to the Talos release's
+// Kubernetes version, which can differ from the cluster's kubernetesVersion and
+// skew the component away from kube-apiserver/kubelet.
+//
+//nolint:gochecknoglobals // immutable lookup consulted by preserveComponentImages.
+var controlPlaneComponentImages = map[string]string{
+	"apiServer":         constants.KubernetesAPIServerImage,
+	"controllerManager": constants.KubernetesControllerManagerImage,
+	"scheduler":         constants.KubernetesSchedulerImage,
+}
+
+// preserveComponentImages pins the control-plane component `image` fields in a
+// control-plane diff target to kubernetesVersion. The render returns a diff over
+// the generated bundle, which drops the component images (they equal the bundle
+// default); additionally, Talos v1.14 deprecated cluster.controllerManager/
+// scheduler, so patching their extraArgs now drops the sibling image during the
+// merge. Either way the image is missing from the applied config and the node
+// re-defaults it to the Talos release default. Re-deriving the images here (same
+// repository + version the bundle uses) keeps every component pinned on-node.
+//
+// Worker configs (no cluster section) and an empty kubernetesVersion pass
+// through unchanged; an image already present (e.g. pinned by the chart) is kept.
+func preserveComponentImages(target []byte, kubernetesVersion string) ([]byte, error) {
+	if kubernetesVersion == "" {
+		return target, nil
+	}
+
+	var tgt map[string]any
+
+	if err := yaml.Unmarshal(target, &tgt); err != nil {
+		return nil, errors.Wrap(err, "unmarshaling diff target")
+	}
+
+	cluster, ok := tgt["cluster"].(map[string]any)
+	if !ok {
+		return target, nil
+	}
+
+	version := strings.TrimPrefix(kubernetesVersion, "v")
+	changed := false
+
+	for comp, repository := range controlPlaneComponentImages {
+		compCfg, ok := cluster[comp].(map[string]any)
+		if !ok {
+			compCfg = map[string]any{}
+			cluster[comp] = compCfg
+		}
+
+		if _, exists := compCfg["image"]; !exists {
+			compCfg["image"] = fmt.Sprintf("%s:v%s", repository, version)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return target, nil
+	}
+
+	out, err := yaml.Marshal(tgt)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshaling target with pinned images")
+	}
+
+	return out, nil
+}
+
 // applyPatchesAndRenderConfig assembles the final Talos config bytes
 // for the non-Full template path: split out extra documents, run two
 // bundle-rebuild passes (TypeUnknown then resolved machine type),
@@ -1992,6 +2060,17 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		if err != nil {
 			return nil, errors.Wrap(err, "diffing original and patched configs")
 		}
+	}
+
+	// Both modes can ship a control-plane config without component images: the
+	// diff drops them (they equal the bundle default) and Talos v1.14 (which
+	// deprecated cluster.controllerManager/scheduler) also drops their image when
+	// their extraArgs are patched. A node then re-defaults them to the Talos
+	// release's Kubernetes version, skewing controller-manager/scheduler away from
+	// kube-apiserver/kubelet. Pin them to kubernetesVersion.
+	target, err = preserveComponentImages(target, opts.KubernetesVersion)
+	if err != nil {
+		return nil, errors.Wrap(err, "pinning control-plane component images")
 	}
 
 	var targetNode yaml.Node
