@@ -157,10 +157,12 @@ func TestContract_ReadChartYamlPreset_MalformedYAMLError(t *testing.T) {
 // === writeGitignoreFile ===
 
 // Contract: writeGitignoreFile creates .gitignore from scratch
-// containing the four secrets-bearing files talm manages:
-// secrets.yaml, talosconfig, talm.key, kubeconfig (default name).
+// containing the secrets-bearing files talm manages: secrets.yaml,
+// talosconfig, talm.key, values-secret.yaml, kubeconfig (default name).
 // Without this list a fresh `talm init` followed by `git init &&
-// git add .` would commit private cluster material.
+// git add .` would commit private cluster material — including the
+// plaintext values-secret.yaml whose only committed form must be its
+// encrypted sibling.
 func TestContract_WriteGitignoreFile_CreatesWithRequiredEntries(t *testing.T) {
 	dir := t.TempDir()
 	setRoot(t, dir)
@@ -177,7 +179,7 @@ func TestContract_WriteGitignoreFile_CreatesWithRequiredEntries(t *testing.T) {
 		t.Fatalf("read .gitignore: %v", err)
 	}
 	content := string(data)
-	for _, want := range []string{"secrets.yaml", "talosconfig", "talm.key", "kubeconfig"} {
+	for _, want := range []string{"secrets.yaml", "talosconfig", "talm.key", "values-secret.yaml", "kubeconfig"} {
 		if !strings.Contains(content, want) {
 			t.Errorf(".gitignore missing %q in:\n%s", want, content)
 		}
@@ -253,6 +255,7 @@ func TestContract_WriteGitignoreFile_IdempotentOnFullList(t *testing.T) {
 secrets.yaml
 talosconfig
 talm.key
+values-secret.yaml
 kubeconfig
 `
 	gitignore := filepath.Join(dir, ".gitignore")

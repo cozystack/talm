@@ -105,6 +105,72 @@ func isSecretPath(path string) bool {
 	return slices.Contains(secretFieldPaths, normalised)
 }
 
+// secretRedactor decides whether a drift-preview field value must be masked.
+// It combines two independent sources:
+//
+//   - the static allowlist of Talos bootstrap field PATHS (isSecretPath), and
+//   - the dynamic set of user secret VALUES collected from encrypted value
+//     files, so a secret authored in values-secret.encrypted.yaml is masked
+//     wherever it surfaces in the diff, at any path.
+//
+// show (from --show-secrets-in-drift) disables both. A zero secretRedactor
+// (show=false, nil userSecrets) reproduces the historical path-only behaviour,
+// so callers with no encrypted value files in scope need no special casing.
+type secretRedactor struct {
+	show        bool
+	userSecrets map[string]struct{}
+}
+
+// redactPath reports whether the whole field line must be masked because its
+// path is an allowlisted Talos bootstrap secret.
+func (r secretRedactor) redactPath(path string) bool {
+	return !r.show && isSecretPath(path)
+}
+
+// redactSide reports whether one side of a field change must be masked because
+// its value — or, for a slice/map, any string nested within it — equals a
+// known user secret. Absent sides and the --show-secrets-in-drift bypass are
+// never redacted.
+func (r secretRedactor) redactSide(has bool, value any) bool {
+	if r.show || !has || len(r.userSecrets) == 0 {
+		return false
+	}
+
+	return containsUserSecretValue(value, r.userSecrets)
+}
+
+// containsUserSecretValue reports whether value, or any string nested in a
+// slice/map it contains, is in the secret set. Composite shapes are scanned
+// because the differ flattens a slice-of-maps to a single FieldChange whose
+// value is the whole []any — a secret nested in a machine.pods[] element would
+// otherwise leak through the non-redacted slice path.
+func containsUserSecretValue(value any, secrets map[string]struct{}) bool {
+	switch typed := value.(type) {
+	case string:
+		_, ok := secrets[typed]
+
+		return ok
+	case []any:
+		for _, item := range typed {
+			if containsUserSecretValue(item, secrets) {
+				return true
+			}
+		}
+
+		return false
+	case map[string]any:
+		for _, item := range typed {
+			if containsUserSecretValue(item, secrets) {
+				return true
+			}
+		}
+
+		return false
+	default:
+		return false
+	}
+}
+
 // redactValue renders the redaction sentinel for a secret-bearing
 // value. Length disclosure is intentional: operators rotating a
 // secret want a signal that the rotation actually happened on the

@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,7 +51,21 @@ const (
 	plainSecretsFile     = "secrets.yaml"
 	ageEncryptionPrefix  = "ENC[AGE,data:"
 	ageEncryptionSuffix  = "]"
+
+	// EncryptedFileSuffix is the filename convention that marks a YAML
+	// file as age-encrypted (secrets.encrypted.yaml, talosconfig.encrypted
+	// is the legacy non-yaml exception). Consumers that decrypt encrypted
+	// value files in-memory key off this suffix so the marker stays a
+	// single source of truth shared with the init encrypt/decrypt flow.
+	EncryptedFileSuffix = ".encrypted.yaml"
 )
+
+// ErrNoEncryptedValues is returned by DecryptYAMLToMap when a file the caller
+// declared encrypted (by its .encrypted.yaml name) parses cleanly but carries
+// no ENC[AGE,...] envelope at all. Treating it as plaintext would silently
+// feed an unencrypted (or corrupt) file into rendering; surfacing the mismatch
+// lets the operator fix the file rather than ship a hole.
+var ErrNoEncryptedValues = errors.New("file is named *.encrypted.yaml but contains no ENC[AGE,...] encrypted values")
 
 // GenerateKey generates a new age identity and saves it to talm.key file in age keygen format.
 // Returns true if a new key was created (not loaded from existing file).
@@ -868,6 +883,83 @@ func mergeAndEncryptYAMLMap(plain, encrypted map[string]any, identity *age.X2551
 // DecryptYAMLFile decrypts an encrypted YAML file's values and saves to plain file.
 func DecryptYAMLFile(rootDir, encryptedFile, plainFile string) error {
 	return decryptYAMLPair(rootDir, encryptedFile, plainFile)
+}
+
+// isAgeEnvelope reports whether s is a complete ENC[AGE,data:...] envelope.
+// The check is prefix AND suffix (never a substring): a plaintext value that
+// merely mentions the prefix mid-string (e.g. documentation about the format)
+// must NOT be mistaken for ciphertext. This is the same guard decryptYAMLValues
+// applies before attempting a decrypt.
+func isAgeEnvelope(s string) bool {
+	return strings.HasPrefix(s, ageEncryptionPrefix) && strings.HasSuffix(s, ageEncryptionSuffix)
+}
+
+// containsEncryptedValue reports whether data carries at least one age
+// envelope leaf anywhere in its tree. Used to validate that a file declared
+// encrypted by its name actually holds ciphertext before requiring talm.key.
+func containsEncryptedValue(data any) bool {
+	switch typed := data.(type) {
+	case map[string]any:
+		for _, value := range typed {
+			if containsEncryptedValue(value) {
+				return true
+			}
+		}
+
+		return false
+	case []any:
+		return slices.ContainsFunc(typed, containsEncryptedValue)
+	case string:
+		return isAgeEnvelope(typed)
+	default:
+		return false
+	}
+}
+
+// DecryptYAMLToMap reads the age-encrypted YAML at filePath, decrypts its
+// string-leaf values in memory with the project's talm.key (located under
+// rootDir), and returns the plaintext map. Unlike DecryptYAMLFile it writes
+// nothing to disk — it feeds encrypted user value files straight into chart
+// rendering so the plaintext never lands in the working tree.
+//
+// filePath is used verbatim (the caller has already resolved it); rootDir
+// only locates talm.key. The file is validated to contain at least one
+// envelope (ErrNoEncryptedValues otherwise) BEFORE the key is required, so a
+// mis-named or corrupt file fails with a precise cause rather than a confusing
+// "talm.key missing". Partially-encrypted files are fine: plaintext leaves
+// pass through untouched.
+func DecryptYAMLToMap(rootDir, filePath string) (map[string]any, error) {
+	encryptedData, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, errors.Wrapf(err, "read encrypted values file %q", filePath)
+	}
+
+	var encryptedYAML map[string]any
+
+	if err := yaml.Unmarshal(encryptedData, &encryptedYAML); err != nil {
+		return nil, errors.Wrapf(err, "parse encrypted values file %q", filePath)
+	}
+
+	if !containsEncryptedValue(encryptedYAML) {
+		return nil, errors.Wrapf(ErrNoEncryptedValues, "%q", filePath)
+	}
+
+	identity, err := LoadKey(rootDir)
+	if err != nil {
+		return nil, errors.Wrapf(err, "loading talm.key to decrypt %q", filePath)
+	}
+
+	decrypted, err := decryptYAMLValues(encryptedYAML, identity)
+	if err != nil {
+		return nil, errors.Wrapf(err, "decrypt values in %q", filePath)
+	}
+
+	out, ok := decrypted.(map[string]any)
+	if !ok {
+		return nil, errors.Wrapf(errInternalInvariant, "decryptYAMLValues returned %T for %q", decrypted, filePath)
+	}
+
+	return out, nil
 }
 
 // decryptYAMLPair is the shared implementation for DecryptSecretsFile

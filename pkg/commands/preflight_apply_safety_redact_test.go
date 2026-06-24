@@ -112,7 +112,7 @@ func TestFormatFieldChangeLine_AcceptedCAsSliceRotation_NoLeak(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(change, false)
+	got := formatFieldChangeLine(change, secretRedactor{})
 	for _, leaked := range []string{"SECRET_CA_KEY_AAA", "SECRET_CA_KEY_BBB"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("cluster.acceptedCAs slice rotation must not leak key bytes; found %q in %q", leaked, got)
@@ -144,7 +144,7 @@ func TestFormatFieldChangeLine_WireguardPeersRotation_NoLeak(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(change, false)
+	got := formatFieldChangeLine(change, secretRedactor{})
 	for _, leaked := range []string{"SECRET_PSK_AAA", "SECRET_PSK_BBB"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("peers slice rotation must not leak presharedKey bytes; found %q in %q", leaked, got)
@@ -255,7 +255,7 @@ func TestFormatFieldChangeLine_RedactsSecretByDefault(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(f, false)
+	got := formatFieldChangeLine(f, secretRedactor{})
 	if strings.Contains(got, "old-secret-aaaa") || strings.Contains(got, "new-secret-bbbbbbbb") {
 		t.Errorf("default-redacted formatter must NOT leak secret values; got %q", got)
 	}
@@ -280,7 +280,7 @@ func TestFormatFieldChangeLine_ShowsSecretsWhenFlagSet(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(f, true)
+	got := formatFieldChangeLine(f, secretRedactor{show: true})
 	if !strings.Contains(got, "old-secret-aaaa") {
 		t.Errorf("showSecrets=true must render raw old value; got %q", got)
 	}
@@ -310,7 +310,7 @@ func TestFormatFieldChangeLine_NonSecretPathsUnchanged(t *testing.T) {
 	}
 
 	for _, showSecrets := range []bool{false, true} {
-		got := formatFieldChangeLine(f, showSecrets)
+		got := formatFieldChangeLine(f, secretRedactor{show: showSecrets})
 		if !strings.Contains(got, "/dev/sda") || !strings.Contains(got, "/dev/sdb") {
 			t.Errorf("non-secret path must render verbatim regardless of showSecrets=%v; got %q", showSecrets, got)
 		}
@@ -338,7 +338,7 @@ func TestFormatFieldChangeLine_SecretWithNonStringValue_StillRedacted(t *testing
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(change, false)
+	got := formatFieldChangeLine(change, secretRedactor{})
 	if !strings.Contains(got, "redacted") {
 		t.Errorf("non-string secret-path value must still render the redaction sentinel; got %q", got)
 	}
@@ -377,7 +377,7 @@ func TestFormatFieldChangeLine_SecretNilValue_StillRedacts(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(change, false)
+	got := formatFieldChangeLine(change, secretRedactor{})
 	if !strings.Contains(got, "redacted") {
 		t.Errorf("HasOld=true with nil value must still render the redaction sentinel; got %q", got)
 	}
@@ -408,7 +408,7 @@ func TestFormatFieldChangeLine_SecretAbsentSide_DistinguishesAddFromRotate(t *te
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(addition, false)
+	got := formatFieldChangeLine(addition, secretRedactor{})
 	if !strings.Contains(got, "(absent)") {
 		t.Errorf("addition (HasOld=false) must render LEFT side as `(absent)` so add-vs-rotate stays distinguishable; got %q", got)
 	}
@@ -429,7 +429,7 @@ func TestFormatFieldChangeLine_SecretAbsentSide_DistinguishesAddFromRotate(t *te
 		HasNew: false,
 	}
 
-	got = formatFieldChangeLine(removal, false)
+	got = formatFieldChangeLine(removal, secretRedactor{})
 	if !strings.Contains(got, "(absent)") {
 		t.Errorf("removal (HasNew=false) must render RIGHT side as `(absent)`; got %q", got)
 	}
@@ -466,7 +466,7 @@ func TestFormatFieldChangeLine_SliceSecretPath_NoLeak(t *testing.T) {
 		HasNew: true,
 	}
 
-	got := formatFieldChangeLine(change, false)
+	got := formatFieldChangeLine(change, secretRedactor{})
 	for _, leaked := range []string{"secret-aaa", "secret-bbb", "secret-ccc"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("slice-shaped secret path must not leak element %q; got %q", leaked, got)
