@@ -124,7 +124,7 @@ single MachineConfig and apply it once".`,
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
 
-		if GlobalArgs.SkipVerify {
+		if SkipVerify {
 			return WithClientSkipVerify(templateFunc(args))
 		}
 
@@ -285,10 +285,13 @@ func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.C
 	case templateCmdFlags.offline:
 		return tmpl(ctx, nil)
 	case templateCmdFlags.insecure:
+		//nolint:contextcheck // the client wrapper owns the signal-rooted context (talosctl pattern)
 		return WithClientMaintenance(nil, tmpl)
-	case GlobalArgs.SkipVerify:
+	case SkipVerify:
+		//nolint:contextcheck // the client wrapper owns the signal-rooted context (talosctl pattern)
 		return WithClientSkipVerify(tmpl)
 	default:
+		//nolint:contextcheck // the client wrapper owns the signal-rooted context (talosctl pattern)
 		return WithClient(tmpl)
 	}
 }

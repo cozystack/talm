@@ -38,6 +38,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // Options encapsulates all parameters necessary for rendering.
@@ -192,6 +193,18 @@ func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.
 	return configBundle, machineType, nil
 }
 
+// kubeVersion returns the Kubernetes version (without the leading "v") for the
+// config bundle, falling back to the machinery default when unset. Talos v1.14's
+// config/generate now errors on an empty version instead of defaulting it, so
+// talm restores the prior behavior here.
+func kubeVersion(v string) string {
+	if v == "" {
+		return constants.DefaultKubernetesVersion
+	}
+
+	return strings.TrimPrefix(v, "v")
+}
+
 // InitializeConfigBundle initializes a Talos configuration bundle from opts.
 //
 //nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
@@ -221,7 +234,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 			&bundle.InputOptions{
 				ClusterName: opts.ClusterName,
 				Endpoint:    opts.Endpoint,
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1863,7 +1876,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	configBundleOpts := []bundle.Option{
 		bundle.WithInputOptions(
 			&bundle.InputOptions{
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1912,7 +1925,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			&bundle.InputOptions{
 				ClusterName: clusterName,
 				Endpoint:    clusterEndpoint.String(),
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),

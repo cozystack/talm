@@ -16,8 +16,13 @@ package commands
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -27,12 +32,28 @@ import (
 
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/global"
 	"github.com/siderolabs/talos/pkg/machinery/client"
+	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 )
 
 // GlobalArgs is the common arguments for the root command.
 //
 //nolint:gochecknoglobals // cobra CLI architecture: persistent flags bind to package-level state shared across all subcommands; refactoring out the global would require threading state through every command's RunE.
 var GlobalArgs global.Args
+
+// SkipVerify, when set via --skip-verify, disables TLS certificate verification
+// while preserving client-certificate authentication. Upstream global.Args has no
+// such field (the cozystack/talos fork added it for siderolabs/talos#12652); since
+// this build tracks upstream v1.14 machinery, the flag is implemented here instead.
+//
+//nolint:gochecknoglobals // cobra CLI architecture: persistent flag binds to package-level state.
+var SkipVerify bool
+
+// signalContext returns a context cancelled on SIGINT/SIGTERM. Upstream
+// global.Args.WithClient* now take a context (it used to be created internally),
+// so the talm wrappers create one here.
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
 
 // Config is the package-level configuration populated from Chart.yaml and
 // CLI persistent flags. Mirrors GlobalArgs for project-root-relative path
@@ -80,8 +101,11 @@ var Config struct {
 //
 // WithClientNoNodes doesn't set any node information on the request context.
 func WithClientNoNodes(action func(context.Context, *client.Client) error, dialOptions ...grpc.DialOption) error {
+	ctx, stop := signalContext()
+	defer stop()
+
 	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientNoNodes(action, dialOptions...)
+	return GlobalArgs.WithClientNoNodes(ctx, action, dialOptions...)
 }
 
 // WithClient builds upon WithClientNoNodes to provide set of nodes on request context based on config & flags.
@@ -110,22 +134,108 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 
 // WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).
 func WithClientMaintenance(enforceFingerprints []string, action func(context.Context, *client.Client) error) error {
+	ctx, stop := signalContext()
+	defer stop()
+
 	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
+	return GlobalArgs.WithClientMaintenance(ctx, enforceFingerprints, action)
 }
 
 // WithClientSkipVerify wraps common code to initialize Talos client with TLS verification disabled
 // but with client certificate authentication preserved.
 // This is useful when connecting to nodes via IP addresses not listed in the server certificate's SANs.
-func WithClientSkipVerify(action func(context.Context, *client.Client) error) error {
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientSkipVerify(action)
+// errContextNotFound is returned when the requested context is absent from the
+// talosconfig.
+var errContextNotFound = errors.New("context not found in talosconfig")
+
+// skipVerifyTLSConfig builds a TLS config that skips server-certificate
+// verification while preserving client-certificate authentication taken from the
+// talosconfig context.
+func skipVerifyTLSConfig(configContext *clientconfig.Context) (*tls.Config, error) {
+	// InsecureSkipVerify is the whole point of --skip-verify (connect to nodes
+	// whose IP is absent from the cert SANs); client-cert auth is preserved below.
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // intentional: --skip-verify
+	}
+
+	if configContext.Crt == "" || configContext.Key == "" {
+		return tlsConfig, nil
+	}
+
+	crtBytes, err := base64.StdEncoding.DecodeString(configContext.Crt)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding certificate: %w", err)
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(configContext.Key)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding key: %w", err)
+	}
+
+	cert, err := tls.X509KeyPair(crtBytes, keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("could not load client key pair: %w", err)
+	}
+
+	tlsConfig.Certificates = []tls.Certificate{cert}
+
+	return tlsConfig, nil
 }
 
-// WithClientAuto automatically selects the appropriate client wrapper based on GlobalArgs.SkipVerify.
+func WithClientSkipVerify(action func(context.Context, *client.Client) error) error {
+	ctx, stop := signalContext()
+	defer stop()
+
+	cfg, err := clientconfig.Open(GlobalArgs.Talosconfig)
+	if err != nil {
+		return fmt.Errorf("failed to open config file %q: %w", GlobalArgs.Talosconfig, err)
+	}
+
+	contextName := GlobalArgs.CmdContext
+	if contextName == "" {
+		contextName = cfg.Context
+	}
+
+	configContext, ok := cfg.Contexts[contextName]
+	if !ok {
+		return fmt.Errorf("%w: %q", errContextNotFound, contextName)
+	}
+
+	tlsConfig, err := skipVerifyTLSConfig(configContext)
+	if err != nil {
+		return err
+	}
+
+	opts := []client.OptionFunc{
+		client.WithTLSConfig(tlsConfig),
+		client.WithDefaultGRPCDialOptions(),
+	}
+
+	if len(GlobalArgs.Endpoints) > 0 {
+		opts = append(opts, client.WithEndpoints(GlobalArgs.Endpoints...))
+	} else if len(configContext.Endpoints) > 0 {
+		opts = append(opts, client.WithEndpoints(configContext.Endpoints...))
+	}
+
+	c, err := client.New(ctx, opts...)
+	if err != nil {
+		return fmt.Errorf("error constructing client: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if len(GlobalArgs.Nodes) > 0 {
+		ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+	} else if len(configContext.Nodes) > 0 {
+		ctx = client.WithNodes(ctx, configContext.Nodes...)
+	}
+
+	return action(ctx, c)
+}
+
+// WithClientAuto automatically selects the appropriate client wrapper based on SkipVerify.
 // If SkipVerify is true, uses WithClientSkipVerify, otherwise uses WithClientNoNodes.
 func WithClientAuto(action func(context.Context, *client.Client) error) error {
-	if GlobalArgs.SkipVerify {
+	if SkipVerify {
 		return WithClientSkipVerify(action)
 	}
 

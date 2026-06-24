@@ -26,6 +26,7 @@ import (
 	machineconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -158,7 +159,9 @@ func regenerateTalosconfig() error {
 		genOptions,
 		clusterName,
 		"https://192.168.0.1:6443", // dummy endpoint, not used for talosconfig
-		"",
+		// Kubernetes version is irrelevant for talosconfig (only PKI/secrets are
+		// extracted), but Talos v1.14's generate now requires a non-empty value.
+		constants.DefaultKubernetesVersion,
 		[]string{},
 		[]string{},
 		[]string{},
