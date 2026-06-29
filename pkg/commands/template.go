@@ -49,6 +49,7 @@ var templateCmdFlags struct {
 	offline           bool
 	kubernetesVersion string
 	inplace           bool
+	showSecrets       bool
 	nodesFromArgs     bool
 	endpointsFromArgs bool
 	templatesFromArgs bool
@@ -69,7 +70,11 @@ beside the source" workflow, while apply's chain models "compose a
 single MachineConfig and apply it once".`,
 	Args: cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, _ []string) error {
-		templateCmdFlags.valueFiles = append(Config.TemplateOptions.ValueFiles, templateCmdFlags.valueFiles...)
+		// Chart.yaml-declared value files are project-relative; resolve
+		// them against the detected root so template and apply point at
+		// the same file regardless of CWD. CLI --values stay CWD-relative
+		// (appended after).
+		templateCmdFlags.valueFiles = append(resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir), templateCmdFlags.valueFiles...)
 		templateCmdFlags.values = append(Config.TemplateOptions.Values, templateCmdFlags.values...)
 		templateCmdFlags.stringValues = append(Config.TemplateOptions.StringValues, templateCmdFlags.stringValues...)
 		templateCmdFlags.fileValues = append(Config.TemplateOptions.FileValues, templateCmdFlags.fileValues...)
@@ -324,6 +329,18 @@ func generateOutput(ctx context.Context, c *client.Client, _ []string) (string, 
 		return "", errors.Wrap(err, "failed to render templates")
 	}
 
+	// persistedValueFiles is the Chart.yaml-declared subset that `talm apply`
+	// re-reads on its own (resolved the same way the PreRunE merge resolved
+	// them). An encrypted file outside this set, passed only via
+	// `template --values`, would have its omitted secret lost at apply — so
+	// sealRenderedSecrets warns about it in -I mode.
+	persistedValueFiles := resolveProjectValueFiles(Config.TemplateOptions.ValueFiles, Config.RootDir)
+
+	result, err = sealRenderedSecrets(result, templateCmdFlags.valueFiles, persistedValueFiles, Config.RootDir, templateCmdFlags.inplace, templateCmdFlags.showSecrets)
+	if err != nil {
+		return "", err
+	}
+
 	templatePathsForModeline := buildModelineTemplatePaths(templateCmdFlags.templateFiles, Config.RootDir)
 
 	mline, err := modeline.GenerateModeline(GlobalArgs.Nodes, GlobalArgs.Endpoints, templatePathsForModeline)
@@ -481,6 +498,7 @@ func init() {
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.full, "full", "", false, "show full resulting config, not only patch")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.debug, "debug", "", false, "show only rendered patches")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.offline, "offline", "", false, "disable gathering information and lookup functions")
+	templateCmd.Flags().BoolVar(&templateCmdFlags.showSecrets, "show-secrets", false, "print values from encrypted value files (*.encrypted.yaml) verbatim in stdout output (default: redacted to ***; never affects -I, which always omits them). Counterpart on apply is --show-secrets-in-drift, which governs the same values in apply's drift preview.")
 	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
 
 	// Shell completion for `talm template` flags. `--file` uses the

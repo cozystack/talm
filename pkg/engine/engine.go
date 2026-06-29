@@ -22,6 +22,7 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/resource/meta"
+	"github.com/cozystack/talm/pkg/age"
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
@@ -1602,6 +1603,17 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		helmEngine.LookupFunc = newLookupFunction(ctx, c, cmdName, opts.TalosEndpoints)
 	}
 
+	// Require at least one template before loading and rendering the chart.
+	// Rendering it first would be wasted (the output is discarded when no
+	// template is selected) and, worse, the render fires live lookups whose
+	// "connection refused" then masks the real problem: the operator forgot
+	// --file / --template. Fail fast with the actionable error instead. This
+	// runs after the online multi-node guard, which is a cheaper precondition
+	// with no network I/O.
+	if len(opts.TemplateFiles) == 0 {
+		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
+	}
+
 	chartPath, err := os.Getwd()
 	if err != nil {
 		return nil, errors.Wrap(err, "resolving working directory")
@@ -1633,10 +1645,6 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 		return nil, errors.Wrap(err, "rendering chart")
 	}
 
-	if len(opts.TemplateFiles) == 0 {
-		return nil, errors.New("templates are not set for the command: please use `--file` or `--template` flag")
-	}
-
 	configPatches := []string{}
 
 	for _, templateFile := range opts.TemplateFiles {
@@ -1660,26 +1668,49 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 	return finalConfig, nil
 }
 
+// loadValueFile reads a single --values / templateOptions.valueFiles entry
+// into a map. A file named *.encrypted.yaml is age-decrypted in memory with
+// the project's talm.key (rootDir locates the key; no plaintext touches disk);
+// any other file is read as plaintext YAML. Detection is name-authoritative
+// and content-validated — DecryptYAMLToMap rejects a *.encrypted.yaml that
+// carries no envelope, so a mis-named or empty file fails loudly instead of
+// slipping through as plaintext.
+func loadValueFile(rootDir, filePath string) (map[string]any, error) {
+	if strings.HasSuffix(filePath, age.EncryptedFileSuffix) {
+		decrypted, err := age.DecryptYAMLToMap(rootDir, filePath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to load encrypted values file %s", filePath)
+		}
+
+		return decrypted, nil
+	}
+
+	buf, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to read values file %s", filePath)
+	}
+
+	currentMap := make(map[string]any)
+	if err := yaml.Unmarshal(buf, &currentMap); err != nil {
+		return nil, errors.Wrapf(err, "failed to unmarshal values from file %s", filePath)
+	}
+
+	return currentMap, nil
+}
+
 // Imported from Helm
 // https://github.com/helm/helm/blob/c6beb169d26751efd8131a5d65abe75c81a334fb/pkg/cli/values/options.go#L44
 //
-//nolint:funlen,gocritic // funlen: linear dispatch over six independent value-source kinds (files, --set-json, --set, --set-string, --set-file, --set-literal); each branch is a 4-line guarded call and extracting any subset would only fragment the logic. hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
+//nolint:gocritic // hugeParam: Options is the public configuration carrier; passing by pointer would propagate across pkg/commands and external consumers.
 func loadValues(opts Options) (map[string]any, error) {
 	// Base map to hold the merged values
 	base := make(map[string]any)
 
-	// Load values from files specified with -f or --values
+	// Load values from files specified with -f or --values.
 	for _, filePath := range opts.ValueFiles {
-		currentMap := make(map[string]any)
-
-		buf, err := os.ReadFile(filePath)
+		currentMap, err := loadValueFile(opts.Root, filePath)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to read values file %s", filePath)
-		}
-
-		err = yaml.Unmarshal(buf, &currentMap)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to unmarshal values from file %s", filePath)
+			return nil, err
 		}
 
 		base = mergeMaps(base, currentMap)

@@ -53,6 +53,16 @@ const (
 	// secretsEncryptedYamlName is the age-encrypted secrets manifest
 	// committed to git in encrypted form.
 	secretsEncryptedYamlName = "secrets.encrypted.yaml"
+	// valuesSecretYamlName is the plaintext file the operator authors to
+	// hold arbitrary user secret values consumed by chart templates (e.g.
+	// a registry password, a KMS secret-id). It is git-ignored; only its
+	// encrypted sibling is committed.
+	valuesSecretYamlName = "values-secret.yaml"
+	// valuesSecretEncryptedYamlName is the age-encrypted sibling of
+	// values-secret.yaml, committed to git and referenced from
+	// templateOptions.valueFiles; the engine decrypts it in memory at
+	// template / apply time (it never writes plaintext back to disk).
+	valuesSecretEncryptedYamlName = "values-secret.encrypted.yaml"
 	// talmKeyName is the age private-key file the init flow generates
 	// alongside the encrypted bundle; it is what `.gitignore` excludes
 	// and what tests pin as a sensitive artefact name.
@@ -507,6 +517,20 @@ var initCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "Skipping %s (file not found)\n", kubeconfigPath)
 			}
 
+			// Encrypt values-secret.yaml (arbitrary user secret values)
+			valuesSecretFile := filepath.Join(Config.RootDir, valuesSecretYamlName)
+			if fileExists(valuesSecretFile) {
+				fmt.Fprintf(os.Stderr, "Encrypting %s -> %s\n", valuesSecretYamlName, valuesSecretEncryptedYamlName)
+
+				if err := age.EncryptYAMLFile(Config.RootDir, valuesSecretYamlName, valuesSecretEncryptedYamlName); err != nil {
+					return errors.Wrap(err, "failed to encrypt values-secret.yaml")
+				}
+
+				encryptedCount++
+			} else {
+				fmt.Fprintf(os.Stderr, "Skipping %s (file not found)\n", valuesSecretYamlName)
+			}
+
 			// Update .gitignore file
 			err = writeGitignoreFile()
 			if err != nil {
@@ -574,6 +598,20 @@ var initCmd = &cobra.Command{
 				decryptedCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "Skipping %s.encrypted (file not found)\n", kubeconfigPath)
+			}
+
+			// Decrypt values-secret.encrypted.yaml
+			encryptedValuesSecretFile := filepath.Join(Config.RootDir, valuesSecretEncryptedYamlName)
+			if fileExists(encryptedValuesSecretFile) {
+				fmt.Fprintf(os.Stderr, "Decrypting %s -> %s\n", valuesSecretEncryptedYamlName, valuesSecretYamlName)
+
+				if err := age.DecryptYAMLFile(Config.RootDir, valuesSecretEncryptedYamlName, valuesSecretYamlName); err != nil {
+					return errors.Wrap(err, "failed to decrypt values-secret.yaml")
+				}
+
+				decryptedCount++
+			} else {
+				fmt.Fprintf(os.Stderr, "Skipping %s (file not found)\n", valuesSecretEncryptedYamlName)
 			}
 
 			// Update .gitignore file
@@ -1551,7 +1589,7 @@ func init() {
 	// Override persistent -e flag for init command to use for encrypt
 	// Remove the persistent endpoints flag from init command and add our own -e flag
 	initCmd.Flags().StringSliceVarP(&GlobalArgs.Endpoints, "endpoints", "", []string{}, "override default endpoints in Talos configuration")
-	initCmd.Flags().BoolVarP(&initCmdFlags.encrypt, "encrypt", "e", false, "encrypt all sensitive files (secrets.yaml, talosconfig, kubeconfig)")
+	initCmd.Flags().BoolVarP(&initCmdFlags.encrypt, "encrypt", "e", false, "encrypt all sensitive files (secrets.yaml, talosconfig, kubeconfig, values-secret.yaml)")
 	initCmd.Flags().BoolVarP(&initCmdFlags.decrypt, "decrypt", "d", false, "decrypt all encrypted files (does not require preset)")
 
 	// Shell completion for `talm init --preset`: preset names are
@@ -1581,19 +1619,20 @@ func validateFileExists(file string) error {
 }
 
 // gitignoreEntryCount is the size of the requiredEntries slice in
-// writeGitignoreFile: three secret-bearing artefacts plus the
-// kubeconfig base name. Hoisting it into a const sidesteps mnd's
-// magic-number lint without inlining the comment at every call site.
-const gitignoreEntryCount = 4
+// writeGitignoreFile: four secret-bearing artefacts (secrets.yaml,
+// talosconfig, talm.key, values-secret.yaml) plus the kubeconfig base
+// name. Hoisting it into a const sidesteps mnd's magic-number lint
+// without inlining the comment at every call site.
+const gitignoreEntryCount = 5
 
 //nolint:funlen // wrapping the secrets-list assembly in helpers buys nothing in clarity
 func writeGitignoreFile() error {
-	// Capacity gitignoreEntryCount: three secret-bearing artefacts
-	// (secrets.yaml, talosconfig, talm.key) plus the kubeconfig base
-	// name appended just below. Preallocating avoids the slice growth
-	// prealloc flags.
+	// Capacity gitignoreEntryCount: four secret-bearing artefacts
+	// (secrets.yaml, talosconfig, talm.key, values-secret.yaml) plus the
+	// kubeconfig base name appended just below. Preallocating avoids the
+	// slice growth prealloc flags.
 	requiredEntries := make([]string, 0, gitignoreEntryCount)
-	requiredEntries = append(requiredEntries, secretsYamlName, talosconfigName, talmKeyName)
+	requiredEntries = append(requiredEntries, secretsYamlName, talosconfigName, talmKeyName, valuesSecretYamlName)
 
 	// Add kubeconfig to required entries (use path from config or default)
 	kubeconfigPath := Config.GlobalOptions.Kubeconfig
@@ -1751,8 +1790,8 @@ func printSecretsWarning() {
 	fmt.Fprintf(os.Stderr, "│  Security Information                                                        │\n")
 	fmt.Fprintf(os.Stderr, "├──────────────────────────────────────────────────────────────────────────────┤\n")
 	fmt.Fprintf(os.Stderr, "│                                                                              │\n")
-	fmt.Fprintf(os.Stderr, "│  Sensitive files (secrets.yaml, talosconfig, talm.key) have been added to    │\n")
-	fmt.Fprintf(os.Stderr, "│  .gitignore and will not be tracked by git.                                  │\n")
+	fmt.Fprintf(os.Stderr, "│  Sensitive files (secrets.yaml, talosconfig, talm.key, kubeconfig,           │\n")
+	fmt.Fprintf(os.Stderr, "│  values-secret.yaml) have been added to .gitignore and won't be tracked.     │\n")
 	fmt.Fprintf(os.Stderr, "│                                                                              │\n")
 	fmt.Fprintf(os.Stderr, "│  Important: Please make a backup of your talm.key file.                      │\n")
 	fmt.Fprintf(os.Stderr, "│                                                                              │\n")

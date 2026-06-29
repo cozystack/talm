@@ -181,7 +181,7 @@ func previewDrift(
 	rendered []byte,
 	nodeID string,
 	w io.Writer,
-	showSecrets bool,
+	redactor secretRedactor,
 ) error {
 	current, ok, err := read(ctx)
 	if err != nil {
@@ -203,7 +203,7 @@ func previewDrift(
 		return nil
 	}
 
-	printDriftPreview(w, headerWithNode("talm: drift preview", nodeID), changes, showSecrets)
+	printDriftPreview(w, headerWithNode("talm: drift preview", nodeID), changes, redactor)
 
 	return nil
 }
@@ -247,7 +247,7 @@ func verifyAppliedState(
 	sent []byte,
 	nodeID string,
 	w io.Writer,
-	showSecrets bool,
+	redactor secretRedactor,
 ) error {
 	onNode, ok, err := read(ctx)
 	if err != nil {
@@ -274,7 +274,7 @@ func verifyAppliedState(
 		return nil
 	}
 
-	printDriftPreview(w, headerWithNode("talm: post-apply divergence", nodeID), changes, showSecrets)
+	printDriftPreview(w, headerWithNode("talm: post-apply divergence", nodeID), changes, redactor)
 
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHint(
@@ -287,7 +287,7 @@ func verifyAppliedState(
 // entries are dropped from the per-line listing but counted in the
 // trailing summary so the reader can confirm the diff against expected
 // scope.
-func printDriftPreview(w io.Writer, header string, changes []applycheck.Change, showSecrets bool) {
+func printDriftPreview(w io.Writer, header string, changes []applycheck.Change, redactor secretRedactor) {
 	_, _ = fmt.Fprintln(w, header)
 
 	var adds, removes, updates, equals int
@@ -311,7 +311,7 @@ func printDriftPreview(w io.Writer, header string, changes []applycheck.Change, 
 
 		for j := range change.Fields {
 			f := &change.Fields[j]
-			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f, showSecrets))
+			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f, redactor))
 		}
 	}
 
@@ -333,14 +333,24 @@ const absentFieldValue = "(absent)"
 // surfaces correctly) and handles the equal-multiset reorder case
 // with an explicit "(reordered, N element(s))" line so the operator
 // isn't left wondering why an OpUpdate fired with no apparent change.
-func formatFieldChangeLine(change *applycheck.FieldChange, showSecrets bool) string {
-	// Secret check runs BEFORE bothSlices so a secret-bearing path
-	// that happens to render as a slice (e.g. a future allowlist
-	// entry naming the array itself rather than a leaf element)
-	// still gets redacted instead of leaking the full element
-	// values through formatSliceSetDiff.
-	if !showSecrets && isSecretPath(change.Path) {
+func formatFieldChangeLine(change *applycheck.FieldChange, redactor secretRedactor) string {
+	// Path-based redaction (Talos bootstrap allowlist) runs BEFORE
+	// bothSlices so a secret-bearing path that happens to render as a
+	// slice (e.g. a future allowlist entry naming the array itself
+	// rather than a leaf element) still gets redacted instead of leaking
+	// the full element values through formatSliceSetDiff.
+	if redactor.redactPath(change.Path) {
 		return fmt.Sprintf("%s: %s -> %s", change.Path, formatSecretFieldValue(change.HasOld, change.Old), formatSecretFieldValue(change.HasNew, change.New))
+	}
+
+	// Value-based redaction (user secrets from encrypted value files) can
+	// surface at any path, so it is checked per side. Runs before
+	// bothSlices for the same leak reason: a secret nested in a slice must
+	// be masked rather than dumped element-by-element. Mixed lines (one
+	// secret side, one ordinary) keep the non-secret side legible so
+	// add/remove/rotate is still readable.
+	if redactor.redactSide(change.HasOld, change.Old) || redactor.redactSide(change.HasNew, change.New) {
+		return fmt.Sprintf("%s: %s -> %s", change.Path, redactSideValue(redactor, change.HasOld, change.Old), redactSideValue(redactor, change.HasNew, change.New))
 	}
 
 	if oldSlice, newSlice, ok := bothSlices(change); ok {
@@ -348,6 +358,16 @@ func formatFieldChangeLine(change *applycheck.FieldChange, showSecrets bool) str
 	}
 
 	return fmt.Sprintf("%s: %s -> %s", change.Path, formatFieldValue(change.HasOld, change.Old), formatFieldValue(change.HasNew, change.New))
+}
+
+// redactSideValue masks a single side iff it carries a user secret; otherwise
+// it renders normally. Lets a mixed line show the non-secret side verbatim.
+func redactSideValue(redactor secretRedactor, has bool, value any) string {
+	if redactor.redactSide(has, value) {
+		return formatSecretFieldValue(has, value)
+	}
+
+	return formatFieldValue(has, value)
 }
 
 // formatSecretFieldValue is the redaction-aware counterpart of

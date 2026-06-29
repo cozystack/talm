@@ -56,6 +56,33 @@ func TestContract_Render_NoTemplateFilesError(t *testing.T) {
 	}
 }
 
+// Contract: the empty-TemplateFiles guard fires BEFORE any chart
+// rendering. When no template is requested, talm must surface the
+// actionable "templates are not set" error without first rendering the
+// chart — otherwise a render-time failure (here a `fail` directive,
+// online a live `lookup` against an unreachable node) masks the real
+// problem with a misleading error. The chart body below errors if it is
+// ever executed; the guard must short-circuit before that happens.
+func TestContract_Render_NoTemplateFilesShortCircuitsBeforeRender(t *testing.T) {
+	chartRoot := createTestChart(t, "tc", "config.yaml",
+		`{{ fail "chart body must not render when no templates are requested" }}`)
+	_, err := Render(context.Background(), nil, Options{
+		Offline: true,
+		Root:    chartRoot,
+		// TemplateFiles intentionally empty
+	})
+	if err == nil {
+		t.Fatal("expected error for empty TemplateFiles")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "chart body must not render") {
+		t.Errorf("chart was rendered before the no-templates guard fired; the guard must run first. got: %s", msg)
+	}
+	if !strings.Contains(msg, "templates are not set") {
+		t.Errorf("expected the 'templates are not set' guard error, got: %s", msg)
+	}
+}
+
 // Contract: Render with a TemplateFiles entry that does not exist in
 // the chart surfaces an error naming the missing template. Operators
 // hit this when they typo a path or when a template file is renamed

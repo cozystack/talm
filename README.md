@@ -184,7 +184,7 @@ cluster:
 >
 > 1. **Declared-resource existence** (`--skip-resource-validation` opt-out, default on). Before sending the config to the node, the gate walks the rendered MachineConfig, extracts every reference to a host-side resource (network links from v1.12 multi-doc — `LinkConfig.name`, `BondConfig.links[]`, `VLANConfig.parent`, `BridgeConfig.links[]`, `Layer2VIPConfig.link`, `HCloudVIPConfig.link`, `DHCPv4Config.name` / `DHCPv6Config.name` / `EthernetConfig.name`; v1.11 legacy `machine.network.interfaces[].interface`; install disk via `machine.install.disk` literal or `machine.install.diskSelector`; `UserVolumeConfig.provisioning.diskSelector`), and verifies each against the node's COSI `LinkStatus`/`Disk` snapshots. A reference that doesn't resolve fails the apply with a `[blocker]` line listing the available names so the typo or migration miss is fixable from the values without re-running discovery. Disk selectors must match at least one (non-readonly, non-CDROM, non-virtual) disk — zero matches block, multiple matches warn (install picks the first). Virtual-link-creator documents (`BondConfig.name`, `VLANConfig.name`, `BridgeConfig.name`, `WireguardConfig.name`, `DummyLinkConfig.name`, `LinkAliasConfig.name`) are intentionally NOT validated against existing links — those `.name` fields describe new virtual links the apply is creating, not references to pre-existing host resources. The gate also runs a syntactic net-addr walker against `StaticHostConfig.name` (must parse as an IP literal — the `name` field on this kind doubles as the IP the hostnames map to), `NetworkRuleConfig.ingress[].subnet` and `.except` (per-entry CIDR), and `WireguardConfig.peers[].endpoint` (host:port; empty / absent endpoint is a listener-only peer, NOT a finding). Out of scope today: `machine.disks[].device` (extra-disk partitioning); track in a follow-up if you need it. Pass `--skip-resource-validation` for recovery into a maintenance image with mismatched hardware or pre-staging values for hardware that isn't installed yet.
 >
-> 2. **Pre-apply drift preview** (`--skip-drift-preview` opt-out, default on). Reads the node's current MachineConfig via COSI and prints a `+`/`-`/`~`/`=` diff of what's about to change, keyed by `(kind, name)`. Informational only — never blocks. The `-` lines are the most useful: they surface stale documents from a previous apply that the new render no longer emits (e.g. an `eth1` LinkConfig lingering after a migration to `eth0`). Reading the current config requires the auth path — `MachineConfig` is a Sensitive COSI resource and is unreachable on the `--insecure` maintenance connection; the gate prints `drift verification unavailable on maintenance connection` (per-node-prefixed on multi-node insecure apply) and proceeds in that case. Secret-bearing field values (`cluster.token`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `machine.token` / `machine.ca.key`, the `cluster.acceptedCAs` / `machine.acceptedCAs` slices, `WireguardConfig.privateKey`, the `peers` slice carrying `presharedKey`s) are redacted by default — both sides render as `***redacted (len=N)***` so a rotation surfaces as different-length sentinels without leaking the value. Pass `--show-secrets-in-drift` to see the raw values verbatim (debugging only — disables the redaction for the run). **`--dry-run` runs this gate** — the diff is read-only and "show me what would change" is exactly the dry-run contract.
+> 2. **Pre-apply drift preview** (`--skip-drift-preview` opt-out, default on). Reads the node's current MachineConfig via COSI and prints a `+`/`-`/`~`/`=` diff of what's about to change, keyed by `(kind, name)`. Informational only — never blocks. The `-` lines are the most useful: they surface stale documents from a previous apply that the new render no longer emits (e.g. an `eth1` LinkConfig lingering after a migration to `eth0`). Reading the current config requires the auth path — `MachineConfig` is a Sensitive COSI resource and is unreachable on the `--insecure` maintenance connection; the gate prints `drift verification unavailable on maintenance connection` (per-node-prefixed on multi-node insecure apply) and proceeds in that case. Secret-bearing field values (`cluster.token`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `machine.token` / `machine.ca.key`, the `cluster.acceptedCAs` / `machine.acceptedCAs` slices, `WireguardConfig.privateKey`, the `peers` slice carrying `presharedKey`s) are redacted by default — both sides render as `***redacted (len=N)***` so a rotation surfaces as different-length sentinels without leaking the value. In addition to that static path allowlist, any value originating from an encrypted user value file (`*.encrypted.yaml` referenced via `templateOptions.valueFiles`) is redacted **by value** wherever it surfaces in the diff (at any path, including nested in a slice) — symmetric with how `talm template` redacts the same values. Pass `--show-secrets-in-drift` to see the raw values verbatim (debugging only — disables both the path-based and value-based redaction for the run). **`--dry-run` runs this gate** — the diff is read-only and "show me what would change" is exactly the dry-run contract.
 >
 > 3. **Post-apply state verification** (`--skip-post-apply-verify` opt-out, **default off** pending a Talos-mutated-field allowlist). After `ApplyConfiguration` returns success, re-reads the on-node MachineConfig and structurally compares it against the bytes that were sent. Divergence blocks the apply chain with a per-document diff, primarily catching silent doc drops (Talos parser ignored an unknown field) and controller reverts. Disabled by default because Talos mutates a handful of leaf fields post-apply (cert hashes, timestamps) that would surface as false-positive divergence without an allowlist. The verify runs only on `--mode=no-reboot`. `--mode=staged`, `--mode=try`, `--mode=reboot`, and `--mode=auto` all skip the gate — each for a documented reason: staged stores rather than activates; try auto-rolls back; reboot kills the COSI connection mid-verify; auto is promoted by Talos to REBOOT internally when the change requires it, so the verify would race the reboot. `--dry-run` skips it too.
 >
@@ -394,6 +394,7 @@ This command will:
 - Encrypt `secrets.yaml` → `secrets.encrypted.yaml`
 - Encrypt `talosconfig` → `talosconfig.encrypted`
 - Encrypt `kubeconfig` → `kubeconfig.encrypted` (if exists)
+- Encrypt `values-secret.yaml` → `values-secret.encrypted.yaml` (if exists)
 - Update `.gitignore` with sensitive files
 
 ### Decrypting Files
@@ -410,7 +411,39 @@ This command will:
 - Decrypt `secrets.encrypted.yaml` → `secrets.yaml`
 - Decrypt `talosconfig.encrypted` → `talosconfig`
 - Decrypt `kubeconfig.encrypted` → `kubeconfig` (if exists)
+- Decrypt `values-secret.encrypted.yaml` → `values-secret.yaml` (if exists)
 - Update `.gitignore` with sensitive files
+
+### Encrypted user values
+
+Beyond Talos' own PKI/tokens, you can store **arbitrary secret values that chart templates consume** (a registry password, a KMS plugin's secret-id, etc.) encrypted at rest with the same `talm.key`:
+
+1. Author the secrets in plaintext `values-secret.yaml` (git-ignored), e.g.:
+
+   ```yaml
+   registryPassword: hunter2
+   ```
+
+2. Encrypt them with `talm init --encrypt` → produces the committable `values-secret.encrypted.yaml` (per-value `ENC[AGE,...]` envelopes; keys stay readable).
+
+3. Reference the **encrypted** file from `Chart.yaml`:
+
+   ```yaml
+   templateOptions:
+     valueFiles:
+       - values-secret.encrypted.yaml
+   ```
+
+`talm template` and `talm apply` decrypt it **in memory** via `talm.key` — the plaintext never has to be present at render time. Both commands now honor the full value-source set (`--values`, `--set`, `--set-string`, `--set-file`, `--set-json`, `--set-literal`) plus `templateOptions.*`, so a value renders identically whether you preview with `template` or push with `apply`.
+
+Secret values are kept out of committed and printed output:
+
+- `talm template -I` **omits** secret-bearing fields from the rendered `nodes/*.yaml`; the real value is re-injected only at `apply` (which re-renders from the encrypted file).
+- `talm template` (stdout) and `talm apply` (drift preview) **redact** them to `***` by default. Reveal verbatim with `talm template --show-secrets` / `talm apply --show-secrets-in-drift` (debugging only).
+
+> Reference the encrypted file from `Chart.yaml templateOptions.valueFiles` (as shown above), NOT only via `template --values`. The node-file modeline does not persist value files, so `apply` only re-reads what is in `Chart.yaml` (plus its own `--values`). If an encrypted file is passed solely to `template -I`, the omitted secret is absent from the node file AND never re-rendered at apply — silently lost from the applied config. `template -I` prints a warning when it omits secrets from a file that is not in `Chart.yaml`.
+
+> Sealing matches by exact value across the whole rendered config, so do not encrypt low-entropy values that collide with ordinary config strings (e.g. a bare port, or a password literally set to `controlplane`) — that unrelated field would be sealed too. Prefer high-entropy secrets. Secret values must be strings (quote them in `values-secret.yaml`); the encryption only covers string leaves.
 
 ### Key Management
 

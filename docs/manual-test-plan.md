@@ -79,13 +79,19 @@ Expected: one `Overwriting <path> (--force)` line per diff; no prompt; exit zero
 
 ```bash
 cd /tmp/talm-init-test
-talm init --decrypt
-test -f secrets.yaml && test -f talosconfig
+echo 'registryPassword: hunter2' > values-secret.yaml
 talm init --encrypt
-test -f secrets.encrypted.yaml && test -f talosconfig.encrypted
+test -f secrets.encrypted.yaml && test -f talosconfig.encrypted && test -f values-secret.encrypted.yaml
+grep -q 'ENC\[AGE,data:' values-secret.encrypted.yaml   # value encrypted
+! grep -q hunter2 values-secret.encrypted.yaml          # plaintext not present
+grep -q '^values-secret.yaml$' .gitignore               # plaintext git-ignored
+rm values-secret.yaml secrets.yaml talosconfig
+talm init --decrypt
+test -f secrets.yaml && test -f talosconfig && test -f values-secret.yaml
+grep -q 'registryPassword: hunter2' values-secret.yaml  # decrypts back
 ```
 
-Expected: per-file `Decrypting X -> Y` / `Encrypting X -> Y` lines; both round-trips succeed.
+Expected: per-file `Decrypting X -> Y` / `Encrypting X -> Y` lines (now including `values-secret.yaml`); both round-trips succeed.
 
 ### A6. Decrypt without `talm.key`
 
@@ -201,6 +207,25 @@ talm template -f nodes/node0.yaml \
 
 Expected: `dnsDomain: overridden.local` appears in output.
 
+### B2a. Render with encrypted user values (in-memory decryption)
+
+Author a secret value, encrypt it, reference the encrypted file, and have a template consume it (e.g. `clusterDomain: {{ .Values.clusterDomain | quote }}`):
+
+```bash
+cd $PROJECT
+echo 'clusterDomain: secret.example' > values-secret.yaml
+talm init --encrypt                       # produces values-secret.encrypted.yaml
+# add `valueFiles: [values-secret.encrypted.yaml]` under templateOptions in Chart.yaml
+talm template -f nodes/node0.yaml | grep dnsDomain   # expect secret.example
+talm apply --dry-run -f nodes/node0.yaml             # same value at apply (re-render decrypts in-memory)
+
+# Recovery-hint path: with the key gone, the encrypted value file must fail loudly.
+mv talm.key /tmp/talm.key.bak
+talm template -f nodes/node0.yaml ; mv /tmp/talm.key.bak talm.key
+```
+
+Expected: the encrypted file decrypts in memory at both template and apply — no plaintext `values-secret.yaml` is needed at render time and none is written. With `talm.key` missing, the error names `values-secret.encrypted.yaml` and carries the talm.key recovery hint (not a bare "file not found"). A value file whose name ends `.encrypted.yaml` but contains no `ENC[AGE,...]` envelope must error rather than render as empty plaintext.
+
 ### B3. Render against missing file
 
 ```bash
@@ -221,6 +246,24 @@ cp /tmp/inplace-before.yaml nodes/node0.yaml  # restore
 Expected: `Updated.` on stdout. The rendered body replaces the previous body of the file — but **operator-authored comments above the modeline are preserved verbatim**. Comments embedded in the YAML body still get overwritten, since `-I` re-renders the body and Helm has no way to round-trip user-edits made there.
 
 Regression anchor: write `nodes/node0.yaml` as `# Operator note A\n# Operator note B\n# talm: ...\n<body>`. After `template -I -f nodes/node0.yaml`, the first two lines (`# Operator note A`, `# Operator note B`) MUST still be there, followed by the modeline, the talm-rendered warning header, then the body. Re-run idempotent: a second `template -I` keeps the same prefix structure — leading comments don't drift, multiply, or disappear.
+
+### B4a. In-place omits secret values; stdout redacts them
+
+With an encrypted value file in scope (see B2a) and a template that injects a secret into the body (e.g. a `machine.pods[]` env, or a `machine.registries.config.<reg>.auth.password`):
+
+```bash
+cd $PROJECT
+talm template -I -f nodes/node0.yaml
+grep -q hunter2 nodes/node0.yaml && echo "FAIL: secret baked into node file" || echo "OK: secret omitted"
+talm template -I -f nodes/node0.yaml && git diff --quiet nodes/node0.yaml && echo "OK: idempotent (no churn)" || echo "churn on 2nd -I"
+talm template -f nodes/node0.yaml | grep -c hunter2          # 0 — redacted by default
+talm template --show-secrets -f nodes/node0.yaml | grep -c hunter2   # >=1 — verbatim opt-in
+talm apply --dry-run -f nodes/node0.yaml                     # real secret re-injected at apply
+```
+
+Expected: `template -I` writes a node file with NO plaintext (or ciphertext) secret — the secret field is omitted, the real value is re-rendered only at apply. A second `-I` produces no git churn (age is randomized; omission sidesteps it). Plain `template` to stdout redacts the secret to `***`; `--show-secrets` prints it. At `apply`, the drift/dry-run shows the real secret value (re-rendered in memory from the encrypted file), and a secret nested in `machine.pods[]` is NOT duplicated in the applied config.
+
+Regression anchor (replace-semantic lists): put a secret as one element of a multi-element list at a `merge:"replace"` path — `cluster.network.podSubnets`, `serviceSubnets`, `cluster.apiServer.auditPolicy`, an ingress rule, or `portSelector/ports`. After `template -I`, the whole key must be absent from the node file (NOT a partial list with the secret element removed). After `talm apply`, the applied config must contain BOTH the secret element and its non-secret siblings — a partial body list would overwrite the rendered list and silently drop the secret element. Verify the secret value is present in `talm apply --dry-run --show-secrets-in-drift` output and the sibling is not lost.
 
 ### B5. Render with stale chart preset (chart-drift detection)
 
@@ -478,6 +521,31 @@ talm apply --dry-run \
 
 Expected: each node renders / diffs independently; per-node gate output sections.
 
+### C3a. Value files and `--set` honored at apply (consistent with template)
+
+Add a value-consuming line to a template (e.g. `clusterDomain: {{ .Values.clusterDomain | quote }}` in `templates/controlplane.yaml`), then:
+
+```bash
+# 1. A value supplied only via --set must apply, not just template.
+talm template -f nodes/node0.yaml --set clusterDomain=set.example | grep dnsDomain
+talm apply --dry-run -f nodes/node0.yaml --set clusterDomain=set.example
+# Expected: the dry-run drift shows dnsDomain -> set.example. Before this
+# change, apply re-rendered from the modeline and dropped --set entirely.
+
+# 2. A Chart.yaml templateOptions.valueFiles entry must apply too.
+echo 'clusterDomain: fromfile.example' > extra-values.yaml
+# add `valueFiles: [extra-values.yaml]` under templateOptions in Chart.yaml
+talm apply --dry-run -f nodes/node0.yaml   # expect dnsDomain -> fromfile.example
+
+# 3. Chart.yaml-relative value files resolve against the project root,
+#    not the caller's CWD — run apply from elsewhere with an absolute -f:
+cd /tmp && talm apply --dry-run -f "$PROJECT/nodes/node0.yaml"
+# Expected: still finds extra-values.yaml (joined with the project root).
+# A "failed to read values file" error here is the pre-fix regression.
+```
+
+Regression anchor: `talm template` and `talm apply` must render the SAME config for the same value inputs (`--values` / `--set` / Chart.yaml `templateOptions.valueFiles`). A value that renders under `template` but is empty / `required`-fails under `apply` is a regression of the template↔apply value consistency.
+
 ### C4. Stage mode
 
 ```bash
@@ -497,6 +565,34 @@ talm apply --dry-run -f nodes/node0.yaml
 Expected: the drift preview line for `machine.token` reads `machine.token: ***redacted (len=N)*** -> ***redacted (len=M)***`. The literal `old-token-value` / `new-token-value` strings MUST NOT appear in stderr. Non-secret paths (e.g. `machine.network.hostname` if it changed) render verbatim.
 
 Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,aescbcEncryptionSecret,secretboxEncryptionSecret}`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `cluster.acceptedCAs[].key`, `machine.{token,ca.key}`, `machine.acceptedCAs[].key`) MUST redact. A regression that silently leaks a secret value into stderr is a security-class bug — verify the substring with `grep -F` against the captured output.
+
+### C5a. Drift preview redacts user secret values (encrypted value files)
+
+With an encrypted value file in scope (B2a) injecting a secret into a NON-allowlisted field (e.g. a `machine.pods[]` env, or `machine.registries.config.<reg>.auth.password`):
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -F hunter2 && echo "FAIL: user secret leaked" || echo "OK: redacted"
+talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml 2>&1 | grep -cF hunter2   # >=1 with explicit opt-in
+```
+
+Expected: a value authored in `values-secret.encrypted.yaml` is redacted in the drift preview by default — symmetric with `talm template`, which redacts the same value on stdout. The value appears verbatim only under `--show-secrets-in-drift`. This is value-based (not path-based) redaction, so it covers user secrets wherever a template places them. A leak here is a security-class bug — `apply --dry-run` is the common CI pre-apply command.
+
+Regression anchor: the redaction is value-based and exact-match. A secret whose plaintext coincides with an ordinary structural string (e.g. a password literally set to `controlplane` or a bare port) will also redact that unrelated field — a documented sharp edge of value-based sealing, not a bug. Do not encrypt low-entropy values that collide with config strings.
+
+### C5b. Server dry-run diff (`Config diff:`) redacts secrets too
+
+`talm apply --dry-run` prints TWO diffs: talm's own structured drift preview (C5/C5a) AND the server-returned `Config diff:` block (Talos's `ModeDetails`, emitted after `Dry run summary:`). The second one is opaque diff text, so it is redacted by VALUE — covering both the Talos bootstrap allowlist and user encrypted values. With the C5a setup (a user secret rendered into a non-allowlisted field), and on a node whose config carries bootstrap key material:
+
+```bash
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -F hunter2 && echo "FAIL: user secret leaked in Config diff" || echo "OK"
+# bootstrap key material must not appear verbatim in the Config diff either:
+talm apply --dry-run -f nodes/node0.yaml 2>&1 | grep -E '^\s*key: LS0t' && echo "FAIL: bootstrap key leaked" || echo "OK"
+talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml 2>&1 | grep -cF hunter2   # >=1 with explicit opt-in
+```
+
+Expected: in the `Config diff:` block, a user secret renders as `value: ***` and a bootstrap `*.key` / `token` / encryption-secret renders as `key: ***` (etc.) by default. `--show-secrets-in-drift` prints the block verbatim (the same flag that governs the structured drift preview governs this surface too). A leak here is a security-class bug: `talm` prints the server-computed diff verbatim, so an unredacted `ModeDetails` would expose CA private keys and user secrets in CI logs.
+
+Regression anchor: the `Config diff:` shows secrets as context lines too (an unchanged `key:` adjacent to a change hunk), not only on `+`/`-` lines — value-based masking covers both. Public material adjacent to a secret slice (an `acceptedCAs[].crt`) is redacted alongside its key by design (the slice is masked whole); `--show-secrets-in-drift` restores it.
 
 ### C6. Drift preview shows secrets with explicit opt-in
 
