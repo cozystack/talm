@@ -265,11 +265,98 @@ Expected: `template -I` writes a node file with NO plaintext (or ciphertext) sec
 
 Regression anchor (replace-semantic lists): put a secret as one element of a multi-element list at a `merge:"replace"` path — `cluster.network.podSubnets`, `serviceSubnets`, `cluster.apiServer.auditPolicy`, an ingress rule, or `portSelector/ports`. After `template -I`, the whole key must be absent from the node file (NOT a partial list with the secret element removed). After `talm apply`, the applied config must contain BOTH the secret element and its non-secret siblings — a partial body list would overwrite the rendered list and silently drop the secret element. Verify the secret value is present in `talm apply --dry-run --show-secrets-in-drift` output and the sibling is not lost.
 
-### B5. Render with stale chart preset
+### B5. Render with stale chart preset (chart-drift detection)
 
-When the local `charts/talm/` is older than the talm binary's embedded preset, `talm template` succeeds against the local preset — it does NOT auto-bump. The operator must run `init --update`. Confirm by inspecting `talm version` against `Chart.yaml`.
+`talm` vendors its library chart into `charts/talm/` at `init` time; render commands read that local copy, never the binary's embedded charts. Upgrading the binary therefore leaves `charts/talm/` frozen at the version that last ran `init`. A release build surfaces this drift by **content** — the `Chart.yaml` version stamp is normalized away, so a pure version bump is never flagged.
 
-**Regression anchor**: `template -I` is rewrite, not merge — verify by adding a `# my comment` line above the modeline in `nodes/node0.yaml`, running B4, and confirming the comment is GONE in the new body. If the comment survives, a behaviour change shipped (could be either an intentional new `--preserve-comments` flag or an undocumented merge mode — neither should appear silently).
+Simulate drift by editing the vendored library, then render:
+
+```bash
+printf '\n{{- /* stale edit */ -}}\n' >> charts/talm/templates/_helpers.tpl
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:'
+```
+
+Expected (default): a single line on **stderr** — `WARN: project's vendored charts/talm/ library differs from the copy built into talm <version> (modified: templates/_helpers.tpl); run talm init --update --preset <preset> to re-sync ...` — while stdout (the rendered config) and the exit code are unchanged. The parenthesised sample names up to 5 differing paths (`modified:` / `extra:` / `missing:`) so the cause is locatable without a manual tree diff. Clear it and re-confirm silence:
+
+```bash
+talm init --update --preset cozystack --force
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:' && echo "FAIL: drift not cleared" || echo "OK: drift cleared"
+```
+
+The `--preset` is required: `talm init --update` alone resolves the preset from `Chart.yaml`, which an init'd project does not record, so it errors with "preset not found in Chart.yaml dependencies" (pinned by A8) and never re-vendors. Expected: `OK: drift cleared`.
+
+`init --update` re-syncs `charts/talm/` exactly: files the embedded library does not ship (an `extra:` path in the WARN — e.g. `.DS_Store`, an editor backup, a file a newer release dropped) are pruned with a `Removed charts/talm/<path>` line. Verify by dropping a stray file in `charts/talm/`, observing the `extra:` WARN, and re-running the clear step above (pinned by `TestInitUpdate_PrunesExtraneousVendoredFiles`, `TestCheckChartDrift_ExtraneousFile_DriftNamesPath`).
+
+### B5a. Render with stale preset templates (preset-drift detection)
+
+Unlike the library, the preset `templates/` are operator-editable, so preset drift is tracked by a pinned baseline hash in `.talm-preset.lock` (written at `init`), NOT by content-comparing the live `templates/`. A release build compares the binary's current preset hash against that baseline.
+
+First confirm a fresh project is silent AND that editing `templates/` does NOT trigger a false positive:
+
+```bash
+cat .talm-preset.lock   # preset: <name> + presetHash: <hash>
+printf '\n# operator customization\n' >> templates/_helpers.tpl
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:.*preset' && echo "FAIL: operator edit misreported as drift" || echo "OK: operator edits are not drift"
+```
+
+Expected: `OK: operator edits are not drift` — the baseline pins the pristine preset, the edited `templates/` is never read.
+
+Now simulate a newer binary shipping a changed preset by corrupting the pinned baseline, then render:
+
+```bash
+sed -i.bak 's/^presetHash:.*/presetHash: 0000000000000000000000000000000000000000000000000000000000000000/' .talm-preset.lock
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:.*preset'
+```
+
+Expected (default): a single line on **stderr** — `WARN: project's <preset> preset differs from the copy built into talm <version>; run talm init --update --preset <preset> to pull the new preset defaults ...` — stdout and exit code unchanged. Under `--strict-charts` (or `strictCharts: true`) the same mismatch is a hard error (exit 1) raised before the command body. Clear it:
+
+```bash
+talm init --update --preset <your-preset> --force
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:.*preset' && echo "FAIL: preset drift not cleared" || echo "OK: preset drift cleared"
+```
+
+`init --update` rewrites `.talm-preset.lock` to the current baseline, so the warning clears even if you declined individual preset-file diffs. Expected: `OK: preset drift cleared`. Note: `--force` auto-accepts every preset-file diff, overwriting the operator edit made earlier in this scenario — the "edits are preserved via the interactive diff" promise holds only without `--force`; this test stand is disposable, a real project should run the clear step interactively.
+
+Regression anchors: `TestPresetLock_RoundTrip_NoDrift`, `TestCheckPresetDrift_StaleBaseline_Drift`, `TestCheckPresetDrift_OperatorEditedTemplates_NoDrift` (the false-positive guard), `TestCheckPresetDrift_NoLock_NoBaselineSentinel`, and `TestEvaluatePresetDrift` pin every branch above.
+
+Strict mode turns the same drift into a hard error (exit 1) raised before the command body runs. Opt in per project via `strictCharts: true` in `Chart.yaml`, or per invocation via `--strict-charts`:
+
+```bash
+talm template -f nodes/node0.yaml --offline --strict-charts; echo "exit=$?"
+```
+
+Expected: exit 1, the drift message plus a hint pointing at `talm init --update --preset <preset>`, and no rendered output — the command body never runs (no modeline/render errors follow the hint).
+
+### B5b. Drift check failure: warn by default, block under strict
+
+A check that cannot run at all (corrupted `.talm-preset.lock`, unreadable `charts/talm/`) degrades to a non-fatal warning by default, but under strict mode it is a hard error — an unverifiable baseline silently passing would defeat the enforcement the team opted into:
+
+```bash
+printf 'preset: [unclosed\n' > .talm-preset.lock
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN: could not check drift'; echo "exit=$?"
+talm template -f nodes/node0.yaml --offline --strict-charts >/dev/null; echo "exit=$?"
+talm init --update --preset <your-preset> --force   # restore a valid lock
+```
+
+Expected: the first render prints `WARN: could not check drift: ...` and exits 0; the `--strict-charts` render fails (exit 1) with `drift check failed under strict mode` and a hint to repair the baseline; `init --update` rewrites a valid lock. Regression anchors: the error-path subtests of `TestEvaluateChartDrift` / `TestEvaluatePresetDrift`.
+
+A *missing* baseline follows the same split — silent by default (projects generated before baseline pinning are not nagged), blocked under strict (deleting the baseline must not bypass enforcement):
+
+```bash
+rm .talm-preset.lock
+talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:'; echo "exit=$?"   # no WARN, exit 0 from talm
+talm template -f nodes/node0.yaml --offline --strict-charts >/dev/null; echo "exit=$?"        # exit 1: drift baseline missing under strict mode
+talm init --update --preset <your-preset> --force   # re-pin the baseline
+```
+
+Regression anchors: the missing-baseline subtests of `TestEvaluateChartDrift` / `TestEvaluatePresetDrift`, `TestCheckChartDrift_MissingVendoredDir_NoBaselineSentinel`, `TestCheckPresetDrift_NoLock_NoBaselineSentinel`.
+
+No-false-alarm checks — each MUST stay silent (no `WARN:` line):
+
+- A project vendored by an older release, run under a newer binary whose `charts/talm/` is byte-identical: the version stamp differs but the content does not.
+- A `dev`/source build: its embedded charts are a moving target the developer controls, so the check is a no-op.
+- A freshly synced project (`talm init --update --preset <preset>`) under the matching binary.
+- A vendored `charts/talm/` whose files carry CRLF line endings (a Windows clone with `core.autocrlf=true`): line endings are checkout artifacts, not content (pinned by `TestCheckChartDrift_CRLFVendoredCopy_NoDrift`).
 
 ### B6. Scope-filter symmetry across v1.11 and v1.12 renders
 

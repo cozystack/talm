@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,12 +45,28 @@ const (
 // command's Use field and via -X main.cmdNameTalm in build tooling.
 const cmdNameTalm = "talm"
 
-// Version is the talm release tag baked at build time via ldflags
-// (`-X main.Version=v0.27.0`); the literal value here is the local
-// development fallback.
+// Version is the talm build version baked in at link time via ldflags
+// (`-X main.Version=...`). The two release build paths inject different
+// forms: goreleaser strips the leading "v" (e.g. `0.27.0`, from
+// `{{.Version}}`) while the Makefile's `git describe --tags` keeps it
+// (e.g. `v0.27.0`). releaseVersion normalizes both. The literal "dev"
+// here is the local source-build fallback.
 //
 //nolint:gochecknoglobals // ldflags-injected build version, idiomatic for go release tooling.
-var Version = "dev"
+var Version = devVersion
+
+// devVersion is the build-version sentinel for a local source build (no
+// ldflags injection). releaseVersion treats it as "not a release", so
+// release-only behavior such as the chart-drift check stays off.
+const devVersion = "dev"
+
+// strictChartsFlag is bound to the --strict-charts persistent flag. When set
+// (or when Chart.yaml carries strictCharts: true), a content difference
+// between the project's vendored charts/talm/ and the binary's built-in copy
+// becomes a hard error instead of a warning.
+//
+//nolint:gochecknoglobals // cobra persistent flag binds to package-level state, consistent with the rest of this file.
+var strictChartsFlag bool
 
 // skipConfigCommands lists commands that should not load Chart.yaml config.
 // - init: creates the config, so it doesn't exist yet
@@ -121,6 +138,11 @@ func registerRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
 	cmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
 	cmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
+	// No backticks in this usage string: pflag's UnquoteUsage treats the
+	// first backtick-quoted word as the flag's value-placeholder name, which
+	// on a bool flag misrenders --help as `--strict-charts talm init --update`
+	// (as if it took an argument).
+	cmd.PersistentFlags().BoolVar(&strictChartsFlag, "strict-charts", false, "fail if the project's vendored charts/talm/ or pinned preset baseline differs from the talm binary (run talm init --update --preset <preset> to re-sync)")
 
 	// Shell completion for root persistent flags. --nodes /
 	// --endpoints draw from the in-scope talosconfig contexts.
@@ -185,6 +207,10 @@ func init() {
 			if err != nil {
 				return errors.Wrap(err, "error loading configuration")
 			}
+
+			if err := surfaceChartDrift(); err != nil {
+				return err
+			}
 		}
 
 		// Ensure talosconfig path is set to project root if not explicitly set via flag
@@ -219,6 +245,151 @@ func init() {
 	}
 }
 
+// describeSuffixRegex matches the suffixes `git describe --tags --dirty`
+// appends for a non-release tree: "-<commits>-g<hash>" on a non-tag commit
+// and/or "-dirty" for local edits — including bare "-dirty" on an exact tag,
+// where the edits may be to the embedded charts themselves. A version
+// carrying either is a developer's WIP tree, not a release.
+var describeSuffixRegex = regexp.MustCompile(`(-\d+-g[0-9a-f]+)?-dirty$|-\d+-g[0-9a-f]+$`)
+
+// releaseVersion interprets the ldflags-injected build version. It returns
+// the version with any leading "v" stripped and true for a tagged release
+// build, or ("", false) for a dev/source build. Both release build paths
+// must be accepted: goreleaser injects "0.30.0" (no "v") and the Makefile
+// injects "v0.30.0" on an exact tag. Gating on the "v" prefix alone would
+// silently disable release-only behavior on the goreleaser artifacts users
+// actually download.
+//
+// A `git describe` suffix ("v0.29.0-5-gabc1234") marks a build from a
+// non-tag commit: its embedded charts are a moving target the developer
+// controls, so release-only behavior (the drift checks) must stay off —
+// otherwise every contributor build raises false drift in any real project
+// and hard-fails strict ones. The Makefile emits "dev" off-tag, but the
+// parser rejects the describe shape regardless of how it was injected.
+func releaseVersion(raw string) (string, bool) {
+	if raw == "" || raw == devVersion {
+		return "", false
+	}
+
+	if describeSuffixRegex.MatchString(raw) {
+		return "", false
+	}
+
+	return strings.TrimPrefix(raw, "v"), true
+}
+
+// evaluateChartDrift decides the drift outcome for a build. It returns
+// (warning, error): a non-empty warning to print to stderr, or a non-nil
+// error to abort the command (strict mode), or both empty for the silent
+// cases. Taking the version, project root, and strict flag as arguments
+// keeps the warn-vs-fail decision pure (modulo the filesystem read inside
+// CheckChartDrift) so it is unit-testable without the package globals.
+//
+// Cases: dev/source build → silent (embedded charts are a moving target the
+// developer controls); drift-check I/O error → non-fatal warning (best
+// effort, never blocks the command); drift + strict → hard error with a
+// remediation hint; drift + non-strict → warning; no drift → silent.
+func evaluateChartDrift(rawVersion, rootDir string, strict bool) (string, error) {
+	version, ok := releaseVersion(rawVersion)
+	if !ok {
+		return "", nil
+	}
+
+	drift, msg, err := commands.CheckChartDrift(rootDir, version)
+
+	return decideDrift(drift, msg, err, strict)
+}
+
+// evaluatePresetDrift is the preset-template counterpart of
+// evaluateChartDrift. Same release-only gating and warn-vs-fail decision, but
+// it consults CheckPresetDrift: the binary's preset hash vs the baseline
+// pinned in .talm-preset.lock at init. Kept separate (rather than folded into
+// evaluateChartDrift) so the library and preset drift signals stay
+// independently testable and independently silenceable.
+func evaluatePresetDrift(rawVersion, rootDir string, strict bool) (string, error) {
+	version, ok := releaseVersion(rawVersion)
+	if !ok {
+		return "", nil
+	}
+
+	drift, msg, err := commands.CheckPresetDrift(rootDir, version)
+
+	return decideDrift(drift, msg, err, strict)
+}
+
+// decideDrift folds a (drift, msg, err) result into the (warning, error)
+// outcome shared by both drift checks: a check failure downgrades to a
+// non-fatal warning (best effort, never blocks a command) — except under
+// strict, where an unverifiable baseline is a hard error: the operator opted
+// into enforcement, and a corrupted lock or unreadable vendored tree passing
+// silently would defeat it exactly when the baseline broke; a MISSING
+// baseline (commands.ErrNoBaseline) is silence without strict — projects
+// from before baseline pinning should not nag — but a blocker under strict,
+// where deleting the baseline must not pass more quietly than corrupting
+// it; drift under strict is a hard error with a remediation hint; drift
+// otherwise is a warning; no drift is silent.
+func decideDrift(drift bool, msg string, err error, strict bool) (string, error) {
+	switch {
+	case errors.Is(err, commands.ErrNoBaseline) && !strict:
+		return "", nil
+	case errors.Is(err, commands.ErrNoBaseline):
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary; project idiom.
+		return "", errors.WithHint(
+			errors.Wrap(err, "drift baseline missing under strict mode"),
+			"run `talm init --update --preset <preset>` to vendor the library and pin the preset baseline, or unset strictCharts / drop --strict-charts",
+		)
+	case err != nil && strict:
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary; project idiom.
+		return "", errors.WithHint(
+			errors.Wrap(err, "drift check failed under strict mode"),
+			"repair the baseline (re-run `talm init --update --preset <preset>`), or unset strictCharts / drop --strict-charts to downgrade this to a warning",
+		)
+	case err != nil:
+		return fmt.Sprintf("could not check drift: %v", err), nil
+	case drift && strict:
+		// The shared drift message ends with "(or ignore if this is
+		// intentional)" — sound advice on a warning, contradictory on an
+		// error the command just refused to run past. Strip it here
+		// rather than threading a second message through both checkers.
+		msg = strings.Replace(msg, " (or ignore if this is intentional)", "", 1)
+
+		//nolint:wrapcheck // originating error built with errors.New; WithHint adds operator-facing guidance and is the project idiom.
+		return "", errors.WithHint(
+			errors.New(msg),
+			"run `talm init --update --preset <preset>`, or unset strictCharts / drop --strict-charts to downgrade this to a warning",
+		)
+	case drift:
+		return msg, nil
+	default:
+		return "", nil
+	}
+}
+
+// surfaceChartDrift wires the drift evaluators to the package globals and
+// emits any warning to stderr. The strict input is the OR of the committed
+// Chart.yaml field and the per-run flag. Both the vendored library
+// (charts/talm/) and the preset baseline (.talm-preset.lock) are checked; a
+// strict failure on either aborts before the command body runs.
+func surfaceChartDrift() error {
+	strict := commands.Config.StrictCharts || strictChartsFlag
+
+	for _, eval := range []func(string, string, bool) (string, error){
+		evaluateChartDrift,
+		evaluatePresetDrift,
+	} {
+		warning, err := eval(Version, commands.Config.RootDir, strict)
+		if err != nil {
+			return err
+		}
+
+		if warning != "" {
+			fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+		}
+	}
+
+	return nil
+}
+
 func initConfig() {
 	if len(os.Args) < 2 {
 		return
@@ -236,8 +407,12 @@ func initConfig() {
 	}
 
 	if strings.HasPrefix(cmd.Use, initSubcommandName) {
-		if strings.HasPrefix(Version, "v") {
-			commands.Config.InitOptions.Version = strings.TrimPrefix(Version, `v`)
+		// Stamp the real release version into the vendored charts; fall back
+		// to the dev sentinel for source builds. Gating on the "v" prefix
+		// here would stamp "0.1.0" on every goreleaser release (which injects
+		// the version without "v").
+		if version, ok := releaseVersion(Version); ok {
+			commands.Config.InitOptions.Version = version
 		} else {
 			commands.Config.InitOptions.Version = "0.1.0"
 		}

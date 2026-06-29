@@ -42,7 +42,12 @@ var GlobalArgs global.Args
 var Config struct {
 	RootDir         string
 	RootDirExplicit bool // true if --root was explicitly set
-	GlobalOptions   struct {
+	// StrictCharts turns vendored-chart drift into a hard error instead of a
+	// warning. Opt-in per project via Chart.yaml (strictCharts: true) so a
+	// whole team/CI inherits it; absent means a warning only (the historical
+	// behavior). The --strict-charts flag forces it on for a single run.
+	StrictCharts  bool `yaml:"strictCharts"`
+	GlobalOptions struct {
 		Talosconfig string `yaml:"talosconfig"`
 		Kubeconfig  string `yaml:"kubeconfig"`
 	} `yaml:"globalOptions"`
