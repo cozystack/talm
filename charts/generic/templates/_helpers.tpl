@@ -58,6 +58,25 @@ machine:
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
     disk: {{ include "talm.discovered.system_disk_name" . | quote }}
+    {{- /* CVE-2026-53359: disable KVM nested virtualization (guest-to-host
+           escape mitigation). kvm_intel/kvm_amd are built into the Talos
+           kernel, so the nested= parameter takes effect only from the
+           kernel command line — a modprobe.d drop-in or a runtime /sys
+           write cannot set it (the sysfs knob is read-only post-boot).
+           Both modules are listed so one config works on Intel and AMD;
+           the non-matching module silently ignores its arg.
+
+           On Talos >1.11 the generated base config defaults
+           machine.install.grubUseUKICmdline to true (UKI cmdline), and
+           Talos rejects extraKernelArgs alongside it ("install.extraKernelArgs
+           and install.grubUseUKICmdline can't be used together"). Pin it
+           false so the args land on the Talos-built cmdline. The guard
+           matches the base default exactly: emit the field only where the
+           base bundle would set it true, so we never surface a key on a
+           node whose schema predates grubUseUKICmdline. */ -}}
+    {{- if or (not .TalosVersion) (not (semverCompare "<1.12.0-0" .TalosVersion)) }}
+    grubUseUKICmdline: false
+    {{- end }}
     extraKernelArgs:
     # CVE-2026-53359: disable KVM nested virtualization (guest-to-host escape mitigation)
     - kvm_intel.nested=0
