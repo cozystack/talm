@@ -58,6 +58,10 @@ machine:
   install:
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
     disk: {{ include "talm.discovered.system_disk_name" . | quote }}
+    extraKernelArgs:
+    # CVE-2026-53359: disable KVM nested virtualization (guest-to-host escape mitigation)
+    - kvm_intel.nested=0
+    - kvm_amd.nested=0
 {{- end }}
 
 {{- /* Shared cluster section */ -}}
