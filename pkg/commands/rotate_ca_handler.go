@@ -312,7 +312,7 @@ func discoverClusterNodes() (controlPlane, workers []string, err error) {
 func getKubeconfigFromTalos() ([]byte, error) {
 	var kubeconfigData []byte
 
-	err := GlobalArgs.WithClient(func(ctx context.Context, c *client.Client) error {
+	err := WithClient(func(ctx context.Context, c *client.Client) error {
 		var err error
 
 		kubeconfigData, err = c.Kubeconfig(ctx)
@@ -323,7 +323,6 @@ func getKubeconfigFromTalos() ([]byte, error) {
 		return nil
 	})
 
-	//nolint:wrapcheck // forwarding talos/cobra error verbatim per the wrapper contract.
 	return kubeconfigData, err
 }
 
