@@ -26,6 +26,8 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // renderLegacyCozystackControlplane renders the cozystack controlplane
@@ -239,4 +241,293 @@ func TestContract_NetworkLegacy_ExistingInterfacesShortCircuit(t *testing.T) {
 	// addresses sorts first in the YAML round-trip).
 	assertContains(t, out, "interface: eth0")
 	assertContains(t, out, "192.168.1.10/24")
+}
+
+// Contract: the legacy schema emits one interface entry with an
+// inline vip per vips entry (no Layer2VIPConfig document pre-1.12). Links
+// are non-primary (simpleNicLookup's primary is eth0) so they don't hit
+// the primary-collision guard exercised below.
+func TestContract_NetworkLegacy_MultiVIP_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+			map[string]any{"link": "eth2", "ip": "203.0.113.254"},
+		},
+	})
+	assertContains(t, out, "interface: eth1")
+	assertContains(t, out, "interface: eth2")
+	assertContains(t, out, "ip: 192.0.2.254")
+	assertContains(t, out, "ip: 203.0.113.254")
+}
+
+// Contract: a vips entry whose link is the discovered primary link
+// fails fast on legacy — the primary already has an interfaces[] entry, so
+// a second one would double-pin the device (Talos won't merge them).
+func TestContract_NetworkLegacy_MultiVIP_LinkEqualsPrimary_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.0.2.254"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips link equal to the primary link on the legacy schema")
+	}
+	if !strings.Contains(err.Error(), "primary link") {
+		t.Errorf("error should explain the primary-link collision, got %v", err)
+	}
+}
+
+// Contract: two vips entries on the same link fail fast on legacy —
+// interfaces[].vip holds a single IP per interface, so they cannot both be
+// expressed.
+func TestContract_NetworkLegacy_MultiVIP_DuplicateLink_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+			map[string]any{"link": "eth1", "ip": "192.0.2.253"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for two vips entries on the same legacy link")
+	}
+	if !strings.Contains(err.Error(), "already carries a VIP") {
+		t.Errorf("error should explain the duplicate link, got %v", err)
+	}
+}
+
+// Contract: a vips entry on the same link as the vipLink override
+// fails fast on legacy — the override already pins a vip there.
+func TestContract_NetworkLegacy_MultiVIP_LinkEqualsVipLink_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.0.2.99",
+		"vipLink":           "eth1",
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.50"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips link equal to the vipLink override on legacy")
+	}
+	if !strings.Contains(err.Error(), "already carries a VIP") {
+		t.Errorf("error should explain the link already carries a VIP, got %v", err)
+	}
+}
+
+// Contract: a vips ip equal to floatingIP fails fast on legacy —
+// the same VIP ip on two links loses arbitration on apply.
+func TestContract_NetworkLegacy_MultiVIP_DuplicateIP_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.0.2.99",
+		"vipLink":           "eth1",
+		"vips": []any{
+			map[string]any{"link": "eth2", "ip": "192.0.2.99"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips ip duplicating floatingIP on legacy")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error should explain the duplicate ip, got %v", err)
+	}
+}
+
+// Contract: a malformed vips[].ip fails the legacy render too,
+// matching the multidoc fail-fast.
+func TestContract_NetworkLegacy_MultiVIP_InvalidIP_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "not-an-ip"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a validation error for a malformed vips[].ip in the legacy schema")
+	}
+	if !strings.Contains(err.Error(), "not-an-ip") {
+		t.Errorf("error should name the malformed ip, got %v", err)
+	}
+}
+
+// Contract: vips are emitted in the legacy schema even when
+// discovery resolves no default-route link — the interfaces block opens
+// on vips too, so a declared VIP is not silently dropped.
+func TestContract_NetworkLegacy_MultiVIP_NoDefaultLink_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", noDefaultRouteWithSubnetMatchLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.0.2.254"},
+		},
+	})
+	assertContains(t, out, "interfaces:")
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "ip: 192.0.2.254")
+}
+
+// Contract: preserveExisting does NOT add a second
+// machine.network block on the legacy schema — the legacy renderer
+// already emits one, so a duplicate mapping key would make yaml.v3
+// reject the config on load ("mapping key already defined"). The knob's
+// machine.common block is multi-doc only. Asserting the document decodes
+// cleanly pins exactly the failure the duplicate would cause.
+func TestContract_NetworkLegacy_PreserveExisting_NoDuplicateNetwork_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+	})
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("legacy preserveExisting render must be valid YAML (no duplicate machine.network), got: %v\n%s", err, out)
+	}
+}
+
+// Contract: extraLinks fails fast on the legacy schema (it is
+// multi-doc only) rather than silently dropping the declared links.
+func TestContract_NetworkLegacy_ExtraLinks_FailsFast_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond1", "bond": map[string]any{"interfaces": []any{"eth0"}}},
+			},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected extraLinks to fail fast on the legacy schema")
+	}
+	if !strings.Contains(err.Error(), "multi-doc") {
+		t.Errorf("error should explain the multi-doc-only limitation, got %v", err)
+	}
+}
+
+// Contract: the generic preset carries its own copy of the legacy
+// vips loop, so pin its happy path too — each vips entry becomes one
+// interface with an inline vip. Links are non-primary (simpleNicLookup's
+// primary is eth0) so they don't hit the primary-collision guard.
+func TestContract_NetworkLegacy_MultiVIP_Generic(t *testing.T) {
+	out := renderLegacyChart(t, genericChartPath, "generic/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+			map[string]any{"link": "eth2", "ip": "203.0.113.254"},
+		},
+	})
+	assertContains(t, out, "interface: eth1")
+	assertContains(t, out, "interface: eth2")
+	assertContains(t, out, "ip: 192.0.2.254")
+	assertContains(t, out, "ip: 203.0.113.254")
+}
+
+// Contract: extraLinks fails fast on the generic legacy schema
+// too — the fail-fast is duplicated per preset, so the generic copy needs
+// its own guard test.
+func TestContract_NetworkLegacy_ExtraLinks_FailsFast_Generic(t *testing.T) {
+	err := renderGenericExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond1", "bond": map[string]any{"interfaces": []any{"eth0"}}},
+			},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected extraLinks to fail fast on the generic legacy schema")
+	}
+	if !strings.Contains(err.Error(), "multi-doc") {
+		t.Errorf("error should explain the multi-doc-only limitation, got %v", err)
+	}
+}
+
+// Contract: a vips entry whose link is already present in the
+// running interfaces block (a re-applied legacy node emits that block
+// verbatim) fails fast — a second interfaces[] entry for the same device
+// is a duplicate Talos won't merge. legacyMultiInterfaceLookup preserves
+// eth0+eth1; the VIP targets eth1.
+func TestContract_NetworkLegacy_MultiVIP_LinkInPreservedBlock_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyMultiInterfaceLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips link already in the preserved interfaces block")
+	}
+	if !strings.Contains(err.Error(), "already present") {
+		t.Errorf("error should explain the link is already in the preserved block, got %v", err)
+	}
+}
+
+// Contract: the generic preset carries its own copy of the vips
+// loop, so pin the same preserved-link collision on it.
+func TestContract_NetworkLegacy_MultiVIP_LinkInPreservedBlock_Fails_Generic(t *testing.T) {
+	err := renderGenericExpectError(t, legacyMultiInterfaceLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+		},
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips link already in the preserved interfaces block")
+	}
+	if !strings.Contains(err.Error(), "already present") {
+		t.Errorf("error should explain the link is already in the preserved block, got %v", err)
+	}
+}
+
+// Contract: the vipLink override path has the same hole — a
+// vipLink naming a link already in the preserved block would also
+// double-declare the device. eth1 is preserved; eth0 is the primary.
+func TestContract_NetworkLegacy_VipLinkOverride_InPreservedBlock_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyMultiInterfaceLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.0.2.254",
+		"vipLink":           "eth1",
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vipLink override naming a preserved link")
+	}
+	if !strings.Contains(err.Error(), "already present") {
+		t.Errorf("error should explain the vipLink is already in the preserved block, got %v", err)
+	}
+}
+
+// Contract: generic counterpart of the vipLink-override collision.
+func TestContract_NetworkLegacy_VipLinkOverride_InPreservedBlock_Fails_Generic(t *testing.T) {
+	err := renderGenericExpectError(t, legacyMultiInterfaceLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.0.2.254",
+		"vipLink":           "eth1",
+	}, "v1.11")
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vipLink override naming a preserved link")
+	}
+	if !strings.Contains(err.Error(), "already present") {
+		t.Errorf("error should explain the vipLink is already in the preserved block, got %v", err)
+	}
+}
+
+// Contract: the preserved-link guard must not over-fire — a vips
+// entry on a link that is NOT in the preserved block (a genuinely new
+// device) still renders one interface entry alongside the preserved ones.
+func TestContract_NetworkLegacy_MultiVIP_NewLinkWithPreservedBlock_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", legacyMultiInterfaceLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth2", "ip": "192.0.2.254"},
+		},
+	})
+	// The preserved interfaces survive.
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "interface: eth1")
+	// The new VIP link is emitted exactly once.
+	if got := strings.Count(out, "interface: eth2"); got != 1 {
+		t.Errorf("expected exactly one eth2 interface entry, got %d:\n%s", got, out)
+	}
+	assertContains(t, out, "ip: 192.0.2.254")
 }

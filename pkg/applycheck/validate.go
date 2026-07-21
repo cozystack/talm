@@ -98,6 +98,16 @@ func ValidateRefs(refs []Ref, snapshot HostSnapshot) []Finding {
 		linkSet[name] = struct{}{}
 	}
 
+	// A config may create virtual links (bond, bridge, VLAN, wireguard,
+	// dummy, alias) and reference them from its own other documents in the
+	// same apply. Those names are legitimate targets even though the node
+	// does not carry them yet, so union them in before validating.
+	for i := range refs {
+		if refs[i].Kind == RefKindLinkCreated {
+			linkSet[refs[i].Name] = struct{}{}
+		}
+	}
+
 	// Disk-literal validation accepts DevPath (`/dev/sda`) and every
 	// stable Symlink alternative (/dev/disk/by-id/wwn-…, by-path/…,
 	// by-diskseq/…). The recommended Talos pattern is by-id, so the
@@ -123,6 +133,10 @@ func ValidateRefs(refs []Ref, snapshot HostSnapshot) []Finding {
 			findings = appendIfMissing(findings, ref, diskPaths, diskPathList(snapshot.Disks), "disk")
 		case RefKindDiskSelector:
 			findings = appendSelectorFinding(findings, ref, snapshot.Disks)
+		case RefKindLinkCreated:
+			// Nothing to validate: this names a link the apply itself
+			// creates, so it is not expected on the node. Its only job was
+			// to seed linkSet above.
 		}
 	}
 

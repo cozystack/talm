@@ -34,6 +34,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -508,4 +509,174 @@ func TestContract_Cluster_GenericCertSANsAppendsVerbatim(t *testing.T) {
 	})
 	assertContains(t, out, "- api.example.com")
 	assertNotContains(t, out, "- 127.0.0.1")
+}
+
+// Contract: extraApiServerArgs / extraControllerManagerArgs /
+// extraSchedulerArgs merge into the respective control-plane component
+// extraArgs on cozystack, on top of the preset's built-in args.
+func TestContract_Cluster_ExtraControlPlaneArgs_Merge_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":          []any{testAdvertisedSubnet},
+		"extraApiServerArgs":         map[string]any{"max-requests-inflight": "2000"},
+		"extraControllerManagerArgs": map[string]any{"concurrent-gc-syncs": "30"},
+		"extraSchedulerArgs":         map[string]any{"kube-api-qps": "100"},
+	})
+	assertContains(t, out, "max-requests-inflight:")
+	assertContains(t, out, "concurrent-gc-syncs:")
+	assertContains(t, out, "kube-api-qps:")
+	assertContains(t, out, "bind-address: 0.0.0.0")
+}
+
+// Contract: extraApiServerArgs emits apiServer.extraArgs even when
+// oidcIssuerUrl is unset — the block is hoisted out of the OIDC guard.
+func TestContract_Cluster_ExtraApiServerArgs_WithoutOIDC_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraApiServerArgs": map[string]any{"max-requests-inflight": "2000"},
+	})
+	assertContains(t, out, "max-requests-inflight:")
+	assertNotContains(t, out, "oidc-issuer-url")
+}
+
+// Contract: extraControllerManagerArgs colliding with a built-in
+// (bind-address) fails the render with a hinted message.
+func TestContract_Cluster_ExtraControllerManagerArgs_Collision_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":          []any{testAdvertisedSubnet},
+		"extraControllerManagerArgs": map[string]any{"bind-address": "127.0.0.1"},
+	})
+	if err == nil {
+		t.Fatal("expected a collision error for extraControllerManagerArgs.bind-address")
+	}
+	if !strings.Contains(err.Error(), "bind-address") {
+		t.Errorf("error should name the colliding key, got %v", err)
+	}
+}
+
+// Contract: extraSchedulerArgs colliding with the preset's
+// built-in scheduler bind-address fails the render with a hinted message.
+func TestContract_Cluster_ExtraSchedulerArgs_Collision_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraSchedulerArgs": map[string]any{"bind-address": "127.0.0.1"},
+	})
+	if err == nil {
+		t.Fatal("expected a collision error for extraSchedulerArgs.bind-address")
+	}
+	if !strings.Contains(err.Error(), "bind-address") {
+		t.Errorf("error should name the colliding key, got %v", err)
+	}
+}
+
+// Contract: extraApiServerArgs colliding with an oidc-* key while
+// oidcIssuerUrl is set fails the render. When OIDC is unset the same key
+// is the operator's to own and does not collide.
+func TestContract_Cluster_ExtraApiServerArgs_OIDCCollision_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"oidcIssuerUrl":      "https://oidc.example.com",
+		"extraApiServerArgs": map[string]any{"oidc-client-id": "custom"},
+	})
+	if err == nil {
+		t.Fatal("expected a collision error for extraApiServerArgs.oidc-client-id when OIDC is set")
+	}
+	if !strings.Contains(err.Error(), "oidc-client-id") {
+		t.Errorf("error should name the colliding key, got %v", err)
+	}
+}
+
+// Contract: with allocateNodeCIDRs off the preset emits no
+// cluster-cidr, so an operator may set cluster-cidr via
+// extraControllerManagerArgs without tripping the collision guard.
+func TestContract_Cluster_ExtraControllerManagerArgs_ClusterCIDRAllowedWhenAllocateOff_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":          []any{testAdvertisedSubnet},
+		"allocateNodeCIDRs":          false,
+		"extraControllerManagerArgs": map[string]any{"cluster-cidr": "10.0.0.0/8"},
+	})
+	// extraArgs values are coerced to quoted strings (Talos map[string]string).
+	assertContains(t, out, `cluster-cidr: "10.0.0.0/8"`)
+}
+
+// Contract: with allocateNodeCIDRs on (the default) cluster-cidr
+// is preset-owned and an override still collides.
+func TestContract_Cluster_ExtraControllerManagerArgs_ClusterCIDRCollidesWhenAllocateOn_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":          []any{testAdvertisedSubnet},
+		"extraControllerManagerArgs": map[string]any{"cluster-cidr": "10.0.0.0/8"},
+	})
+	if err == nil {
+		t.Fatal("expected a collision for cluster-cidr while allocateNodeCIDRs is on")
+	}
+	if !strings.Contains(err.Error(), "cluster-cidr") {
+		t.Errorf("error should name the colliding key, got %v", err)
+	}
+}
+
+// Contract: generic exposes the same three passthrough knobs for
+// values-file portability, with no preset built-ins to collide with.
+func TestContract_Cluster_ExtraControlPlaneArgs_Generic(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraApiServerArgs": map[string]any{"max-requests-inflight": "2000"},
+		"extraSchedulerArgs": map[string]any{"kube-api-qps": "100"},
+	})
+	assertContains(t, out, "max-requests-inflight:")
+	assertContains(t, out, "kube-api-qps:")
+}
+
+// Contract: Talos component extraArgs is map[string]string, so an
+// unquoted numeric value must render as a quoted string, not a bare YAML
+// int that Talos rejects on load.
+func TestContract_Cluster_ExtraApiServerArgs_NumericCoercedToString_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraApiServerArgs": map[string]any{"max-requests-inflight": 2000},
+	})
+	assertContains(t, out, `max-requests-inflight: "2000"`)
+}
+
+// Contract: the generic preset carries its own extraArgs emission,
+// so pin the same numeric-to-quoted-string coercion on it.
+func TestContract_Cluster_ExtraArgs_NumericCoercedToString_Generic(t *testing.T) {
+	out := renderGenericWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraApiServerArgs": map[string]any{"max-requests-inflight": 2000},
+		"extraSchedulerArgs": map[string]any{"kube-api-qps": 100},
+	})
+	assertContains(t, out, `max-requests-inflight: "2000"`)
+	assertContains(t, out, `kube-api-qps: "100"`)
+}
+
+// Contract: a nil extraArgs value (the `key:` with nothing after it typo)
+// must fail rather than render the literal string "<nil>" straight onto a
+// control-plane component's command line.
+func TestContract_Cluster_ExtraArgs_NilValue_Fails_Cozystack(t *testing.T) {
+	for _, knob := range []string{"extraApiServerArgs", "extraControllerManagerArgs", "extraSchedulerArgs"} {
+		t.Run(knob, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				knob:                map[string]any{"some-flag": nil},
+			})
+			if err == nil {
+				t.Fatalf("expected a fail-fast for a nil %s value", knob)
+			}
+			if !strings.Contains(err.Error(), "some-flag") {
+				t.Errorf("error should name the offending key, got %v", err)
+			}
+		})
+	}
+}
+
+func TestContract_Cluster_ExtraArgs_NilValue_Fails_Generic(t *testing.T) {
+	err := renderGenericExpectError(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets":  []any{testAdvertisedSubnet},
+		"extraApiServerArgs": map[string]any{"some-flag": nil},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a nil extraApiServerArgs value on generic")
+	}
+	if !strings.Contains(err.Error(), "some-flag") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
 }

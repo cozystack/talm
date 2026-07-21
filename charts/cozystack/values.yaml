@@ -192,3 +192,127 @@ extraSysctls: {}
 #         [debug]
 #           level = "info"
 extraMachineFiles: []
+
+# Upstream NTP servers, rendered as machine.time.servers when non-empty.
+# Empty (the default) leaves Talos on its built-in time source. Set this
+# for nodes on an isolated network that must point at a local time
+# source, e.g. the gateway. Example:
+#   timeServers: [192.0.2.1]
+timeServers: []
+
+# Extra control-plane component args, appended to each component's
+# extraArgs. Same convention as extraKubeletExtraArgs: keys append, and
+# a key that collides with a preset built-in fails the render — for
+# controllerManager (bind-address / allocate-node-cidrs / cluster-cidr),
+# scheduler (bind-address), and apiServer (the oidc-* args, but only
+# when oidcIssuerUrl is set). Example:
+#   extraApiServerArgs: { max-requests-inflight: "2000" }
+extraApiServerArgs: {}
+extraControllerManagerArgs: {}
+extraSchedulerArgs: {}
+
+# Container registry mirrors, driving both the legacy
+# machine.registries.mirrors block and the multidoc RegistryMirrorConfig
+# documents. Each key is a registry host mapped to a list of mirror
+# endpoints. The default mirrors docker.io through gcr; add more hosts
+# (e.g. ghcr.io) or point at a private pull-through cache. To emit NO
+# registry config at all, null the key out (`registryMirrors:` with no
+# value) — a per-node override merges deeply, so `{}` keeps the default
+# docker.io mirror rather than clearing it. Example:
+#   registryMirrors:
+#     docker.io: { endpoints: [https://registry.example.com/v2/docker.io] }
+#     ghcr.io:   { endpoints: [https://registry.example.com/v2/ghcr.io] }
+registryMirrors:
+  docker.io:
+    endpoints:
+      - https://mirror.gcr.io
+
+# TLS behaviour per registry ENDPOINT host, driving the legacy
+# machine.registries.config.<host>.tls block and the multidoc
+# RegistryTLSConfig documents. The key is the hostname of the endpoint URL
+# (e.g. `registry.example.com` for `https://registry.example.com/v2/`), not
+# the mirror name — so a self-signed pull-through cache can be trusted
+# without touching registryMirrors.
+#
+# Each entry must say something: set `ca` to trust a private CA, and/or
+# `insecureSkipVerify` to decide whether server verification stays on. An
+# entry with neither fails the render rather than silently picking a
+# security posture. Prefer `ca` — it keeps verification on.
+#
+# `ca` is given as PEM, the form you already have on disk; the chart
+# adapts it per schema (the legacy field base64-decodes on load, the
+# multi-doc document takes PEM verbatim). Example:
+#   registryTLS:
+#     registry.example.com:
+#       ca: |
+#         -----BEGIN CERTIFICATE-----
+#         ...
+#         -----END CERTIFICATE-----
+#     legacy-cache.example.com: { insecureSkipVerify: true }
+registryTLS: {}
+
+# Additional Layer2 VIPs, each pinned to a link — use this for more than
+# one VIP, e.g. a control-plane VIP on the primary link and a separate
+# VIP on a storage link. floatingIP + vipLink remain the single-VIP
+# shorthand and may be used alongside vips. Each vips[].ip is validated
+# as an IP literal. On the pre-1.12 legacy schema a VIP is an inline
+# machine.network.interfaces[].vip, so a vips link must not be one already
+# emitted verbatim from the running interfaces block (the primary link, or
+# any link on a re-applied legacy node) — the render fails fast if it is.
+# On v1.12+ each VIP is a separate Layer2VIPConfig with no such limit.
+# Example:
+#   vips:
+#     - { link: bond0, ip: 192.0.2.254 }
+#     - { link: bond1, ip: 203.0.113.254 }
+vips: []
+
+# Network topology beyond the discovered primary link.
+network:
+  # preserveExisting: emit the running node's machine.network.interfaces
+  # verbatim instead of rebuilding only the discovered primary link, and
+  # skip the typed per-link rebuild. Use when a node's applied topology
+  # is richer than the preset reconstructs (secondary links not on the
+  # default route, extra VLANs, multiple addresses on one link).
+  #
+  # This flag only does something on the v1.12+ multi-doc schema. The
+  # legacy renderer already emits the running interfaces verbatim whenever
+  # they are present, so setting it there changes nothing.
+  preserveExisting: false
+  # extraLinks: declarative additional links layered on the discovered
+  # topology — bonds, VLANs, and extra addresses discovery does not
+  # reconstruct. An entry with a bond or addresses declares a new link;
+  # an entry with only vlans parents those VLANs onto its interface, which
+  # must already exist — a discovered link or a link/bond declared in
+  # another extraLinks entry.
+  #
+  # An entry that declares a link (addresses or bond) and each vlans[]
+  # child accept mtu and routes; setting them on an entry that declares no
+  # link fails the render, since there is nothing to attach them to. A
+  # route needs a gateway; omit destination for a default route. An address
+  # that is also a declared VIP is refused — the VIP is installed by its
+  # Layer2VIPConfig. Addresses are CIDR, and a vlanId must be 1-4094.
+  #
+  # A bond REQUIRES `mode` (Talos rejects a BondConfig without it). The
+  # remaining bond keys are optional tuning, matching what the discovery
+  # path reconstructs: xmitHashPolicy, lacpRate, miimon, updelay,
+  # downdelay. Example:
+  #   extraLinks:
+  #     - interface: bond1
+  #       mtu: 1400
+  #       bond:
+  #         interfaces: [enp3s0, enp4s0]
+  #         mode: 802.3ad
+  #         xmitHashPolicy: layer2+3
+  #         lacpRate: slow
+  #         miimon: 100
+  #       addresses: [203.0.113.10/24]
+  #       routes:
+  #         - gateway: 203.0.113.1
+  #     - interface: bond1   # VLAN on the bond declared above
+  #       vlans:
+  #         - vlanId: 7
+  #           addresses: [198.51.100.10/24]
+  #           mtu: 1400
+  #           routes:
+  #             - gateway: 198.51.100.1
+  extraLinks: []

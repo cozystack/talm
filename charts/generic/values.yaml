@@ -124,3 +124,92 @@ extraSysctls: {}
 #       content: |
 #         hello = "world"
 extraMachineFiles: []
+
+# Upstream NTP servers, rendered as machine.time.servers when non-empty.
+# Empty (the default) leaves Talos on its built-in time source. Set this
+# for nodes on an isolated network that must point at a local time
+# source. Example:
+#   timeServers: [192.0.2.1]
+timeServers: []
+
+# Extra control-plane component args (parity with the cozystack preset
+# so a values file is portable between presets). Plain passthrough —
+# generic has no built-in component args to collide with. Example:
+#   extraApiServerArgs: { max-requests-inflight: "2000" }
+extraApiServerArgs: {}
+extraControllerManagerArgs: {}
+extraSchedulerArgs: {}
+
+# Container registry mirrors, keyed by registry host. The generic preset
+# ships no default (cozystack mirrors docker.io through gcr); this key
+# exists so a values file stays portable between the two presets. Example:
+#   registryMirrors:
+#     docker.io: { endpoints: [https://registry.example.com/v2/docker.io] }
+registryMirrors: {}
+
+# TLS posture per registry ENDPOINT host — the hostname of the endpoint
+# URL, not the mirror name. Each entry must set `ca` (PEM) and/or
+# `insecureSkipVerify`; an entry with neither fails the render. Example:
+#   registryTLS:
+#     registry.example.com: { insecureSkipVerify: true }
+registryTLS: {}
+
+# Additional Layer2 VIPs, each pinned to a link. floatingIP + vipLink
+# remain the single-VIP shorthand and may be used alongside vips. Each
+# vips[].ip is validated as an IP literal. On the pre-1.12 legacy schema a
+# VIP is an inline machine.network.interfaces[].vip, so a vips link must
+# not be one already emitted verbatim from the running interfaces block
+# (the primary link, or any link on a re-applied legacy node) — the render
+# fails fast if it is. On v1.12+ each VIP is a separate Layer2VIPConfig
+# with no such limit. Example:
+#   vips:
+#     - { link: bond0, ip: 192.0.2.254 }
+#     - { link: bond1, ip: 203.0.113.254 }
+vips: []
+
+# Network topology beyond the discovered primary link.
+network:
+  # preserveExisting: emit the running node's machine.network.interfaces
+  # verbatim instead of rebuilding only the discovered primary link, and
+  # skip the typed per-link rebuild.
+  #
+  # Multi-doc schema only: the legacy renderer already emits the running
+  # interfaces verbatim whenever they are present.
+  preserveExisting: false
+  # extraLinks: declarative additional links layered on the discovered
+  # topology — bonds, VLANs, and extra addresses. An entry with a bond or
+  # addresses declares a new link; an entry with only vlans parents those
+  # VLANs onto its interface, which must already exist — a discovered link
+  # or a link/bond declared in another extraLinks entry.
+  #
+  # An entry that declares a link (addresses or bond) and each vlans[]
+  # child accept mtu and routes; setting them on an entry that declares no
+  # link fails the render, since there is nothing to attach them to. A
+  # route needs a gateway; omit destination for a default route. An address
+  # that is also a declared VIP is refused — the VIP is installed by its
+  # Layer2VIPConfig. Addresses are CIDR, and a vlanId must be 1-4094.
+  #
+  # A bond REQUIRES `mode` (Talos rejects a BondConfig without it). The
+  # remaining bond keys are optional tuning, matching what the discovery
+  # path reconstructs: xmitHashPolicy, lacpRate, miimon, updelay,
+  # downdelay. Example:
+  #   extraLinks:
+  #     - interface: bond1
+  #       mtu: 1400
+  #       bond:
+  #         interfaces: [enp3s0, enp4s0]
+  #         mode: 802.3ad
+  #         xmitHashPolicy: layer2+3
+  #         lacpRate: slow
+  #         miimon: 100
+  #       addresses: [203.0.113.10/24]
+  #       routes:
+  #         - gateway: 203.0.113.1
+  #     - interface: bond1   # VLAN on the bond declared above
+  #       vlans:
+  #         - vlanId: 7
+  #           addresses: [198.51.100.10/24]
+  #           mtu: 1400
+  #           routes:
+  #             - gateway: 198.51.100.1
+  extraLinks: []

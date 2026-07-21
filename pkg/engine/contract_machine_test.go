@@ -28,6 +28,7 @@
 package engine
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -892,5 +893,403 @@ func TestContract_Machine_NoRegistriesOnGeneric(t *testing.T) {
 			assertNotContains(t, out, "registries:")
 			assertNotContains(t, out, "mirror.gcr.io")
 		})
+	}
+}
+
+// Contract: timeServers values render machine.time.servers on
+// both charts, letting a node on an isolated network point at a local
+// NTP source without hand-editing the generated config.
+func TestContract_Machine_TimeServers_RenderWhenSet(t *testing.T) {
+	t.Run("cozystack", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"timeServers":       []any{"192.0.2.1", "192.0.2.2"},
+		})
+		assertContains(t, out, "time:")
+		assertContains(t, out, "servers:")
+		assertContains(t, out, "- 192.0.2.1")
+		assertContains(t, out, "- 192.0.2.2")
+	})
+	t.Run("generic", func(t *testing.T) {
+		out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"timeServers":       []any{"192.0.2.1"},
+		})
+		assertContains(t, out, "time:")
+		assertContains(t, out, "- 192.0.2.1")
+	})
+}
+
+// Contract: no machine.time block when timeServers is unset (the
+// default). The "\n  time:" anchor is the 2-space-indented machine.time
+// key, so it does not collide with the tcp_keepalive_time sysctl.
+func TestContract_Machine_TimeServers_EmptyByDefault(t *testing.T) {
+	t.Run("cozystack", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+		})
+		assertNotContains(t, out, "\n  time:")
+	})
+	t.Run("generic", func(t *testing.T) {
+		out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+		})
+		assertNotContains(t, out, "\n  time:")
+	})
+}
+
+// Contract: registryMirrors drives both the legacy
+// registries.mirrors block and the multidoc RegistryMirrorConfig
+// documents. The docker.io → mirror.gcr.io default is preserved and
+// additional mirrors (e.g. ghcr.io) are added, so an operator mirroring
+// more registries no longer has to fork the preset.
+func TestContract_Machine_RegistryMirrors_CustomMirror_Cozystack(t *testing.T) {
+	mirrors := map[string]any{
+		"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+		"ghcr.io":   map[string]any{"endpoints": []any{"https://registry.example.com/v2/ghcr.io"}},
+	}
+
+	t.Run("multidoc", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   mirrors,
+		})
+		assertContains(t, out, "kind: RegistryMirrorConfig")
+		assertContains(t, out, "name: ghcr.io")
+		assertContains(t, out, "https://registry.example.com/v2/ghcr.io")
+		assertContains(t, out, "name: docker.io")
+	})
+
+	t.Run("legacy", func(t *testing.T) {
+		out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   mirrors,
+		})
+		assertContains(t, out, "ghcr.io:")
+		assertContains(t, out, "- https://registry.example.com/v2/ghcr.io")
+		assertContains(t, out, "docker.io:")
+	})
+}
+
+// Contract: the working opt-out is nulling the key
+// (registryMirrors: nil), which emits no registry config on cozystack —
+// neither the legacy registries block nor a RegistryMirrorConfig. This is
+// faithful to production: the engine deep-merges per-node overrides, and a
+// nil override stays nil (whereas {} would merge-fill the default
+// docker.io mirror back in, so {} is NOT an opt-out).
+func TestContract_Machine_RegistryMirrors_NullClears_Cozystack(t *testing.T) {
+	t.Run("multidoc", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   nil,
+		})
+		assertNotContains(t, out, "kind: RegistryMirrorConfig")
+	})
+
+	t.Run("legacy", func(t *testing.T) {
+		out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   nil,
+		})
+		assertNotContains(t, out, "registries:")
+	})
+}
+
+// Contract: a registryMirrors entry with no endpoints fails fast
+// rather than emitting endpoints: null, matching the bond / vlan guards.
+func TestContract_Machine_RegistryMirrors_NoEndpoints_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   map[string]any{"ghcr.io": map[string]any{}},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a registryMirrors entry with no endpoints")
+	}
+	if !strings.Contains(err.Error(), "endpoints") {
+		t.Errorf("error should explain the missing endpoints, got %v", err)
+	}
+}
+
+// Contract: a nil-valued registryMirrors key (`ghcr.io:` with
+// nothing after it in YAML) fails fast with a precise message instead of
+// panicking with an opaque "nil pointer evaluating interface {}.endpoints"
+// Go-template error.
+func TestContract_Machine_RegistryMirrors_NilValue_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   map[string]any{"ghcr.io": nil},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a nil-valued registryMirrors key")
+	}
+	if strings.Contains(err.Error(), "nil pointer evaluating") {
+		t.Errorf("error should be the friendly mapping message, not the opaque nil-pointer panic, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "must be a mapping") {
+		t.Errorf("error should explain the value must be a mapping, got %v", err)
+	}
+}
+
+// Contract: registryTLS pins TLS behaviour per registry endpoint host. On
+// the multi-doc schema each host becomes its own RegistryTLSConfig
+// document. The key is the endpoint host, not the mirror name, so a
+// self-signed pull-through mirror can be trusted without touching the
+// mirror list.
+func TestContract_Machine_RegistryTLS_Multidoc_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"insecureSkipVerify": true},
+		},
+	})
+	assertContains(t, out, "kind: RegistryTLSConfig")
+	assertContains(t, out, "name: mirror.example.invalid")
+	assertContains(t, out, "insecureSkipVerify: true")
+}
+
+// Contract: on the legacy schema the same knob lands in
+// machine.registries.config.<host>.tls, which is where pre-1.12 Talos
+// reads it from.
+func TestContract_Machine_RegistryTLS_Legacy_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"insecureSkipVerify": true},
+		},
+	})
+	assertContains(t, out, "config:")
+	assertContains(t, out, "mirror.example.invalid:")
+	assertContains(t, out, "tls:")
+	assertContains(t, out, "insecureSkipVerify: true")
+}
+
+// Contract: a registryTLS entry must state insecureSkipVerify explicitly.
+// Silently defaulting it would decide a security posture for the operator.
+func TestContract_Machine_RegistryTLS_MissingFlag_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS":       map[string]any{"mirror.example.invalid": map[string]any{}},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a registryTLS entry with no insecureSkipVerify")
+	}
+	if !strings.Contains(err.Error(), "insecureSkipVerify") {
+		t.Errorf("error should name the missing key, got %v", err)
+	}
+}
+
+// Contract: a nil-valued registryTLS key fails with the mapping message
+// rather than an opaque nil-pointer template panic.
+func TestContract_Machine_RegistryTLS_NilValue_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS":       map[string]any{"mirror.example.invalid": nil},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a nil-valued registryTLS key")
+	}
+	if strings.Contains(err.Error(), "nil pointer evaluating") {
+		t.Errorf("error should be the friendly mapping message, not a nil-pointer panic, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "must be a mapping") {
+		t.Errorf("error should explain the value must be a mapping, got %v", err)
+	}
+}
+
+// Contract: insecureSkipVerify false is emitted verbatim — the knob can
+// pin verification ON, not only off.
+func TestContract_Machine_RegistryTLS_FalseIsEmitted_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"insecureSkipVerify": false},
+		},
+	})
+	assertContains(t, out, "kind: RegistryTLSConfig")
+	assertContains(t, out, "insecureSkipVerify: false")
+}
+
+// testRegistryCAPEM is a syntactically-shaped PEM block; the render never
+// parses it (Talos validates on load), so a placeholder body is enough.
+const testRegistryCAPEM = "-----BEGIN CERTIFICATE-----\nMIIBplaceholder\n-----END CERTIFICATE-----"
+
+// Contract: registryTLS.ca is supplied as PEM — the form an operator has
+// on disk — and the chart adapts it per schema. The multi-doc
+// RegistryTLSConfig takes PEM verbatim.
+func TestContract_Machine_RegistryTLS_CA_Multidoc_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"ca": testRegistryCAPEM},
+		},
+	})
+	assertContains(t, out, "kind: RegistryTLSConfig")
+	assertContains(t, out, "ca: |-")
+	assertContains(t, out, "-----BEGIN CERTIFICATE-----")
+	assertContains(t, out, "-----END CERTIFICATE-----")
+}
+
+// Contract: the legacy machine.registries.config.<host>.tls.ca field is
+// Base64Bytes — it base64-decodes on load — so the same PEM must be
+// emitted base64-encoded there, not verbatim.
+func TestContract_Machine_RegistryTLS_CA_Legacy_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"ca": testRegistryCAPEM},
+		},
+	})
+	assertContains(t, out, "ca: "+base64.StdEncoding.EncodeToString([]byte(testRegistryCAPEM)))
+	// The raw PEM must not leak into the legacy field, or Talos fails to decode it.
+	assertNotContains(t, out, "-----BEGIN CERTIFICATE-----")
+}
+
+// Contract: supplying a ca alone is a complete, secure entry — it does not
+// additionally require insecureSkipVerify to be spelled out.
+func TestContract_Machine_RegistryTLS_CAOnly_NoFlagNeeded_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"ca": testRegistryCAPEM},
+		},
+	})
+	assertContains(t, out, "kind: RegistryTLSConfig")
+	assertNotContains(t, out, "insecureSkipVerify")
+}
+
+// Contract: a scalar endpoints value (the missing-dash typo) fails with a
+// precise message rather than a raw "range can't iterate" template error.
+func TestContract_Machine_RegistryMirrors_ScalarEndpoints_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"ghcr.io": map[string]any{"endpoints": "https://mirror.example.invalid"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a scalar registryMirrors endpoints value")
+	}
+	if strings.Contains(err.Error(), "range can't iterate") {
+		t.Errorf("error should be the friendly list message, not a raw template error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "endpoints") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: a non-string ca fails with a precise message rather than a raw
+// "wrong type for value" template error from trim.
+func TestContract_Machine_RegistryTLS_NonStringCA_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS":       map[string]any{"mirror.example.invalid": map[string]any{"ca": 42}},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-string registryTLS ca")
+	}
+	if strings.Contains(err.Error(), "wrong type for value") {
+		t.Errorf("error should be the friendly message, not a raw template error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "PEM") {
+		t.Errorf("error should explain the expected PEM form, got %v", err)
+	}
+}
+
+// Contract: registry knobs work on generic too. The generic preset ships
+// no opinionated default, but a values file must stay portable between
+// presets rather than silently losing its registry configuration.
+func TestContract_Machine_RegistryMirrors_Generic(t *testing.T) {
+	out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"ghcr.io": map[string]any{"endpoints": []any{"https://mirror.example.invalid"}},
+		},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"insecureSkipVerify": true},
+		},
+	})
+	assertContains(t, out, "kind: RegistryMirrorConfig")
+	assertContains(t, out, "name: ghcr.io")
+	assertContains(t, out, "kind: RegistryTLSConfig")
+}
+
+// Contract: an endpoint URL without a scheme is rejected by Talos
+// ("unsupported scheme"), so it fails at render.
+func TestContract_Machine_RegistryMirrors_SchemelessEndpoint_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"ghcr.io": map[string]any{"endpoints": []any{"mirror.example.invalid"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a schemeless mirror endpoint")
+	}
+	if !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("error should explain the missing scheme, got %v", err)
+	}
+}
+
+// Contract: insecureSkipVerify decides a security posture, so a non-bool
+// (e.g. the YAML-ambiguous "off") is refused rather than emitted verbatim.
+func TestContract_Machine_RegistryTLS_NonBoolFlag_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS": map[string]any{
+			"mirror.example.invalid": map[string]any{"insecureSkipVerify": "off"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-bool insecureSkipVerify")
+	}
+	if !strings.Contains(err.Error(), "insecureSkipVerify") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: Talos documents "*" as a first-class fallback mirror name. It
+// is also a YAML alias indicator, so it must be emitted quoted or the
+// rendered config no longer parses. Pinned by decoding, not by substring.
+func TestContract_Machine_RegistryMirrors_FallbackKey_Multidoc_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"*": map[string]any{"endpoints": []any{"https://cache.example.invalid"}},
+		},
+	})
+	for _, doc := range strings.Split(out, "\n---\n") {
+		var v any
+		if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
+			t.Fatalf("rendered document must be valid YAML, got %v in:\n%s", err, doc)
+		}
+	}
+	assertContains(t, out, "kind: RegistryMirrorConfig")
+}
+
+func TestContract_Machine_RegistryMirrors_FallbackKey_Legacy_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"*": map[string]any{"endpoints": []any{"https://cache.example.invalid"}},
+		},
+	})
+	var v any
+	if err := yaml.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("legacy render with a fallback mirror must be valid YAML, got %v", err)
+	}
+}
+
+// Contract: Talos states the fallback key cannot be used for TLS config,
+// so the chart refuses it instead of emitting a document Talos ignores.
+func TestContract_Machine_RegistryTLS_FallbackKey_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryTLS":       map[string]any{"*": map[string]any{"insecureSkipVerify": true}},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a registryTLS fallback key")
+	}
+	if !strings.Contains(err.Error(), "*") {
+		t.Errorf("error should name the offending key, got %v", err)
 	}
 }

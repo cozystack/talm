@@ -270,19 +270,223 @@ busPath: {{ .spec.busPath }}
 {{- end }}
 {{- end }}
 
-{{- define "talm.discovered.existing_interfaces_configuration" }}
+{{- /* The running MachineConfig's machine.network.interfaces[] as JSON.
+       Single source of truth for the two readers below, which would
+       otherwise carry duplicate copies of this spec-shape handling (the
+       spec arrives either as a YAML string or as an already-decoded map,
+       depending on how the resource was fetched). */ -}}
+{{- define "talm.discovered.existing_interfaces_raw" }}
+{{- $interfaces := list }}
 {{- with (lookup "machineconfig" "" "v1alpha1") }}
 {{- $spec := .spec }}
-{{- $interfaces := list }}
 {{- if kindIs "string" $spec }}
 {{- $interfaces = $spec | fromYaml | dig "machine" "network" "interfaces" (list) }}
 {{- else }}
 {{- $interfaces = $spec | dig "machine" "network" "interfaces" (list) }}
 {{- end }}
+{{- end }}
+{{- toJson $interfaces }}
+{{- end }}
+
+{{- define "talm.discovered.existing_interfaces_configuration" }}
+{{- $interfaces := fromJsonArray (include "talm.discovered.existing_interfaces_raw" .) }}
 {{- if $interfaces }}
 {{- $interfaces | toYaml }}
 {{- end }}
 {{- end }}
+
+{{- /* Shared tail for a declaratively-emitted link document: the optional
+       routes list and mtu, which CommonLinkConfig accepts identically on
+       LinkConfig, BondConfig and VLANConfig. Kept in one place so the
+       three emission sites cannot drift. Expects a dict with "routes",
+       "mtu" and "name" (the latter only for error messages). A route
+       needs a gateway; destination is optional and absent means a default
+       route, matching what the discovery path emits. */ -}}
+{{- /* Shared registry knobs, used by every preset so a values file stays
+       portable between them. registryMirrors is keyed by registry host and
+       maps to endpoint URLs; registryTLS is keyed by the ENDPOINT host and
+       carries the TLS posture for it. Guards here rather than per preset,
+       so the two copies cannot drift. */ -}}
+{{- define "talm.guard.registries" }}
+{{- range $name, $cfg := .Values.registryMirrors }}
+{{- if not (kindIs "map" $cfg) }}
+{{- fail (printf "talm: registryMirrors.%s must be a mapping with an endpoints list (got %s). Example: %q: { endpoints: [https://mirror.example.com] }." $name (kindOf $cfg) $name) }}
+{{- end }}
+{{- if not $cfg.endpoints }}
+{{- fail (printf "talm: registryMirrors.%s has no endpoints. Each mirror needs at least one endpoint URL." $name) }}
+{{- end }}
+{{- if not (kindIs "slice" $cfg.endpoints) }}
+{{- fail (printf "talm: registryMirrors.%s endpoints must be a list (got %s) — a bare URL is the missing-dash typo. Example: %q: { endpoints: [https://mirror.example.com] }." $name (kindOf $cfg.endpoints) $name) }}
+{{- end }}
+{{- range $cfg.endpoints }}
+{{- if not (or (hasPrefix "http://" (. | toString)) (hasPrefix "https://" (. | toString))) }}
+{{- fail (printf "talm: registryMirrors.%s endpoint %q has no scheme. Talos rejects it with \"unsupported scheme\"; write the full URL, e.g. https://%s." $name (. | toString) (. | toString)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $host, $cfg := .Values.registryTLS }}
+{{- if eq ($host | toString) "*" }}
+{{- fail "talm: registryTLS cannot use the \"*\" fallback key. Talos accepts it for registryMirrors only; TLS must be pinned to a concrete registry endpoint host." }}
+{{- end }}
+{{- if not (kindIs "map" $cfg) }}
+{{- fail (printf "talm: registryTLS.%s must be a mapping (got %s). Example: %q: { insecureSkipVerify: true }." $host (kindOf $cfg) $host) }}
+{{- end }}
+{{- if and (kindIs "invalid" $cfg.insecureSkipVerify) (not $cfg.ca) }}
+{{- fail (printf "talm: registryTLS.%s says nothing. Set ca to trust a private CA, and/or insecureSkipVerify to decide whether server verification stays on." $host) }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $cfg.insecureSkipVerify)) (not (kindIs "bool" $cfg.insecureSkipVerify)) }}
+{{- fail (printf "talm: registryTLS.%s insecureSkipVerify must be true or false (got %s). This field decides whether server verification stays on, so an ambiguous YAML scalar is refused." $host (kindOf $cfg.insecureSkipVerify)) }}
+{{- end }}
+{{- if and $cfg.ca (not (kindIs "string" $cfg.ca)) }}
+{{- fail (printf "talm: registryTLS.%s ca must be a PEM-encoded string (got %s). Paste the certificate as a YAML block scalar." $host (kindOf $cfg.ca)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Multi-doc registry documents. Guards run via talm.guard.registries. */ -}}
+{{- define "talm.config.registries.multidoc" }}
+{{- include "talm.guard.registries" . }}
+{{- range $name, $cfg := .Values.registryMirrors }}
+---
+apiVersion: v1alpha1
+kind: RegistryMirrorConfig
+{{- /* toYaml quotes only when YAML requires it, so an ordinary host stays
+       bare while the documented "*" fallback name — a YAML alias
+       indicator — comes out quoted instead of corrupting the document. */}}
+name: {{ $name | toYaml }}
+endpoints:
+{{- range $cfg.endpoints }}
+  - url: {{ . }}
+{{- end }}
+{{- end }}
+{{- range $host, $cfg := .Values.registryTLS }}
+---
+apiVersion: v1alpha1
+kind: RegistryTLSConfig
+name: {{ $host }}
+{{- /* PEM verbatim here; the legacy block base64-encodes the same value
+       because its field decodes base64 on load. */}}
+{{- with $cfg.ca }}
+ca: |-
+{{ . | trim | indent 2 }}
+{{- end }}
+{{- if not (kindIs "invalid" $cfg.insecureSkipVerify) }}
+insecureSkipVerify: {{ $cfg.insecureSkipVerify }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Legacy machine.registries block (emitted at 2-space indent under
+       `machine:`). Guards run via talm.guard.registries. */ -}}
+{{- define "talm.config.registries.legacy" }}
+{{- include "talm.guard.registries" . }}
+{{- if or .Values.registryMirrors .Values.registryTLS }}
+  registries:
+{{- end }}
+{{- with .Values.registryMirrors }}
+    mirrors:
+{{- range $name, $cfg := . }}
+      {{ $name | toYaml }}:
+        endpoints:
+{{- range $cfg.endpoints }}
+        - {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .Values.registryTLS }}
+    config:
+{{- range $host, $cfg := . }}
+      {{ $host }}:
+        tls:
+{{- /* The legacy field is Base64Bytes: it base64-decodes on load, so the
+       operator's PEM is encoded here. */}}
+{{- with $cfg.ca }}
+          ca: {{ . | b64enc }}
+{{- end }}
+{{- if not (kindIs "invalid" $cfg.insecureSkipVerify) }}
+          insecureSkipVerify: {{ $cfg.insecureSkipVerify }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Refuse an address that is also a declared VIP. The discovery path
+       strips VIP ips out of a link's addresses for this exact reason: a
+       VIP is installed by its Layer2VIPConfig, and pinning it as a static
+       address too leaves the leader and the followers disagreeing about
+       who owns it. The declarative path cannot silently strip what the
+       operator wrote, so it refuses instead. Expects a dict with
+       "addresses", "vipIPs" and "name". */ -}}
+{{- define "talm.guard.addresses_not_vip" }}
+{{- $vipIPs := .vipIPs }}
+{{- $name := .name }}
+{{- range .addresses }}
+{{- /* Talos decodes these into netip.Prefix, so a bare IP fails at DECODE
+       time ("no '/'") — before validation, with a message that does not
+       name the document. The discovery path filters malformed CIDRs; the
+       declarative path refuses them. */}}
+{{- if not (contains "/" (. | toString)) }}
+{{- fail (printf "talm: address %q on network.extraLinks %q has no prefix length. Talos parses addresses as CIDR, so write it as 203.0.113.10/24." (. | toString) $name) }}
+{{- end }}
+{{- $ip := (splitList "/" (. | toString)) | first }}
+{{- if not (ipIsValid $ip) }}
+{{- fail (printf "talm: address %q on network.extraLinks %q is not a valid IP literal." (. | toString) $name) }}
+{{- end }}
+{{- if has $ip $vipIPs }}
+{{- fail (printf "talm: address %q on network.extraLinks %q is also declared as a VIP (floatingIP or vips). The VIP is installed by its Layer2VIPConfig; declaring it as a static address as well puts the leader and followers out of sync. Drop it from one side." (. | toString) $name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "talm.render.link_routes_mtu" }}
+{{- range .routes }}
+{{- if not .gateway }}
+{{- fail (printf "talm: a network.extraLinks routes entry on %q has no gateway. Each route needs a gateway address; omit destination for a default route." $.name) }}
+{{- end }}
+{{- /* gateway decodes into netip.Addr and destination into netip.Prefix,
+       so a malformed value fails on the node at decode time with a message
+       that never names this document. Refuse here instead. */}}
+{{- if not (ipIsValid (.gateway | toString)) }}
+{{- fail (printf "talm: route gateway %q on network.extraLinks %q is not a valid IP literal." (.gateway | toString) $.name) }}
+{{- end }}
+{{- with .destination }}
+{{- if not (contains "/" (. | toString)) }}
+{{- fail (printf "talm: route destination %q on network.extraLinks %q has no prefix length. Talos parses it as CIDR, so write it as 198.51.100.0/24." (. | toString) $.name) }}
+{{- end }}
+{{- if not (ipIsValid ((splitList "/" (. | toString)) | first)) }}
+{{- fail (printf "talm: route destination %q on network.extraLinks %q is not a valid CIDR." (. | toString) $.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .routes }}
+routes:
+{{- range . }}
+  - gateway: {{ .gateway }}
+    {{- with .destination }}
+    destination: {{ . }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- if .mtu }}
+mtu: {{ .mtu }}
+{{- end }}
+{{- end }}
+
+{{- /* JSON list of the interface names in the running MachineConfig's
+       machine.network.interfaces[]. The legacy renderer emits that block
+       verbatim (preserveExisting or a re-apply of a legacy-applied node),
+       so a vips entry or vipLink override that names one of these links
+       would double-declare the device. Callers seed their collision
+       guards with this list. Empty when there is no legacy block. */ -}}
+{{- define "talm.discovered.existing_interface_names" }}
+{{- $names := list }}
+{{- $interfaces := fromJsonArray (include "talm.discovered.existing_interfaces_raw" .) }}
+{{- range $interfaces }}
+{{- if .interface }}
+{{- $names = append $names (.interface | toString) }}
+{{- end }}
+{{- end }}
+{{- toJson $names }}
 {{- end }}
 
 {{- /* Get bond slave interfaces for a given bond index */ -}}
@@ -727,8 +931,14 @@ busPath: {{ $link.spec.busPath }}
        MachineConfig — the renderer cannot translate those entries today
        and would otherwise silently drop them on the next apply. */ -}}
 {{- $legacyInterfaces := include "talm.discovered.existing_interfaces_configuration" . }}
-{{- if $legacyInterfaces }}
-{{- fail (printf "talm: the multi-doc renderer cannot translate legacy machine.network.interfaces[] from the running MachineConfig. Move the interfaces, vlans, and addresses below into per-node body overlays as v1.12 typed documents (LinkConfig, VLANConfig, BondConfig, RouteConfig) before re-running talm apply, or pin templateOptions.talosVersion to v1.11 in Chart.yaml until the translator lands.\n\nDetected legacy block:\n%s" $legacyInterfaces) }}
+{{- $preserveExisting := and .Values.network .Values.network.preserveExisting }}
+{{- /* preserveExisting lets the operator opt out of the guard.
+       The running machine.network.interfaces are emitted verbatim in the
+       machine document (see talos.config.machine.common) and the typed
+       per-link rebuild below is skipped, so a richer applied topology is
+       preserved instead of failing or being flattened to the primary link. */}}
+{{- if and $legacyInterfaces (not $preserveExisting) }}
+{{- fail (printf "talm: the multi-doc renderer cannot translate legacy machine.network.interfaces[] from the running MachineConfig. Move the interfaces, vlans, and addresses below into per-node body overlays as v1.12 typed documents (LinkConfig, VLANConfig, BondConfig, RouteConfig) before re-running talm apply, set network.preserveExisting to keep the applied interfaces verbatim, or pin templateOptions.talosVersion to v1.11 in Chart.yaml until the translator lands.\n\nDetected legacy block:\n%s" $legacyInterfaces) }}
 {{- end }}
 {{- (include "talm.discovered.physical_links_info" .) }}
 ---
@@ -767,6 +977,54 @@ nameservers:
 {{- $fipStr := .Values.floatingIP | toString }}
 {{- $fipIsSet := and (ne $fipStr "") (ne $fipStr "<nil>") }}
 {{- include "talm.validate_floatingIP" . }}
+{{- /* Multi-VIP: collect every VIP ip (the single floatingIP
+       shorthand plus each vips[].ip) into one list. The per-link
+       address strip below removes all of them so no VIP leaks into a
+       LinkConfig.addresses, and the emit loop near the end of the
+       define renders one Layer2VIPConfig per vips entry. Each vips ip
+       gets the same ipIsValid fail-fast floatingIP gets. */}}
+{{- $vipIPs := list }}
+{{- if $fipIsSet }}
+{{- $vipIPs = append $vipIPs $fipStr }}
+{{- end }}
+{{- range .Values.vips }}
+{{- $vipIP := .ip | toString }}
+{{- if not (ipIsValid $vipIP) }}
+{{- fail (printf "talm: vips[].ip %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." $vipIP) }}
+{{- end }}
+{{- if not .link }}
+{{- fail (printf "talm: a vips entry (ip %q) has no link. Each vips entry must name the link the VIP is pinned to." $vipIP) }}
+{{- end }}
+{{- if has $vipIP $vipIPs }}
+{{- /* Each Layer2VIPConfig is named after its ip, so the same ip declared
+       twice (across floatingIP and vips, or two vips entries) would emit
+       two documents with the same kind+name that Talos rejects on apply.
+       Fail fast at render instead. */}}
+{{- fail (printf "talm: VIP ip %q is declared more than once (across floatingIP and vips). Each VIP ip must be unique." $vipIP) }}
+{{- end }}
+{{- $vipIPs = append $vipIPs $vipIP }}
+{{- end }}
+{{- /* guard: under preserveExisting the running interfaces are
+       emitted verbatim and the per-link VIP address-strip is skipped, so a
+       VIP already present inside the preserved machine.network.interfaces
+       would be declared twice — once verbatim and once as the
+       Layer2VIPConfig emitted below. Detect a VIP ip literal inside the
+       preserved block and fail fast so the operator drops it from one
+       side rather than shipping a double-pinned VIP to the live node. */}}
+{{- if and $preserveExisting $legacyInterfaces }}
+{{- range $vip := $vipIPs }}
+{{- /* Match the VIP as a whole ip token, not a bare substring, so
+       192.168.1.1 does not falsely match 192.168.1.10. Escape the dots
+       and bound with characters that cannot continue an ip literal
+       (hex digits, colon, dot); this catches both the address form
+       (192.0.2.5/24) and the inline `vip: { ip: 192.0.2.5 }` form, for
+       IPv4 and IPv6 alike. */}}
+{{- $pat := printf "(^|[^0-9a-fA-F:.])%s([^0-9a-fA-F:.]|$)" ($vip | replace "." "\\.") }}
+{{- if regexMatch $pat $legacyInterfaces }}
+{{- fail (printf "talm: VIP %q also appears in the preserved machine.network.interfaces block (network.preserveExisting is set), so it would be declared twice — once verbatim and once as a Layer2VIPConfig. Remove the VIP from the preserved interfaces, or drop it from floatingIP/vips and let the preserved block carry it inline." $vip) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- /* Operator-declared vipLink override: emit Layer2VIPConfig
        regardless of discovery state. Useful when the target link
        does not yet exist on the live system at first apply (typical
@@ -782,6 +1040,12 @@ link: {{ .Values.vipLink }}
 {{- end }}
 {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
 {{- $configurableLinks := fromJsonArray (include "talm.discovered.configurable_link_names" .) }}
+{{- /* skip the typed per-link rebuild only when preserveExisting
+       is set AND discovery actually found a legacy interfaces block to
+       carry verbatim. A fresh v1.12 node with preserveExisting set has
+       nothing to preserve, so it must fall through to the normal rebuild
+       rather than emit a network-less config. */}}
+{{- if not (and $preserveExisting $legacyInterfaces) }}
 {{- range $linkName := $configurableLinks }}
 {{- $link := lookup "links" "" $linkName }}
 {{- if $link }}
@@ -798,14 +1062,20 @@ link: {{ .Values.vipLink }}
        and follower configs out of sync. */}}
 {{- $addresses := list }}
 {{- range $rawAddresses }}
-{{- /* Use the hoisted $fipStr/$fipIsSet from the top of the
-       define so the strip honours the same coerced value the
-       validation block above used. Going through `printf "%s/"
-       $.Values.floatingIP` directly would emit
-       `%!s(int=192168)/` for a numeric YAML scalar on a worker
-       render (controlplane was caught by the fail-fast). */ -}}
-{{- if not (and $fipIsSet (hasPrefix (printf "%s/" $fipStr) .)) }}
-{{- $addresses = append $addresses . }}
+{{- /* Strip any VIP ip ($vipIPs, built from the coerced floatingIP
+       plus the vips list at the top of the define) from this link's
+       addresses. Going through `printf "%s/" $.Values.floatingIP`
+       directly would emit `%!s(int=192168)/` for a numeric YAML
+       scalar on a worker render, so the coerced values are used. */ -}}
+{{- $addr := . }}
+{{- $isVip := false }}
+{{- range $vipIPs }}
+{{- if hasPrefix (printf "%s/" .) $addr }}
+{{- $isVip = true }}
+{{- end }}
+{{- end }}
+{{- if not $isVip }}
+{{- $addresses = append $addresses $addr }}
 {{- end }}
 {{- end }}
 {{- $linkGateway := "" }}
@@ -979,6 +1249,7 @@ mtu: {{ $link.spec.mtu }}
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{- /* Discovery-derived Layer2VIPConfig: skipped when the operator
        has set .Values.vipLink, since the override-path block above
        has already emitted the document with the operator's chosen
@@ -1014,6 +1285,196 @@ apiVersion: v1alpha1
 kind: Layer2VIPConfig
 name: {{ $fipStr | quote }}
 link: {{ $vipLink }}
+{{- end }}
+{{- end }}
+{{- /* one Layer2VIPConfig per vips entry, bound to its link.
+       Emitted for both control-plane and worker roles so a storage
+       VIP on a secondary link works on any node.
+
+       vips[].link is deliberately NOT checked for existence, unlike an
+       extraLinks VLAN parent. The asymmetry is intentional: Talos rejects
+       a VLANConfig whose parent is missing, so that guard prevents a
+       config the node would refuse — whereas a Layer2VIPConfig may
+       legitimately name a link that does not exist yet at first apply
+       (the same case the vipLink override exists for: a VLAN or bond this
+       very config is about to bring up). Checking here would break that. */}}
+{{- range .Values.vips }}
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ .ip | quote }}
+link: {{ .link }}
+{{- end }}
+{{- /* declarative extra links layered on the discovered
+       topology. A bond entry becomes a BondConfig, a plain entry with
+       addresses a LinkConfig, and each vlans[] entry a VLANConfig
+       parented on the entry's interface. An interface (or a vlan child
+       name) must not clash with a discovered link or another extraLinks
+       entry — that would emit two documents with the same kind+name that
+       Talos rejects on apply — so collisions fail fast at render, seeded
+       with the discovered configurable links. */}}
+{{- /* Under preserveExisting the typed rebuild is skipped and the running
+       machine.network.interfaces block is emitted verbatim, so its device
+       names are just as taken as the discovered ones — but they do not
+       appear in the discovery-derived list. Seed the guard with both, or
+       an extraLinks entry naming a preserved device declares that device
+       twice from two sources. Talos does not catch a v1alpha1-vs-document
+       link conflict (it only checks that for kubespan and resolver), so
+       this has to fail here. */}}
+{{- $existingLinkNames := fromJsonArray (include "talm.discovered.existing_interface_names" .) }}
+{{- /* An entry selected by deviceSelector has no name resolvable at render
+       time, so it cannot seed the guard above — the operator could be
+       redeclaring that very device in extraLinks and nothing would catch
+       it. Refuse the combination instead of guessing. */}}
+{{- if (.Values.network | default dict).extraLinks }}
+{{- range fromJsonArray (include "talm.discovered.existing_interfaces_raw" .) }}
+{{- if not .interface }}
+{{- fail "talm: the running machine.network.interfaces block selects a device by deviceSelector, whose name talm cannot resolve at render time, so it cannot check network.extraLinks against it. Name that interface explicitly in the node's applied config, or drop network.extraLinks and declare the extra links via a per-node body overlay." }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $emittedNames := concat $configurableLinks $existingLinkNames }}
+{{- /* An entry that carries a bond or addresses declares a NEW link
+       (BondConfig/LinkConfig); an entry with only vlans uses its
+       interface as the PARENT of the VLANs, not as a new link. Collect
+       the new-link names first so a vlans entry may parent onto a bond
+       declared in another entry, and so the parent-existence guard can
+       accept them. */}}
+{{- $extraLinkNames := list }}
+{{- range $extra := (.Values.network | default dict).extraLinks }}
+{{- if or $extra.bond $extra.addresses }}
+{{- $extraLinkNames = append $extraLinkNames ($extra.interface | toString) }}
+{{- end }}
+{{- end }}
+{{- range $extra := (.Values.network | default dict).extraLinks }}
+{{- if not $extra.interface }}
+{{- /* The emitted document's name comes straight from this field; without
+       it Talos gets `name:` empty and rejects with "name must be
+       specified". Refuse before that. */}}
+{{- fail "talm: a network.extraLinks entry has no interface. Each entry must name the link it declares, or the link its vlans hang off." }}
+{{- end }}
+{{- $isNewLink := or $extra.bond $extra.addresses }}
+{{- if not $isNewLink }}
+{{- /* mtu and routes describe a link. An entry that declares none (no
+       bond, no addresses) has nothing to attach them to — the discovered
+       link already emits its own document, and a second one with the same
+       name would collide. Refuse rather than drop them silently. */}}
+{{- if or $extra.mtu $extra.routes }}
+{{- fail (printf "talm: network.extraLinks entry %q sets mtu or routes but declares no link. Add addresses or a bond to declare it, put them on the vlans[] child they belong to, or set them via a per-node body overlay for an already-discovered link." ($extra.interface | toString)) }}
+{{- end }}
+{{- if not $extra.vlans }}
+{{- fail (printf "talm: network.extraLinks entry %q declares nothing. An entry needs addresses or a bond to create a link, or vlans to hang VLANs off an existing one." ($extra.interface | toString)) }}
+{{- end }}
+{{- end }}
+{{- include "talm.guard.addresses_not_vip" (dict "addresses" $extra.addresses "vipIPs" $vipIPs "name" ($extra.interface | toString)) }}
+{{- if $isNewLink }}
+{{- if has ($extra.interface | toString) $emittedNames }}
+{{- fail (printf "talm: network.extraLinks interface %q collides with a discovered link or another extraLinks entry; Talos rejects the duplicate document name on apply. Rename the interface or remove the duplicate." ($extra.interface | toString)) }}
+{{- end }}
+{{- $emittedNames = append $emittedNames ($extra.interface | toString) }}
+{{- if $extra.bond }}
+{{- if not $extra.bond.interfaces }}
+{{- /* Mirror the discovery-derived bond guard: Talos rejects a BondConfig
+       with an empty links list ("at least one link must be specified"),
+       so fail at render with a precise message rather than emitting
+       links: null that only fails later on the live node. */}}
+{{- fail (printf "talm: network.extraLinks entry %q declares a bond with no interfaces. A BondConfig needs at least one link; add bond.interfaces or drop the bond." ($extra.interface | toString)) }}
+{{- end }}
+{{- if not $extra.bond.mode }}
+{{- /* Same Validate() as the empty-links case two lines up: Talos returns
+       "bond mode must be specified" when bondMode is unset. mode is
+       required, not part of the optional tuning set. */}}
+{{- fail (printf "talm: network.extraLinks entry %q declares a bond with no mode. Talos rejects a BondConfig without bondMode; set bond.mode (e.g. 802.3ad or active-backup)." ($extra.interface | toString)) }}
+{{- end }}
+{{- $bondModes := list "balance-rr" "active-backup" "balance-xor" "broadcast" "802.3ad" "balance-tlb" "balance-alb" }}
+{{- if not (has ($extra.bond.mode | toString) $bondModes) }}
+{{- fail (printf "talm: network.extraLinks entry %q declares bond mode %q, which Talos does not know (it fails with \"unknown bond mode\"). Valid modes: %s." ($extra.interface | toString) ($extra.bond.mode | toString) (join ", " $bondModes)) }}
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: BondConfig
+name: {{ $extra.interface }}
+links:
+{{- range $extra.bond.interfaces }}
+  - {{ . }}
+{{- end }}
+{{- if $extra.bond.mode }}
+bondMode: {{ $extra.bond.mode }}
+{{- end }}
+{{- /* Bond tuning, mirroring the fields the discovery-derived BondConfig
+       already emits so a declared bond is not a downgrade from a
+       discovered one. Names are Talos's own BondConfig keys. */}}
+{{- if $extra.bond.xmitHashPolicy }}
+xmitHashPolicy: {{ $extra.bond.xmitHashPolicy }}
+{{- end }}
+{{- if $extra.bond.lacpRate }}
+lacpRate: {{ $extra.bond.lacpRate }}
+{{- end }}
+{{- if $extra.bond.miimon }}
+miimon: {{ $extra.bond.miimon }}
+{{- end }}
+{{- if $extra.bond.updelay }}
+updelay: {{ $extra.bond.updelay }}
+{{- end }}
+{{- if $extra.bond.downdelay }}
+downdelay: {{ $extra.bond.downdelay }}
+{{- end }}
+{{- with $extra.addresses }}
+addresses:
+{{- range . }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- include "talm.render.link_routes_mtu" (dict "routes" $extra.routes "mtu" $extra.mtu "name" ($extra.interface | toString)) }}
+{{- else }}
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: {{ $extra.interface }}
+addresses:
+{{- range $extra.addresses }}
+  - address: {{ . }}
+{{- end }}
+{{- include "talm.render.link_routes_mtu" (dict "routes" $extra.routes "mtu" $extra.mtu "name" ($extra.interface | toString)) }}
+{{- end }}
+{{- end }}
+{{- range $vlan := $extra.vlans }}
+{{- if not $vlan.vlanId }}
+{{- /* VLANConfig requires vlanID on the wire; without it the emitted
+       document has name "<iface>." and vlanID: <nil>, which Talos
+       rejects. Fail fast with a precise message. */}}
+{{- fail (printf "talm: network.extraLinks entry %q declares a VLAN with no vlanId. VLANConfig requires vlanID; add vlanId to the vlans entry." ($extra.interface | toString)) }}
+{{- end }}
+{{- if or (lt ($vlan.vlanId | int) 1) (gt ($vlan.vlanId | int) 4094) }}
+{{- fail (printf "talm: network.extraLinks entry %q declares vlanId %v, outside the valid range. Talos requires vlanID between 1 and 4094." ($extra.interface | toString) $vlan.vlanId) }}
+{{- end }}
+{{- include "talm.guard.addresses_not_vip" (dict "addresses" $vlan.addresses "vipIPs" $vipIPs "name" (printf "%s.%v" ($extra.interface | toString) $vlan.vlanId)) }}
+{{- $parent := $extra.interface | toString }}
+{{- if not (or (has $parent $configurableLinks) (has $parent $extraLinkNames) (has $parent $existingLinkNames)) }}
+{{- /* A VLAN's parent must actually exist, or Talos rejects the
+       VLANConfig on apply ("parent link not found"). The parent is
+       either a discovered configurable link or a bond/link declared
+       elsewhere in extraLinks. */}}
+{{- fail (printf "talm: network.extraLinks VLAN on parent %q has no such link — the parent must be a discovered link or a bond/link declared in extraLinks. Add the parent link or fix the interface name." $parent) }}
+{{- end }}
+{{- $vlanName := printf "%s.%v" $parent $vlan.vlanId }}
+{{- if has $vlanName $emittedNames }}
+{{- fail (printf "talm: network.extraLinks VLAN %q collides with a discovered link or another emitted document; Talos rejects the duplicate name on apply. Rename or remove the duplicate." $vlanName) }}
+{{- end }}
+{{- $emittedNames = append $emittedNames $vlanName }}
+---
+apiVersion: v1alpha1
+kind: VLANConfig
+name: {{ $parent }}.{{ $vlan.vlanId }}
+vlanID: {{ $vlan.vlanId }}
+parent: {{ $parent }}
+{{- with $vlan.addresses }}
+addresses:
+{{- range . }}
+  - address: {{ . }}
+{{- end }}
+{{- end }}
+{{- include "talm.render.link_routes_mtu" (dict "routes" $vlan.routes "mtu" $vlan.mtu "name" $vlanName) }}
 {{- end }}
 {{- end }}
 {{- end }}

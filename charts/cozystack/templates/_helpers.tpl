@@ -165,6 +165,33 @@ machine:
     {{- end }}
     {{- (include "talm.discovered.disks_info" .) | nindent 4 }}
     disk: {{ include "talm.discovered.system_disk_name" . | quote }}
+  {{- with .Values.timeServers }}
+  time:
+    servers:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- /* carry the running node's machine.network.interfaces
+         verbatim when network.preserveExisting is set, ONLY on the v1.12+
+         multi-doc schema (where the typed per-link rebuild is skipped). On
+         the legacy schema talos.config.network.legacy already emits a
+         machine.network block natively, so a second one here would be a
+         duplicate key yaml.v3 rejects — and the legacy renderer already
+         preserves the running interfaces via its own short-circuit. */}}
+  {{- $multidoc := and .TalosVersion (not (semverCompare "<1.12.0-0" .TalosVersion)) }}
+  {{- if and $multidoc .Values.network .Values.network.preserveExisting }}
+  {{- $existing := include "talm.discovered.existing_interfaces_configuration" . }}
+  {{- if $existing }}
+  network:
+    interfaces:
+      {{- $existing | nindent 6 }}
+  {{- end }}
+  {{- end }}
+  {{- /* extraLinks renders typed documents only the multi-doc
+         schema supports. On the legacy schema it would silently no-op,
+         so fail fast instead of dropping the operator's declared links. */}}
+  {{- if and (not $multidoc) .Values.network .Values.network.extraLinks }}
+  {{- fail "talm: network.extraLinks is only supported on the v1.12+ multi-doc schema. Pin templateOptions.talosVersion to v1.12 or later, or declare the extra links via a per-node body overlay for legacy renders." }}
+  {{- end }}
 {{- end }}
 
 {{- /* Shared cluster section */ -}}
@@ -192,16 +219,63 @@ cluster:
       {{- else }}
       allocate-node-cidrs: false
       {{- end }}
+      {{- range $k, $_ := .Values.extraControllerManagerArgs }}
+      {{- /* cluster-cidr is preset-owned only when allocateNodeCIDRs is on
+             (that is the only branch that emits it); with it off the
+             operator may set cluster-cidr freely. */}}
+      {{- if or (eq $k "bind-address") (eq $k "allocate-node-cidrs") (and (eq $k "cluster-cidr") $.Values.allocateNodeCIDRs) }}
+      {{- fail (printf "values.yaml: extraControllerManagerArgs.%s collides with the cozystack preset's built-in controllerManager.extraArgs; drop it from extraControllerManagerArgs" $k) }}
+      {{- end }}
+      {{- end }}
+      {{- /* Talos component extraArgs is map[string]string: coerce every
+             value to a quoted string so an unquoted numeric (e.g.
+             concurrent-gc-syncs: 30) is not emitted as a YAML int Talos
+             rejects. range sorts keys, so output stays deterministic. */}}
+      {{- range $k, $v := .Values.extraControllerManagerArgs }}
+      {{- if kindIs "invalid" $v }}
+      {{- fail (printf "values.yaml: extraControllerManagerArgs.%s has no value. A bare `key:` renders as the literal string \"<nil>\" onto the component command line; give it a value or drop the key." $k) }}
+      {{- end }}
+      {{ $k }}: {{ $v | toString | quote }}
+      {{- end }}
   scheduler:
     extraArgs:
       bind-address: 0.0.0.0
+      {{- range $k, $_ := .Values.extraSchedulerArgs }}
+      {{- if eq $k "bind-address" }}
+      {{- fail (printf "values.yaml: extraSchedulerArgs.%s collides with the cozystack preset's built-in scheduler.extraArgs; drop it from extraSchedulerArgs" $k) }}
+      {{- end }}
+      {{- end }}
+      {{- /* Coerce values to quoted strings (Talos extraArgs is
+             map[string]string); range sorts keys for determinism. */}}
+      {{- range $k, $v := .Values.extraSchedulerArgs }}
+      {{- if kindIs "invalid" $v }}
+      {{- fail (printf "values.yaml: extraSchedulerArgs.%s has no value. A bare `key:` renders as the literal string \"<nil>\" onto the component command line; give it a value or drop the key." $k) }}
+      {{- end }}
+      {{ $k }}: {{ $v | toString | quote }}
+      {{- end }}
   apiServer:
-    {{- if and .Values.oidcIssuerUrl (ne .Values.oidcIssuerUrl "") }}
+    {{- $oidcSet := and .Values.oidcIssuerUrl (ne .Values.oidcIssuerUrl "") }}
+    {{- if or $oidcSet .Values.extraApiServerArgs }}
     extraArgs:
+      {{- if $oidcSet }}
       oidc-issuer-url: "{{ .Values.oidcIssuerUrl }}"
       oidc-client-id: "kubernetes"
       oidc-username-claim: "preferred_username"
       oidc-groups-claim: "groups"
+      {{- end }}
+      {{- range $k, $_ := .Values.extraApiServerArgs }}
+      {{- if and $oidcSet (has $k (list "oidc-issuer-url" "oidc-client-id" "oidc-username-claim" "oidc-groups-claim")) }}
+      {{- fail (printf "values.yaml: extraApiServerArgs.%s collides with the cozystack preset's built-in apiServer OIDC args (active because oidcIssuerUrl is set); drop it from extraApiServerArgs" $k) }}
+      {{- end }}
+      {{- end }}
+      {{- /* Coerce values to quoted strings (Talos extraArgs is
+             map[string]string); range sorts keys for determinism. */}}
+      {{- range $k, $v := .Values.extraApiServerArgs }}
+      {{- if kindIs "invalid" $v }}
+      {{- fail (printf "values.yaml: extraApiServerArgs.%s has no value. A bare `key:` renders as the literal string \"<nil>\" onto the component command line; give it a value or drop the key." $k) }}
+      {{- end }}
+      {{ $k }}: {{ $v | toString | quote }}
+      {{- end }}
     {{- end }}
     certSANs:
     - 127.0.0.1
@@ -268,6 +342,7 @@ cluster:
     nameservers: {{ include "talm.discovered.default_resolvers" . }}
     {{- (include "talm.discovered.physical_links_info" .) | nindent 4 }}
     {{- $existingInterfacesConfiguration := include "talm.discovered.existing_interfaces_configuration" . }}
+    {{- $existingLinkNames := fromJsonArray (include "talm.discovered.existing_interface_names" .) }}
     {{- $defaultLinkName := include "talm.discovered.default_link_name_by_gateway" . }}
     {{- /* vipLink override on the legacy schema: legacy Talos has no
        Layer2VIPConfig document, so the override is expressed as a
@@ -279,7 +354,7 @@ cluster:
        has redirected it to a different link; otherwise the VIP would
        be pinned twice on different interfaces. */}}
     {{- $suppressInlineVip := and .Values.vipLink (ne .Values.vipLink $defaultLinkName) }}
-    {{- if or $existingInterfacesConfiguration $defaultLinkName $vipOverride }}
+    {{- if or $existingInterfacesConfiguration $defaultLinkName $vipOverride .Values.vips }}
     interfaces:
     {{- if $existingInterfacesConfiguration }}
     {{- $existingInterfacesConfiguration | nindent 4 }}
@@ -321,20 +396,78 @@ cluster:
       {{- end }}
     {{- end }}
     {{- if $vipOverride }}
+    {{- if has (.Values.vipLink | toString) $existingLinkNames }}
+    {{- /* The preserved interfaces block already emits this link verbatim;
+           a second entry for the vipLink override would be a duplicate
+           device Talos won't merge. */}}
+    {{- fail (printf "talm: vipLink %q is already present in the node's running machine.network.interfaces (emitted verbatim on the legacy schema); the VIP override would produce a duplicate device Talos won't merge. Add the vip inline to that interface via a per-node body overlay, or pin templateOptions.talosVersion to v1.12+ where VIPs are separate Layer2VIPConfig documents." .Values.vipLink) }}
+    {{- end }}
     - interface: {{ .Values.vipLink }}
       vip:
         ip: {{ $fipStr }}
+    {{- end }}
+    {{- /* one interface entry with an inline vip per vips entry
+           (legacy schema has no Layer2VIPConfig document). Seed the seen
+           link/ip sets with the vipLink override and floatingIP so a vips
+           entry that collides with either is caught, matching the multidoc
+           path's dedup. */}}
+    {{- $seenVipLinks := list }}
+    {{- if $vipOverride }}
+    {{- $seenVipLinks = append $seenVipLinks (.Values.vipLink | toString) }}
+    {{- end }}
+    {{- $seenVipIPs := list }}
+    {{- if $fipIsSet }}
+    {{- $seenVipIPs = append $seenVipIPs $fipStr }}
+    {{- end }}
+    {{- range .Values.vips }}
+    {{- if not (ipIsValid (.ip | toString)) }}
+    {{- fail (printf "talm: vips[].ip %q is not a valid IPv4 / IPv6 literal. Edit values.yaml and re-run." .ip) }}
+    {{- end }}
+    {{- if not .link }}
+    {{- fail (printf "talm: a vips entry (ip %q) has no link. Each vips entry must name the link the VIP is pinned to." (.ip | toString)) }}
+    {{- end }}
+    {{- /* Only meaningful when the rebuild actually emitted the primary
+           link. When the preserved block was used instead, the primary has
+           no rebuild-generated entry and the preserved-name check below is
+           the one that applies (with the accurate message). */}}
+    {{- if and (not $existingInterfacesConfiguration) (eq (.link | toString) $defaultLinkName) }}
+    {{- /* On legacy the primary link already has its own interfaces[]
+           entry carrying addresses/routes; a second entry for the same
+           link would be a duplicate device Talos does not merge. Refuse
+           it and point at the right tool for a primary-link VIP. */}}
+    {{- fail (printf "talm: vips entry link %q is the discovered primary link, which already has an interfaces[] entry on the legacy schema; a second entry for it produces a duplicate device Talos won't merge. Use floatingIP for a VIP on the primary link, or pin templateOptions.talosVersion to v1.12+ where VIPs are separate Layer2VIPConfig documents." .link) }}
+    {{- end }}
+    {{- if has (.link | toString) $existingLinkNames }}
+    {{- /* The preserved interfaces block (a re-apply of a legacy-applied
+           node, or preserveExisting) already emits this link verbatim, so
+           a vips entry naming it would double-declare the device. Fail
+           fast the same way the primary-link collision does. */}}
+    {{- fail (printf "talm: vips entry link %q is already present in the node's running machine.network.interfaces (emitted verbatim on the legacy schema); a second entry for it produces a duplicate device Talos won't merge. Add the vip inline to that interface via a per-node body overlay, or pin templateOptions.talosVersion to v1.12+ where VIPs are separate Layer2VIPConfig documents." .link) }}
+    {{- end }}
+    {{- if has (.link | toString) $seenVipLinks }}
+    {{- /* The legacy interfaces[].vip holds a single IP per interface, so
+           two VIPs on one link (including the vipLink override) cannot both
+           be expressed. Fail fast rather than emit a duplicate device. */}}
+    {{- fail (printf "talm: link %q already carries a VIP (via vipLink or another vips entry) on the legacy schema, which holds at most one inline vip per interface. Pin templateOptions.talosVersion to v1.12+ where each VIP is a separate Layer2VIPConfig document." .link) }}
+    {{- end }}
+    {{- if has (.ip | toString) $seenVipIPs }}
+    {{- /* The same VIP ip pinned to two links loses arbitration on apply
+           (both interfaces claim it). Fail fast, matching the multidoc
+           path's ip-uniqueness check. */}}
+    {{- fail (printf "talm: VIP ip %q is declared more than once (across floatingIP and vips) on the legacy schema. Each VIP ip must be unique." (.ip | toString)) }}
+    {{- end }}
+    {{- $seenVipLinks = append $seenVipLinks (.link | toString) }}
+    {{- $seenVipIPs = append $seenVipIPs (.ip | toString) }}
+    - interface: {{ .link }}
+      vip:
+        ip: {{ .ip }}
     {{- end }}
     {{- end }}
 {{- end }}
 
 {{- define "talos.config.legacy" }}
 {{- include "talos.config.machine.common" . }}
-  registries:
-    mirrors:
-      docker.io:
-        endpoints:
-        - https://mirror.gcr.io
+{{- include "talm.config.registries.legacy" . }}
 {{- include "talos.config.network.legacy" . }}
 
 {{- include "talos.config.cluster" . }}
@@ -344,11 +477,6 @@ cluster:
 {{- include "talos.config.machine.common" . }}
 
 {{- include "talos.config.cluster" . }}
----
-apiVersion: v1alpha1
-kind: RegistryMirrorConfig
-name: docker.io
-endpoints:
-  - url: https://mirror.gcr.io
+{{- include "talm.config.registries.multidoc" . }}
 {{- include "talos.config.network.multidoc" . }}
 {{- end }}
