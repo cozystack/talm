@@ -1,0 +1,98 @@
+
+machine:
+  type: worker
+  kubelet:
+    nodeIP:
+      validSubnets:
+        - 192.168.1.0/24
+    extraConfig:
+      cpuManagerPolicy: static
+      maxPods: 512
+  sysctls:
+    net.ipv4.neigh.default.gc_thresh1: "4096"
+    net.ipv4.neigh.default.gc_thresh2: "8192"
+    net.ipv4.neigh.default.gc_thresh3: "16384"
+    net.ipv4.tcp_orphan_retries: "3"
+    net.ipv4.tcp_fin_timeout: "30"
+    net.core.netdev_max_backlog: "5000"
+    net.core.netdev_budget: "600"
+    net.core.netdev_budget_usecs: "8000"
+  kernel:
+    modules:
+    - name: openvswitch
+    - name: drbd
+      parameters:
+        - usermode_helper=disabled
+    - name: zfs
+    - name: spl
+    - name: vfio_pci
+    - name: vfio_iommu_type1
+  certSANs:
+  - 127.0.0.1
+  files:
+  - content: |
+      [plugins]
+        [plugins."io.containerd.grpc.v1.cri"]
+          device_ownership_from_security_context = true
+        [plugins."io.containerd.cri.v1.runtime"]
+          device_ownership_from_security_context = true
+    path: /etc/cri/conf.d/20-customization.part
+    op: create
+  - op: overwrite
+    path: /etc/lvm/lvm.conf
+    permissions: 0o644
+    content: |
+      backup {
+        backup = 0
+        archive = 0
+      }
+      devices {
+         global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]
+      }
+  install:
+    image: ghcr.io/cozystack/cozystack/talos:v1.12.6
+    
+    # -- Discovered disks:
+    disk: "/dev/sda"
+cluster:
+  network:
+    cni:
+      name: none
+    dnsDomain: "cozy.local"
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/16
+  clusterName: "cozystack"
+  controlPlane:
+    endpoint: "https://talm-test.invalid:6443"
+---
+apiVersion: v1alpha1
+kind: RegistryMirrorConfig
+name: docker.io
+endpoints:
+  - url: https://mirror.gcr.io
+# -- Discovered interfaces:
+# eth0:
+#   hardwareAddr:aa:bb:cc:00:00:01
+#   busPath: pci-0000:00:1f.0
+#   driver: 
+#   vendor: 
+#   product: )
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: "talos-23c56"
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: "8.8.8.8"
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: eth0
+addresses:
+  - address: 192.168.201.10/24
+routes:
+  - gateway: 192.168.201.1

@@ -21,3 +21,9 @@ go.sum text eol=lf
 # generated keeps it out of GitHub language stats and collapses it
 # in PR diffs by default.
 pkg/generated/** linguist-generated
+
+# Golden render snapshots are regenerated mechanically via
+# `TALM_UPDATE_GOLDEN=1 go test ./pkg/engine/ -run TestGoldenRender`,
+# not hand-edited. Marking them generated keeps the rendered YAML dumps
+# out of language stats and collapses them in PR diffs by default.
+pkg/engine/testdata/golden/** linguist-generated
