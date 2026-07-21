@@ -41,8 +41,8 @@ import (
 	"testing"
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/chart/v2/loader"
 )
 
 // renderExpectingError calls the Helm engine directly with the given
@@ -71,7 +71,7 @@ func renderExpectingError(t *testing.T, chartPath, talosVersion string, lookup f
 	maps.Copy(merged, values)
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       merged,
 		"TalosVersion": talosVersion,
 	})

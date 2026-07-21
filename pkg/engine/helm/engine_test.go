@@ -26,8 +26,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/chart/common/util"
+	chart "helm.sh/helm/v4/pkg/chart/v2"
 )
 
 func TestSortTemplates(t *testing.T) {
@@ -88,7 +89,7 @@ func TestRender(t *testing.T) {
 			Name:    "moby",
 			Version: helmTestVersion,
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/test1", Data: []byte("{{.Values.outer | title }} {{.Values.inner | title}}")},
 			{Name: "templates/test2", Data: []byte("{{.Values.global.callme | lower }}")},
 			{Name: "templates/test3", Data: []byte("{{.noValue}}")},
@@ -108,7 +109,7 @@ func TestRender(t *testing.T) {
 		},
 	}
 
-	v, err := chartutil.CoalesceValues(c, vals)
+	v, err := util.CoalesceValues(c, vals)
 	if err != nil {
 		t.Fatalf("Failed to coalesce values: %s", err)
 	}
@@ -138,7 +139,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 			Name:    "parent",
 			Version: helmTestVersion,
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/_helpers.tpl", Data: []byte(`{{- define "test" -}}parent value{{- end -}}`)},
 			{Name: "templates/test.yaml", Data: []byte(`{{ tpl "{{ include \"test\" . }}" . }}`)},
 		},
@@ -148,7 +149,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 			Name:    helmKeyChartChild,
 			Version: helmTestVersion,
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/_helpers.tpl", Data: []byte(`{{- define "test" -}}child value{{- end -}}`)},
 		},
 	}
@@ -159,7 +160,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 	}
 
 	for i := range 100 {
-		out, err := Render(parentChart, chartutil.Values{})
+		out, err := Render(parentChart, common.Values{})
 		if err != nil {
 			t.Fatalf("Failed to render templates: %s", err)
 		}
@@ -175,7 +176,7 @@ func TestRenderRefsOrdering(t *testing.T) {
 func TestRenderInternals(t *testing.T) {
 	// Test the internals of the rendering tool.
 
-	vals := chartutil.Values{helmKeyName: "one", "Value": "two"}
+	vals := common.Values{helmKeyName: "one", "Value": "two"}
 	tpls := map[string]renderable{
 		"one": {tpl: `Hello {{title .Name}}`, vals: vals},
 		"two": {tpl: `Goodbye {{upper .Value}}`, vals: vals},
@@ -212,7 +213,7 @@ func TestRenderWithDNS(t *testing.T) {
 			Name:    "moby",
 			Version: helmTestVersion,
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/test1", Data: []byte("{{getHostByName \"helm.sh\"}}")},
 		},
 		Values: map[string]any{},
@@ -222,7 +223,7 @@ func TestRenderWithDNS(t *testing.T) {
 		helmKeyValues: map[string]any{},
 	}
 
-	v, err := chartutil.CoalesceValues(c, vals)
+	v, err := util.CoalesceValues(c, vals)
 	if err != nil {
 		t.Fatalf("Failed to coalesce values: %s", err)
 	}
@@ -270,7 +271,7 @@ func TestParallelRenderInternals(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	vals := chartutil.Values{helmKeyValues: map[string]any{}}
+	vals := common.Values{helmKeyValues: map[string]any{}}
 
 	tplsUndefinedFunction := map[string]renderable{
 		"undefined_function": {tpl: `{{foo}}`, vals: vals},
@@ -286,7 +287,7 @@ func TestParseErrors(t *testing.T) {
 }
 
 func TestExecErrors(t *testing.T) {
-	vals := chartutil.Values{helmKeyValues: map[string]any{}}
+	vals := common.Values{helmKeyValues: map[string]any{}}
 	cases := []struct {
 		name     string
 		tpls     map[string]renderable
@@ -350,7 +351,7 @@ linebreak`,
 }
 
 func TestFailErrors(t *testing.T) {
-	vals := chartutil.Values{helmKeyValues: map[string]any{}}
+	vals := common.Values{helmKeyValues: map[string]any{}}
 
 	failtpl := `All your base are belong to us{{ fail "This is an error" }}`
 	tplsFailed := map[string]renderable{
@@ -381,14 +382,14 @@ func TestFailErrors(t *testing.T) {
 func TestAllTemplates(t *testing.T) {
 	ch1 := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "ch1"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/foo", Data: []byte("foo")},
 			{Name: "templates/bar", Data: []byte("bar")},
 		},
 	}
 	dep1 := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "laboratory mice"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/pinky", Data: []byte("pinky")},
 			{Name: "templates/brain", Data: []byte("brain")},
 		},
@@ -397,13 +398,13 @@ func TestAllTemplates(t *testing.T) {
 
 	dep2 := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "same thing we do every night"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/innermost", Data: []byte("innermost")},
 		},
 	}
 	dep1.AddDependency(dep2)
 
-	tpls := allTemplates(ch1, chartutil.Values{})
+	tpls := allTemplates(ch1, common.Values{})
 	if len(tpls) != 5 {
 		t.Errorf("Expected 5 charts, got %d", len(tpls))
 	}
@@ -412,19 +413,19 @@ func TestAllTemplates(t *testing.T) {
 func TestChartValuesContainsIsRoot(t *testing.T) {
 	ch1 := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "parent"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/isroot", Data: []byte("{{.Chart.IsRoot}}")},
 		},
 	}
 	dep1 := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmKeyChartChild},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/isroot", Data: []byte("{{.Chart.IsRoot}}")},
 		},
 	}
 	ch1.AddDependency(dep1)
 
-	out, err := Render(ch1, chartutil.Values{})
+	out, err := Render(ch1, common.Values{})
 	if err != nil {
 		t.Fatalf("failed to render templates: %s", err)
 	}
@@ -444,13 +445,13 @@ func TestRenderDependency(t *testing.T) {
 	toptpl := `Hello {{template "myblock"}}`
 	ch := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "outerchart"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/outer", Data: []byte(toptpl)},
 		},
 	}
 	ch.AddDependency(&chart.Chart{
 		Metadata: &chart.Metadata{Name: "innerchart"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/inner", Data: []byte(deptpl)},
 		},
 	})
@@ -481,7 +482,7 @@ func TestRenderNestedValues(t *testing.T) {
 
 	deepest := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmFixtureDeepest},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: deepestpath, Data: []byte(`And this same {{.Values.what}} that smiles {{.Values.global.when}}`)},
 			{Name: checkrelease, Data: []byte(`Tomorrow will be {{default "happy" .Release.Name }}`)},
 		},
@@ -490,7 +491,7 @@ func TestRenderNestedValues(t *testing.T) {
 
 	inner := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmFixtureHerrick},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: innerpath, Data: []byte(`Old {{.Values.who}} is still a-flyin'`)},
 		},
 		Values: map[string]any{"who": "Robert", "what": "glasses"},
@@ -499,7 +500,7 @@ func TestRenderNestedValues(t *testing.T) {
 
 	outer := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "top"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: outerpath, Data: []byte(`Gather ye {{.Values.what}} while ye may`)},
 			{Name: subchartspath, Data: []byte(`The glorious Lamp of {{.Subcharts.herrick.Subcharts.deepest.Values.where}}, the {{.Subcharts.herrick.Values.what}}`)},
 		},
@@ -527,15 +528,15 @@ func TestRenderNestedValues(t *testing.T) {
 		},
 	}
 
-	tmp, err := chartutil.CoalesceValues(outer, injValues)
+	tmp, err := util.CoalesceValues(outer, injValues)
 	if err != nil {
 		t.Fatalf("Failed to coalesce values: %s", err)
 	}
 
-	inject := chartutil.Values{
+	inject := common.Values{
 		helmKeyValues: tmp,
 		helmKeyChart:  outer.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: "dyin",
 		},
 	}
@@ -576,11 +577,11 @@ func TestRenderNestedValues(t *testing.T) {
 func TestRenderBuiltinValues(t *testing.T) {
 	inner := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "Latium"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/Lavinia", Data: []byte(`{{.Template.Name}}{{.Chart.Name}}{{.Release.Name}}`)},
 			{Name: "templates/From", Data: []byte(`{{.Files.author | printf "%s"}} {{.Files.Get "book/title.txt"}}`)},
 		},
-		Files: []*chart.File{
+		Files: []*common.File{
 			{Name: "author", Data: []byte("Virgil")},
 			{Name: "book/title.txt", Data: []byte("Aeneid")},
 		},
@@ -588,17 +589,17 @@ func TestRenderBuiltinValues(t *testing.T) {
 
 	outer := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "Troy"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/Aeneas", Data: []byte(`{{.Template.Name}}{{.Chart.Name}}{{.Release.Name}}`)},
 			{Name: "templates/Amata", Data: []byte(`{{.Subcharts.Latium.Chart.Name}} {{.Subcharts.Latium.Files.author | printf "%s"}}`)},
 		},
 	}
 	outer.AddDependency(inner)
 
-	inject := chartutil.Values{
+	inject := common.Values{
 		helmKeyValues: "",
 		helmKeyChart:  outer.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: "Aeneid",
 		},
 	}
@@ -626,7 +627,7 @@ func TestRenderBuiltinValues(t *testing.T) {
 func TestAlterFuncMap_include(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "conrad"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/quote", Data: []byte(`{{include "conrad/templates/_partial" . | indent 2}} dead.`)},
 			{Name: "templates/_partial", Data: []byte(`{{.Release.Name}} - he`)},
 		},
@@ -635,16 +636,16 @@ func TestAlterFuncMap_include(t *testing.T) {
 	// Check nested reference in include FuncMap
 	d := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "nested"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/quote", Data: []byte(`{{include "nested/templates/quote" . | indent 2}} dead.`)},
 			{Name: "templates/_partial", Data: []byte(`{{.Release.Name}} - he`)},
 		},
 	}
 
-	v := chartutil.Values{
+	v := common.Values{
 		helmKeyValues: "",
 		helmKeyChart:  c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: "Mistah Kurtz",
 		},
 	}
@@ -669,19 +670,19 @@ func TestAlterFuncMap_include(t *testing.T) {
 func TestAlterFuncMap_require(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "conan"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/quote", Data: []byte(`All your base are belong to {{ required "A valid 'who' is required" .Values.who }}`)},
 			{Name: "templates/bases", Data: []byte(`All {{ required "A valid 'bases' is required" .Values.bases }} of them!`)},
 		},
 	}
 
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"who":   "us",
 			"bases": 2,
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixture90sMeme,
 		},
 	}
@@ -702,12 +703,12 @@ func TestAlterFuncMap_require(t *testing.T) {
 
 	// test required without passing in needed values with lint mode on
 	// verifies lint replaces required with an empty string (should not fail)
-	lintValues := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	lintValues := common.Values{
+		helmKeyValues: common.Values{
 			"who": "us",
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixture90sMeme,
 		},
 	}
@@ -731,17 +732,17 @@ func TestAlterFuncMap_require(t *testing.T) {
 func TestAlterFuncMap_tpl(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/base", Data: []byte(`Evaluate tpl {{tpl "Value: {{ .Values.value}}" .}}`)},
 		},
 	}
 
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"value": "myvalue",
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -760,17 +761,17 @@ func TestAlterFuncMap_tpl(t *testing.T) {
 func TestAlterFuncMap_tplfunc(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/base", Data: []byte(`Evaluate tpl {{tpl "Value: {{ .Values.value | quote}}" .}}`)},
 		},
 	}
 
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"value": "myvalue",
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -789,17 +790,17 @@ func TestAlterFuncMap_tplfunc(t *testing.T) {
 func TestAlterFuncMap_tplinclude(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: helmFixtureTplFunction},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/base", Data: []byte(`{{ tpl "{{include ` + "`" + `TplFunction/templates/_partial` + "`" + ` .  | quote }}" .}}`)},
 			{Name: "templates/_partial", Data: []byte(`{{.Template.Name}}`)},
 		},
 	}
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"value": "myvalue",
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -819,15 +820,15 @@ func TestRenderRecursionLimit(t *testing.T) {
 	// endless recursion should produce an error
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "bad"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/base", Data: []byte(`{{include "recursion" . }}`)},
 			{Name: "templates/recursion", Data: []byte(`{{define "recursion"}}{{include "recursion" . }}{{end}}`)},
 		},
 	}
-	v := chartutil.Values{
+	v := common.Values{
 		helmKeyValues: "",
 		helmKeyChart:  c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -846,7 +847,7 @@ func TestRenderRecursionLimit(t *testing.T) {
 
 	d := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "overlook"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/quote", Data: []byte(repeatedIncl)},
 			{Name: "templates/_function", Data: []byte(printFunc)},
 		},
@@ -866,23 +867,23 @@ func TestRenderRecursionLimit(t *testing.T) {
 func TestRenderLoadTemplateForTplFromFile(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplLoadFromFile"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/base", Data: []byte(`{{ tpl (.Files.Get .Values.filename) . }}`)},
 			{Name: "templates/_function", Data: []byte(`{{define "test-function"}}test-function{{end}}`)},
 		},
-		Files: []*chart.File{
+		Files: []*common.File{
 			{Name: "test", Data: []byte(`{{ tpl (.Files.Get .Values.filename2) .}}`)},
 			{Name: "test2", Data: []byte(`{{include "test-function" .}}{{define "nested-define"}}nested-define-content{{end}} {{include "nested-define" .}}`)},
 		},
 	}
 
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"filename":  "test",
 			"filename2": "test2",
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -901,15 +902,15 @@ func TestRenderLoadTemplateForTplFromFile(t *testing.T) {
 func TestRenderTplEmpty(t *testing.T) {
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplEmpty"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/empty-string", Data: []byte(`{{tpl "" .}}`)},
 			{Name: "templates/empty-action", Data: []byte(`{{tpl "{{ \"\"}}" .}}`)},
 			{Name: "templates/only-defines", Data: []byte(`{{tpl "{{define \"not-invoked\"}}not-rendered{{end}}" .}}`)},
 		},
 	}
-	v := chartutil.Values{
+	v := common.Values{
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -935,7 +936,7 @@ func TestRenderTplTemplateNames(t *testing.T) {
 	// .Template.BasePath and .Name make it through
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplTemplateNames"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/default-basepath", Data: []byte(`{{tpl "{{ .Template.BasePath }}" .}}`)},
 			{Name: "templates/default-name", Data: []byte(`{{tpl "{{ .Template.Name }}" .}}`)},
 			{Name: "templates/modified-basepath", Data: []byte(`{{tpl "{{ .Template.BasePath }}" .Values.dot}}`)},
@@ -943,10 +944,10 @@ func TestRenderTplTemplateNames(t *testing.T) {
 			{Name: "templates/modified-field", Data: []byte(`{{tpl "{{ .Template.Field }}" .Values.dot}}`)},
 		},
 	}
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
-			"dot": chartutil.Values{
-				"Template": chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
+			"dot": common.Values{
+				"Template": common.Values{
 					helmKeyBasePath: "path/to/template",
 					helmKeyName:     "name-of-template",
 					"Field":         helmFixtureExtraField,
@@ -954,7 +955,7 @@ func TestRenderTplTemplateNames(t *testing.T) {
 			},
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -982,7 +983,7 @@ func TestRenderTplRedefines(t *testing.T) {
 	// Redefining a template inside 'tpl' does not affect the outer definition
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplRedefines"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/_partials", Data: []byte(`{{define "partial"}}original-in-partial{{end}}`)},
 			{Name: "templates/partial", Data: []byte(
 				`before: {{include "partial" .}}\n{{tpl .Values.partialText .}}\nafter: {{include "partial" .}}`,
@@ -1004,8 +1005,8 @@ func TestRenderTplRedefines(t *testing.T) {
 			)},
 		},
 	}
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{
+	v := common.Values{
+		helmKeyValues: common.Values{
 			"partialText":      `{{define "partial"}}redefined-in-tpl{{end}}tpl: {{include "partial" .}}`,
 			"manifestText":     `{{define "manifest"}}redefined-in-tpl{{end}}tpl: {{include "manifest" .}}`,
 			"manifestOnlyText": `tpl: {{include "manifest-only" .}}`,
@@ -1017,7 +1018,7 @@ func TestRenderTplRedefines(t *testing.T) {
 			"innerText": `{{define "nested"}}redefined-in-inner-tpl{{end}}inner-tpl: {{include "nested" .}} {{include "nested-outer" . }}`,
 		},
 		helmKeyChart: c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -1048,16 +1049,16 @@ func TestRenderTplMissingKey(t *testing.T) {
 	// Rendering a missing key results in empty/zero output.
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplMissingKey"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/manifest", Data: []byte(
 				`missingValue: {{tpl "{{.Values.noSuchKey}}" .}}`,
 			)},
 		},
 	}
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{},
+	v := common.Values{
+		helmKeyValues: common.Values{},
 		helmKeyChart:  c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -1081,16 +1082,16 @@ func TestRenderTplMissingKeyString(t *testing.T) {
 	// Rendering a missing key results in error
 	c := &chart.Chart{
 		Metadata: &chart.Metadata{Name: "TplMissingKeyStrict"},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/manifest", Data: []byte(
 				`missingValue: {{tpl "{{.Values.noSuchKey}}" .}}`,
 			)},
 		},
 	}
-	v := chartutil.Values{
-		helmKeyValues: chartutil.Values{},
+	v := common.Values{
+		helmKeyValues: common.Values{},
 		helmKeyChart:  c.Metadata,
-		helmKeyRelease: chartutil.Values{
+		helmKeyRelease: common.Values{
 			helmKeyName: helmFixtureTestRelease,
 		},
 	}
@@ -1122,13 +1123,13 @@ func TestTalosVersionInTemplateContext(t *testing.T) {
 			Name:    "testchart",
 			Version: "0.1.0",
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
 		},
 	}
 
-	vals := chartutil.Values{
-		helmKeyValues:  chartutil.Values{},
+	vals := common.Values{
+		helmKeyValues:  common.Values{},
 		"TalosVersion": "v1.12",
 	}
 
@@ -1152,13 +1153,13 @@ func TestTalosVersionEmpty(t *testing.T) {
 			Name:    "testchart",
 			Version: "0.1.0",
 		},
-		Templates: []*chart.File{
+		Templates: []*common.File{
 			{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
 		},
 	}
 
-	vals := chartutil.Values{
-		helmKeyValues: chartutil.Values{},
+	vals := common.Values{
+		helmKeyValues: common.Values{},
 	}
 
 	out, err := Render(c, vals)
@@ -1182,12 +1183,12 @@ func TestTalosVersionConcurrentRender(t *testing.T) {
 				Name:    "testchart",
 				Version: "0.1.0",
 			},
-			Templates: []*chart.File{
+			Templates: []*common.File{
 				{Name: "templates/test.yaml", Data: []byte("talosVersion: {{ .TalosVersion }}")},
 			},
 		}
-		vals := chartutil.Values{
-			helmKeyValues:  chartutil.Values{},
+		vals := common.Values{
+			helmKeyValues:  common.Values{},
 			"TalosVersion": version,
 		}
 		out, err := Render(c, vals)
@@ -1224,11 +1225,11 @@ func TestCidrNetworkTemplateFunc(t *testing.T) {
 	renderExpr := func(expr string) (string, error) {
 		chrt := &chart.Chart{
 			Metadata:  &chart.Metadata{Name: "cidrtest"},
-			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Templates: []*common.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
 			Values:    map[string]any{},
 		}
 		var eng Engine
-		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		out, err := eng.Render(chrt, common.Values{helmKeyValues: map[string]any{}})
 		if err != nil {
 			return "", err
 		}
@@ -1278,11 +1279,11 @@ func TestCidrContainsTemplateFunc(t *testing.T) {
 	renderExpr := func(expr string) (string, error) {
 		chrt := &chart.Chart{
 			Metadata:  &chart.Metadata{Name: "cidrtest"},
-			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Templates: []*common.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
 			Values:    map[string]any{},
 		}
 		var eng Engine
-		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		out, err := eng.Render(chrt, common.Values{helmKeyValues: map[string]any{}})
 		if err != nil {
 			return "", err
 		}
@@ -1353,11 +1354,11 @@ func TestCidrPrefixLenTemplateFunc(t *testing.T) {
 	renderExpr := func(expr string) (string, error) {
 		chrt := &chart.Chart{
 			Metadata:  &chart.Metadata{Name: "cidrtest"},
-			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Templates: []*common.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
 			Values:    map[string]any{},
 		}
 		var eng Engine
-		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		out, err := eng.Render(chrt, common.Values{helmKeyValues: map[string]any{}})
 		if err != nil {
 			return "", err
 		}
@@ -1403,11 +1404,11 @@ func TestIPIsValidTemplateFunc(t *testing.T) {
 	renderExpr := func(expr string) (string, error) {
 		chrt := &chart.Chart{
 			Metadata:  &chart.Metadata{Name: "iptest"},
-			Templates: []*chart.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
+			Templates: []*common.File{{Name: "templates/out.yaml", Data: []byte(expr)}},
 			Values:    map[string]any{},
 		}
 		var eng Engine
-		out, err := eng.Render(chrt, chartutil.Values{helmKeyValues: map[string]any{}})
+		out, err := eng.Render(chrt, common.Values{helmKeyValues: map[string]any{}})
 		if err != nil {
 			return "", err
 		}
