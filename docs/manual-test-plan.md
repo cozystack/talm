@@ -986,6 +986,28 @@ Expected (per node): `node 192.0.2.10: talm: drift verification unavailable on m
 
 Regression anchor: a refactor that always-prefixes (`node : talm: ...` on single-node) is a UX regression. The `nodePrefix("")` helper must collapse to empty for the bare-line single-node case.
 
+### D4. TLS `--skip-verify` — native honored, wrapped passthrough warned
+
+`--skip-verify` skips server-certificate verification while preserving client-certificate authentication, for connecting to a node whose IP is absent from the server cert SANs. It is reimplemented in talm (`WithClientSkipVerify` in `pkg/commands/root.go`) now that the cozystack/talos fork is dropped, and its coverage differs by command kind.
+
+Native command (apply / template / upgrade / rotate-ca) — the flag is honored. Run against a node reachable by an IP that is NOT in the server cert SANs:
+
+```bash
+talm apply --dry-run --skip-verify --nodes 192.0.2.10 -f nodes/node0.yaml
+```
+
+Expected: the connection succeeds (no `x509: certificate is valid for … not 192.0.2.10` TLS SAN error) and the dry-run render proceeds.
+
+Wrapped talosctl passthrough command (health / get / dashboard / …) — the flag is NOT supported, and the command says so instead of failing opaquely:
+
+```bash
+talm health --skip-verify --nodes 192.0.2.10
+```
+
+Expected (stderr): `Warning: --skip-verify is not supported for the wrapped talosctl command "health"; it applies only to talm-native commands (apply, template, upgrade, rotate-ca). Connecting with full TLS verification.` — the command then connects with full verification (and fails against an out-of-SAN IP, as it would without the flag).
+
+Regression anchor: `pkg/commands/skip_verify_test.go` pins the TLS config (skip server verify + client cert preserved), the native routing (`WithClientNoNodes` / `WithClient` reach `WithClientSkipVerify`), the `--cluster` and dial-option threading, and the passthrough warning. A change that silently no-ops `--skip-verify` on native commands, or drops the passthrough warning, is a regression.
+
 ## E. Upgrade
 
 ### E1. Stage an upgrade to the same image

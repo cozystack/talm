@@ -136,7 +136,7 @@ func registerRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringSliceVar(&commands.GlobalArgs.Nodes, "nodes", []string{}, "target the specified nodes")
 	cmd.PersistentFlags().StringSliceVarP(&commands.GlobalArgs.Endpoints, "endpoints", "e", []string{}, "override default endpoints in Talos configuration")
 	cmd.PersistentFlags().StringVar(&commands.GlobalArgs.Cluster, "cluster", "", "Cluster to connect to if a proxy endpoint is used.")
-	cmd.PersistentFlags().BoolVar(&commands.GlobalArgs.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
+	cmd.PersistentFlags().BoolVar(&commands.SkipVerify, "skip-verify", false, "skip TLS certificate verification (keeps client authentication)")
 	cmd.PersistentFlags().Bool("version", false, "Print the version number of the application")
 	// No backticks in this usage string: pflag's UnquoteUsage treats the
 	// first backtick-quoted word as the flag's value-placeholder name, which

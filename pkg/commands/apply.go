@@ -797,7 +797,7 @@ func withApplyClientBare(action func(ctx context.Context, c *client.Client) erro
 		return WithClientMaintenance(applyCmdFlags.certFingerprints, action)
 	}
 
-	if GlobalArgs.SkipVerify {
+	if SkipVerify {
 		return WithClientSkipVerify(action)
 	}
 

@@ -16,6 +16,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -140,6 +141,25 @@ func propagatePersistentFlags(cmd, wrappedCmd *cobra.Command) {
 	})
 }
 
+// warnSkipVerifyUnsupported writes a warning to w when --skip-verify is set for
+// a wrapped talosctl passthrough command. Those commands run upstream RunE code
+// that builds its own client through upstream global.Args, which has no
+// skip-verify concept — only the dropped cozystack/talos fork could inject it
+// at the library level. So --skip-verify is a no-op for them; the warning keeps
+// the user from chasing an opaque TLS SAN failure. talm-native commands (apply,
+// template, upgrade, rotate-ca) honor the flag via WithClientNoNodes.
+func warnSkipVerifyUnsupported(w io.Writer, cmdName string) {
+	if !SkipVerify {
+		return
+	}
+
+	fmt.Fprintf(w,
+		"Warning: --skip-verify is not supported for the wrapped talosctl command %q; "+
+			"it applies only to talm-native commands (apply, template, upgrade, rotate-ca). "+
+			"Connecting with full TLS verification.\n",
+		cmdName)
+}
+
 // wrapTalosCommand wraps a talosctl command to add --file flag support.
 //
 //nolint:gocognit,gocyclo,cyclop,funlen // cobra wrapper for talosctl forward; branching over (--insecure, --talosconfig override, file/template flags, modeline) is each one short branch.
@@ -259,7 +279,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 		// Sync GlobalArgs to talosctl commands
 		taloscommands.GlobalArgs = GlobalArgs
 
-		// Note: --skip-verify is now supported for all commands via GlobalArgs.SkipVerify
+		warnSkipVerifyUnsupported(os.Stderr, cmdName)
 
 		if originalPreRunE != nil {
 			return originalPreRunE(cmd, args)
