@@ -6863,6 +6863,40 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 	return out["cozystack/templates/controlplane.yaml"]
 }
 
+// renderCozystackWorkerWith mirrors renderCozystackWith but returns the
+// rendered worker template, for pinning behavior that must also hold on
+// worker nodes (e.g. a vips entry on a storage link).
+func renderCozystackWorkerWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+
+	out, err := eng.Render(chrt, common.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	return out["cozystack/templates/worker.yaml"]
+}
+
 // renderCozystackExpectError mirrors renderCozystackWith but returns
 // the render error to the caller instead of t.Fatal'ing on it. Used
 // by tests that pin error-message contracts (fail-fast on malformed

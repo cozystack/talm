@@ -491,6 +491,162 @@ Collision check: with `tcpKeepaliveTuning: true`, set `extraSysctls: { "net.ipv4
 
 Regression anchor: `TestContract_Machine_Sysctls_DRBDTuning_Cozystack`, `TestContract_Machine_Sysctls_TCPKeepalive_*`, and `TestContract_Cluster_Etcd_QuotaBackendBytes_*` pin every branch above; `TestContract_Machine_Sysctls_DRBDTuning_AbsentOnGeneric` / `TestContract_Cluster_Etcd_QuotaBackendBytes_AbsentOnGeneric` pin that the generic preset stays free of these opinions.
 
+### B10. Values knobs for richer instance description
+
+These knobs let a node's specifics live in values instead of a forked or hand-edited template. All default empty, so a stock render is unchanged — the golden snapshots (`TestGoldenRender`) stay byte-identical and act as the backward-compat guard.
+
+#### B10a. NTP servers
+
+```bash
+# values.yaml: timeServers: [192.0.2.1]
+talm template -f nodes/controlplane-0.yaml | yq '.machine.time.servers'
+```
+
+Expected: `[192.0.2.1]`. Empty `timeServers` (the default) omits `machine.time` entirely.
+
+Regression anchor: `TestContract_Machine_TimeServers_RenderWhenSet` / `TestContract_Machine_TimeServers_EmptyByDefault`.
+
+#### B10b. Control-plane extraArgs
+
+```bash
+# values.yaml: extraApiServerArgs: { max-requests-inflight: "2000" }
+talm template -f nodes/controlplane-0.yaml | yq '.cluster.apiServer.extraArgs'
+```
+
+Expected: includes `max-requests-inflight: "2000"`. On cozystack the block appears even without `oidcIssuerUrl` (it is hoisted out of the OIDC guard). A key colliding with a preset built-in — controllerManager `bind-address`/`allocate-node-cidrs`/`cluster-cidr`, scheduler `bind-address`, or an apiServer `oidc-*` arg while `oidcIssuerUrl` is set — fails the render with a hinted message. Generic exposes the same three knobs as a plain passthrough with no built-ins to collide with.
+
+Regression anchor: `TestContract_Cluster_ExtraControlPlaneArgs_Merge_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_WithoutOIDC_Cozystack`, `TestContract_Cluster_ExtraControllerManagerArgs_Collision_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_OIDCCollision_Cozystack`, `TestContract_Cluster_ExtraControlPlaneArgs_Generic`.
+
+#### B10c. Registry mirrors
+
+```bash
+# values.yaml:
+#   registryMirrors:
+#     docker.io: { endpoints: [https://mirror.gcr.io] }
+#     ghcr.io:   { endpoints: [https://registry.example.com/v2/ghcr.io] }
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "RegistryMirrorConfig")'
+```
+
+Expected (multidoc): one `RegistryMirrorConfig` document per host. The legacy schema emits the same under `machine.registries.mirrors`. The `docker.io` → gcr default is preserved when the knob is unset. To emit no registry config at all, null the key out (`registryMirrors:` with no value); because per-node overrides merge deeply, `{}` keeps the default docker.io mirror rather than clearing it. The knob itself works on both presets; only the shipped `docker.io` default is cozystack-only — generic emits nothing until the operator sets a mirror.
+
+Regression anchor: `TestContract_Machine_RegistryMirrors_CustomMirror_Cozystack`, `TestContract_Machine_Registries_DockerMirror_LegacyCozystack` (default), `TestContract_Machine_NoRegistriesOnGeneric`.
+
+A self-signed pull-through mirror also needs its TLS posture stated. `registryTLS` is keyed by the endpoint HOST, not the mirror name:
+
+```bash
+# values.yaml:
+#   registryMirrors:
+#     docker.io: { endpoints: [https://registry.example.com/v2/docker.io] }
+#   registryTLS:
+#     registry.example.com: { insecureSkipVerify: true }
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "RegistryTLSConfig")'
+```
+
+Expected (multidoc): one `RegistryTLSConfig` document per host. The legacy schema emits the same under `machine.registries.config.<host>.tls`. Every entry must set `ca`, `insecureSkipVerify`, or both — an empty entry fails the render rather than silently picking a security posture. Setting `insecureSkipVerify: false` is emitted verbatim, so verification can be pinned on.
+
+The `ca` path is worth one extra check, because the two schemas disagree on encoding and the chart hides that. Supply the CA as PEM and render both ways:
+
+```bash
+# values.yaml:
+#   registryTLS:
+#     registry.example.com:
+#       ca: |
+#         -----BEGIN CERTIFICATE-----
+#         ...
+#         -----END CERTIFICATE-----
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "RegistryTLSConfig")'
+# then re-render with templateOptions.talosVersion pinned to v1.11
+talm template -f nodes/controlplane-0.yaml | yq '.machine.registries.config'
+```
+
+Expected: multidoc carries the PEM verbatim under `ca: |-`; legacy carries the SAME certificate base64-encoded, because that field base64-decodes on load. A raw PEM in the legacy field is a bug — Talos fails to decode it. Pull an image on the node afterwards to confirm the registry is actually reachable; the render cannot prove trust is established.
+
+Regression anchor: `TestContract_Machine_RegistryTLS_Multidoc_Cozystack`, `TestContract_Machine_RegistryTLS_Legacy_Cozystack`, `TestContract_Machine_RegistryTLS_CA_Multidoc_Cozystack`, `TestContract_Machine_RegistryTLS_CA_Legacy_Cozystack`, `TestContract_Machine_RegistryTLS_MissingFlag_Fails_Cozystack`.
+
+#### B10d. Multiple Layer2 VIPs
+
+```bash
+# values.yaml:
+#   vips:
+#     - { link: bond0, ip: 192.0.2.254 }
+#     - { link: bond1, ip: 203.0.113.254 }
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "Layer2VIPConfig")'
+```
+
+Expected (multidoc): one `Layer2VIPConfig` per `vips` entry, each on its declared link. The legacy schema emits one interface entry with an inline `vip` per entry. `floatingIP`/`vipLink` still work as the single-VIP shorthand and can be combined with `vips`. Any VIP ip that leaks into a link's discovered addresses is stripped from that link. A malformed `vips[].ip` fails the render.
+
+Regression anchor: `TestContract_NetworkMultidoc_MultiVIP_Cozystack`, `TestContract_NetworkMultidoc_MultiVIP_InvalidIP_Cozystack`, `TestContract_NetworkLegacy_MultiVIP_Cozystack`.
+
+#### B10e. Full network topology
+
+Two ways to express topology richer than the discovered primary link. Both need a live-node check on first apply, since the render tests cannot confirm Talos accepts the resulting document set.
+
+Preserve-existing (A) — carry the running node's applied interfaces verbatim:
+
+```bash
+# values.yaml: network: { preserveExisting: true }
+talm template -f nodes/controlplane-0.yaml | yq '.machine.network.interfaces'
+```
+
+Expected: the node's running `machine.network.interfaces`, and no typed per-link documents (`LinkConfig`/`BondConfig`/`VLANConfig`) from the rebuild. With `preserveExisting` off (the default) a node still carrying a legacy interfaces block fails fast as before. Apply to a node whose applied topology is richer than the discovered primary link and confirm the interfaces round-trip unchanged.
+
+`preserveExisting` + a VIP (`floatingIP` or `vips`) layer safely. Because `preserveExisting` skips the per-link rebuild, it also skips the rebuild's VIP address-strip: the VIP still emits as its own `Layer2VIPConfig`, layered on top of the preserved interfaces. That is correct when the preserved `machine.network.interfaces` block does not itself declare the same VIP. If it does, the render fails fast (`VIP "…" also appears in the preserved machine.network.interfaces block`) rather than shipping a VIP declared twice — the operator drops it from one side. Verify: with both set and the VIP absent from the preserved block, `talm template ... | yq 'select(.kind == "Layer2VIPConfig")'` shows the VIP once; put the same VIP inside the preserved interfaces and the render aborts. Regression anchors: `TestContract_NetworkMultidoc_PreserveExisting_WithVIP_Cozystack`, `TestContract_NetworkMultidoc_PreserveExisting_VIPInPreservedBlock_Fails_Cozystack`.
+
+Declarative extraLinks (B) — declare bonds/VLANs/addresses in git:
+
+```bash
+# values.yaml:
+#   network:
+#     extraLinks:
+#       - interface: bond1
+#         bond: { interfaces: [enp3s0, enp4s0], mode: 802.3ad }
+#         addresses: [203.0.113.10/24]
+#       - interface: bond1   # VLAN parented on the bond declared above
+#         vlans: [{ vlanId: 7, addresses: [198.51.100.10/24] }]
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "BondConfig" or .kind == "VLANConfig")'
+```
+
+Expected: one `BondConfig` for bond1 (links, bondMode, address) and one `VLANConfig` `bond1.7` (vlanID 7, parent bond1). A vlans-only entry parents onto an existing link — a discovered link or one declared in another extraLinks entry, as `bond1` is here; a VLAN whose parent is neither fails fast at render. These layer on the discovered topology rather than replacing it.
+
+Regression anchor: `TestContract_NetworkMultidoc_PreserveExisting_Cozystack`, `TestContract_NetworkMultidoc_PreserveExisting_OffStillFails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_Cozystack`.
+
+A declared link is not limited to addresses. A bond requires `mode` and beyond that takes the same tuning the discovery path reconstructs; both an entry and each VLAN child take `mtu` and `routes` — which is what an externally-routed tagged uplink needs:
+
+```bash
+# values.yaml:
+#   network:
+#     extraLinks:
+#       - interface: bond1
+#         mtu: 1400
+#         bond:
+#           interfaces: [enp3s0, enp4s0]
+#           mode: 802.3ad
+#           xmitHashPolicy: layer2+3
+#           lacpRate: slow
+#           miimon: 100
+#         addresses: [203.0.113.10/24]
+#         vlans:
+#           - vlanId: 217
+#             addresses: [198.51.100.10/27]
+#             mtu: 1400
+#             routes:
+#               - gateway: 198.51.100.1
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "BondConfig" or .kind == "VLANConfig")'
+```
+
+Expected: the `BondConfig` carries `bondMode`, `xmitHashPolicy`, `lacpRate`, `miimon` and `mtu`; the `VLANConfig` carries its own `mtu` and a `routes` entry with the gateway. Several inputs Talos would reject on load are refused at render instead: a bond without `mode`, a `vlanId` outside 1-4094, an address with no prefix length, an entry with no `interface`, and a route with no gateway. Omit `destination` for a default route; set it for a specific prefix. Verify on the node that the bond negotiates LACP and the VLAN's default route installs — the render cannot confirm either.
+
+The two halves of this section combine, and that combination has its own trap. Under `preserveExisting` the running interfaces are emitted verbatim while `extraLinks` keeps emitting typed documents, so both can name the same device from two different sources — and Talos does not reject a v1alpha1-vs-document link conflict, it just lets the network controllers arbitrate. Check it on a node whose preserved block names a device discovery does not return:
+
+```bash
+# values.yaml: network: { preserveExisting: true, extraLinks: [{ interface: <a device in the preserved block>, addresses: [203.0.113.10/24] }] }
+talm template -f nodes/controlplane-0.yaml
+```
+
+Expected: the render aborts with `collides with a discovered link`. Point the same entry at a device that is NOT in the preserved block and it renders, emitting the preserved interfaces plus a `LinkConfig` for the new device. Two further refusals share this reasoning: an entry that sets `mtu`/`routes` without declaring a link (no `addresses`, no `bond`) aborts rather than silently emitting nothing, and an address that is also a declared VIP aborts rather than pinning the VIP both statically and via its `Layer2VIPConfig`.
+
+Regression anchor: `TestContract_NetworkMultidoc_ExtraLinks_BondTuning_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_VlanMtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_RouteNoGateway_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_CollidesWithPreserved_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuOnly_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_AddressIsVIP_Fails_Cozystack`.
+
 ## C. Apply (auth path)
 
 This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.

@@ -36,6 +36,13 @@ const (
 	// RefKindDiskSelector is an install/user-volume disk identified by a
 	// selector (size, model, serial, wwid, modalias, type, busPath).
 	RefKindDiskSelector
+	// RefKindLinkCreated is a virtual link this very config creates
+	// (BondConfig/BridgeConfig/VLANConfig/... .name). It is never
+	// validated against the node — the link is not supposed to exist yet.
+	// It is collected so that references to it from OTHER documents in the
+	// same config (VLANConfig.parent, Layer2VIPConfig.link, BondConfig
+	// .links[]) resolve instead of being reported as missing.
+	RefKindLinkCreated
 )
 
 // DiskSelector mirrors the Talos v1alpha1 InstallDiskSelector schema (also
@@ -193,10 +200,15 @@ var multidocHandlers = map[string]multidocHandler{
 	"DHCPv4Config":   handleNameOnly,
 	"DHCPv6Config":   handleNameOnly,
 	"EthernetConfig": handleNameOnly,
-	// WireguardConfig / DummyLinkConfig / LinkAliasConfig describe
-	// virtual links being created. Their .name is the new resource,
-	// not an existing-link reference — intentionally not in the
-	// dispatch table so they don't get a name-based Phase 1 finding.
+	// DummyLinkConfig / LinkAliasConfig describe virtual links being
+	// created. Their .name is the new resource, not an existing-link
+	// reference, so it is recorded as created rather than validated —
+	// that way a VLAN or VIP pointing at one of them in the same config
+	// resolves. WireguardConfig also creates a link but is deliberately
+	// absent here: it belongs to the parallel net-addr walker, and the
+	// two dispatch maps must stay disjoint or a kind gets double-walked.
+	"DummyLinkConfig":  handleCreatorOnly,
+	"LinkAliasConfig":  handleCreatorOnly,
 	"UserVolumeConfig": handleUserVolume,
 }
 
@@ -216,12 +228,32 @@ func handleNameOnly(refs []Ref, doc map[string]any, basePath string) []Ref {
 	return appendNameRef(refs, doc, basePath)
 }
 
+// appendCreatedRef records doc["name"] as a link this config brings into
+// existence, so later references to it resolve.
+func appendCreatedRef(refs []Ref, doc map[string]any, basePath string) []Ref {
+	name, ok := doc["name"].(string)
+	if !ok || name == "" {
+		return refs
+	}
+
+	return append(refs, Ref{Kind: RefKindLinkCreated, Name: name, Source: basePath + ".name"})
+}
+
+// handleCreatorOnly records the doc's own .name as a created link and
+// validates nothing else. Used by the link kinds whose .name is the new
+// resource and which carry no reference to an existing link.
+func handleCreatorOnly(refs []Ref, doc map[string]any, basePath string) []Ref {
+	return appendCreatedRef(refs, doc, basePath)
+}
+
 // handleListOnly emits only the list-valued slaves/ports of the doc,
 // not the doc's own .name. Used for BondConfig (its .name describes a
 // virtual bond being created by the apply; the .links[] members are
 // pre-existing physical NICs that must be present).
 func handleListOnly(listKey string) multidocHandler {
 	return func(refs []Ref, doc map[string]any, basePath string) []Ref {
+		refs = appendCreatedRef(refs, doc, basePath)
+
 		return appendListRefs(refs, doc, listKey, basePath+"."+listKey)
 	}
 }
@@ -232,6 +264,8 @@ func handleListOnly(listKey string) multidocHandler {
 // exist. The YAML key in v1alpha1 is `parent`, not `link`
 // (vlan.go ParentLinkConfig `yaml:"parent"`).
 func handleParentOnly(refs []Ref, doc map[string]any, basePath string) []Ref {
+	refs = appendCreatedRef(refs, doc, basePath)
+
 	parent, ok := doc["parent"].(string)
 	if !ok || parent == "" {
 		return refs

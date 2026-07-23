@@ -561,3 +561,139 @@ func TestValidateRefs_EmptyRefs_NoFindings(t *testing.T) {
 		t.Errorf("ValidateRefs(nil) returned %d findings, want 0", len(findings))
 	}
 }
+
+// A config that declares a virtual link and then references it from
+// another document in the same apply must not be flagged. The bond does
+// not exist on the node yet — this very apply creates it — so the VLAN
+// parented on it and the VIP pinned to it are both legitimate.
+func TestValidateRefs_DeclaredLinkSatisfiesLaterReferences(t *testing.T) {
+	t.Parallel()
+
+	rendered := []byte(`apiVersion: v1alpha1
+kind: BondConfig
+name: bond1
+links:
+  - eth0
+bondMode: 802.3ad
+---
+apiVersion: v1alpha1
+kind: VLANConfig
+name: bond1.7
+vlanID: 7
+parent: bond1
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: "192.0.2.254"
+link: bond1
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: "198.51.100.254"
+link: bond1.7
+`)
+
+	refs, err := applycheck.WalkRefs(rendered)
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	// The node carries only eth0; bond1 and bond1.7 are created by this apply.
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"eth0"}})
+
+	for i := range findings {
+		f := &findings[i]
+		if f.IsBlocker() {
+			t.Errorf("a link declared in this config must satisfy references to it, got blocker: %s (%s)", f.Reason, f.Ref.Source)
+		}
+	}
+}
+
+// The creator-name union must not turn the gate off: a reference to a link
+// that neither exists on the node nor is created by this config still blocks.
+func TestValidateRefs_UndeclaredLinkStillBlocks(t *testing.T) {
+	t.Parallel()
+
+	rendered := []byte(`apiVersion: v1alpha1
+kind: BondConfig
+name: bond1
+links:
+  - eth0
+bondMode: 802.3ad
+---
+apiVersion: v1alpha1
+kind: VLANConfig
+name: typo.7
+vlanID: 7
+parent: bond9
+`)
+
+	refs, err := applycheck.WalkRefs(rendered)
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"eth0"}})
+
+	var found bool
+	for i := range findings {
+		f := &findings[i]
+		if f.IsBlocker() && strings.Contains(f.Ref.Name, "bond9") {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Errorf("a parent that is neither on the node nor created by this config must still block, got %+v", findings)
+	}
+}
+
+// WireguardConfig is deliberately the exception to the created-link union:
+// it belongs to the net-addr walker (which validates peers[].endpoint) and
+// stays out of the link dispatch map, so it does NOT register its .name as
+// a created link. A VLAN or VIP layered on a wireguard link therefore still
+// blocks on first apply. This pins that boundary so the README claim and
+// the code cannot drift.
+func TestValidateRefs_WireguardCreatedLinkDoesNotSatisfyReferences(t *testing.T) {
+	t.Parallel()
+
+	rendered := []byte(`apiVersion: v1alpha1
+kind: WireguardConfig
+name: wg0
+---
+apiVersion: v1alpha1
+kind: VLANConfig
+name: wg0.7
+vlanID: 7
+parent: wg0
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: "192.0.2.254"
+link: wg0
+`)
+
+	refs, err := applycheck.WalkRefs(rendered)
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"eth0"}})
+
+	var parentBlocked, linkBlocked bool
+	for i := range findings {
+		f := &findings[i]
+		if !f.IsBlocker() || !strings.Contains(f.Ref.Name, "wg0") {
+			continue
+		}
+		if strings.HasSuffix(f.Ref.Source, ".parent") {
+			parentBlocked = true
+		}
+		if strings.HasSuffix(f.Ref.Source, ".link") {
+			linkBlocked = true
+		}
+	}
+	if !parentBlocked || !linkBlocked {
+		t.Errorf("a VLAN parent and a VIP link on a wireguard-created link must both still block, got %+v", findings)
+	}
+}
