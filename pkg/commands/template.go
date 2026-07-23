@@ -129,10 +129,10 @@ single MachineConfig and apply it once".`,
 			return WithClientMaintenance(nil, templateFunc(args))
 		}
 
-		if GlobalArgs.SkipVerify {
-			return WithClientSkipVerify(templateFunc(args))
-		}
-
+		// WithClient routes through WithClientSkipVerify when --skip-verify is
+		// set, and also injects node metadata that template `lookup` needs —
+		// so the skip-verify path must go through it, not the bare no-nodes
+		// WithClientSkipVerify directly.
 		return WithClient(templateFunc(args))
 	},
 }
@@ -291,9 +291,11 @@ func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.C
 		return tmpl(ctx, nil)
 	case templateCmdFlags.insecure:
 		return WithClientMaintenance(nil, tmpl)
-	case GlobalArgs.SkipVerify:
-		return WithClientSkipVerify(tmpl)
 	default:
+		// WithClient handles --skip-verify (via WithClientNoNodes routing) and
+		// injects the node metadata template `lookup` needs; the bare no-nodes
+		// WithClientSkipVerify must not be used directly here.
+		//nolint:contextcheck // WithClient may route through WithClientSkipVerify, which owns its signal-rooted context
 		return WithClient(tmpl)
 	}
 }

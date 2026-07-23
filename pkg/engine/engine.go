@@ -26,8 +26,8 @@ import (
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/cozystack/talm/pkg/yamltools"
 	"github.com/hashicorp/go-multierror"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/strvals"
+	"helm.sh/helm/v4/pkg/chart/v2/loader"
+	"helm.sh/helm/v4/pkg/strvals"
 
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
 

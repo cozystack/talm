@@ -16,8 +16,12 @@ package commands
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -27,12 +31,66 @@ import (
 
 	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/global"
 	"github.com/siderolabs/talos/pkg/machinery/client"
+	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 )
 
 // GlobalArgs is the common arguments for the root command.
 //
 //nolint:gochecknoglobals // cobra CLI architecture: persistent flags bind to package-level state shared across all subcommands; refactoring out the global would require threading state through every command's RunE.
 var GlobalArgs global.Args
+
+// SkipVerify, when set via --skip-verify, disables TLS certificate verification
+// while preserving client-certificate authentication. Upstream global.Args has no
+// such field (the cozystack/talos fork added it for siderolabs/talos#12652, which
+// upstream declined); it is reimplemented here so talm can drop the fork and track
+// stock upstream Talos.
+//
+//nolint:gochecknoglobals // cobra CLI architecture: persistent flag binds to package-level state.
+var SkipVerify bool
+
+// errContextNotFound is returned when the requested context is absent from the
+// talosconfig.
+var errContextNotFound = errors.New("context not found in talosconfig")
+
+// signalContext returns a context cancelled on SIGINT/SIGTERM so a --skip-verify
+// client connection can be interrupted cleanly, mirroring talosctl's own wrappers.
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+// skipVerifyTLSConfig builds a TLS config that skips server-certificate
+// verification while preserving client-certificate authentication taken from the
+// talosconfig context.
+func skipVerifyTLSConfig(configContext *clientconfig.Context) (*tls.Config, error) {
+	// InsecureSkipVerify is the whole point of --skip-verify (connect to nodes
+	// whose IP is absent from the cert SANs); client-cert auth is preserved below.
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // intentional: --skip-verify
+	}
+
+	if configContext.Crt == "" || configContext.Key == "" {
+		return tlsConfig, nil
+	}
+
+	crtBytes, err := base64.StdEncoding.DecodeString(configContext.Crt)
+	if err != nil {
+		return nil, errors.Wrap(err, "decoding client certificate from talosconfig context")
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(configContext.Key)
+	if err != nil {
+		return nil, errors.Wrap(err, "decoding client key from talosconfig context")
+	}
+
+	cert, err := tls.X509KeyPair(crtBytes, keyBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "loading client key pair from talosconfig context")
+	}
+
+	tlsConfig.Certificates = []tls.Certificate{cert}
+
+	return tlsConfig, nil
+}
 
 // Config is the package-level configuration populated from Chart.yaml and
 // CLI persistent flags. Mirrors GlobalArgs for project-root-relative path
@@ -84,7 +142,18 @@ var Config struct {
 // WithClientNoNodes wraps common code to initialize Talos client and provide cancellable context.
 //
 // WithClientNoNodes doesn't set any node information on the request context.
+//
+// This is the single choke point every talm-native command funnels through
+// (directly or via WithClient), so routing --skip-verify here restores the
+// coverage the dropped cozystack/talos fork used to provide at the library
+// level for the whole CLI. Wrapped talosctl passthrough commands run upstream
+// RunE code that never reaches this function, so they are handled separately
+// (and cannot honor --skip-verify without the fork — see talosctl_wrapper.go).
 func WithClientNoNodes(action func(context.Context, *client.Client) error, dialOptions ...grpc.DialOption) error {
+	if SkipVerify {
+		return WithClientSkipVerify(action, dialOptions...)
+	}
+
 	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
 	return GlobalArgs.WithClientNoNodes(action, dialOptions...)
 }
@@ -119,22 +188,90 @@ func WithClientMaintenance(enforceFingerprints []string, action func(context.Con
 	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
 }
 
+// skipVerifyClientOptions assembles the client options for a --skip-verify
+// connection. It mirrors upstream global.Args.WithClientNoNodes so the skip
+// path does not silently lose behavior the normal path has: it pins the
+// already-resolved config context (so client.GetConfigContext honors
+// --talosconfig / --context instead of falling back to the default config),
+// forwards caller dial options, threads the --cluster proxy override when set,
+// and selects endpoints from flags or the talosconfig context — all carrying
+// the verification-skipping TLS config built from that context.
+func skipVerifyClientOptions(configContext *clientconfig.Context, tlsConfig *tls.Config, dialOptions []grpc.DialOption) []client.OptionFunc {
+	opts := []client.OptionFunc{
+		client.WithConfigContext(configContext),
+		client.WithTLSConfig(tlsConfig),
+		client.WithDefaultGRPCDialOptions(),
+		// Kept for structural parity with upstream WithClientNoNodes. It is
+		// inert on the skip-verify path — getConn short-circuits on the explicit
+		// TLS config before the SideroV1 interceptor — so it never actually
+		// consumes the keys dir here; skip-verify + Omni SaaS-key auth is not a
+		// real combination.
+		client.WithSideroV1KeysDir(clientconfig.CustomSideroV1KeysDirPath(GlobalArgs.SideroV1KeysDir)),
+	}
+
+	if len(dialOptions) > 0 {
+		opts = append(opts, client.WithGRPCDialOptions(dialOptions...))
+	}
+
+	// Preserve the --cluster proxy header the non-skip path sets, so
+	// `--skip-verify --cluster X` still reaches nodes behind an Omni/Sidero proxy.
+	if GlobalArgs.Cluster != "" {
+		opts = append(opts, client.WithCluster(GlobalArgs.Cluster))
+	}
+
+	if len(GlobalArgs.Endpoints) > 0 {
+		opts = append(opts, client.WithEndpoints(GlobalArgs.Endpoints...))
+	} else if len(configContext.Endpoints) > 0 {
+		opts = append(opts, client.WithEndpoints(configContext.Endpoints...))
+	}
+
+	return opts
+}
+
 // WithClientSkipVerify wraps common code to initialize Talos client with TLS verification disabled
 // but with client certificate authentication preserved.
 // This is useful when connecting to nodes via IP addresses not listed in the server certificate's SANs.
-func WithClientSkipVerify(action func(context.Context, *client.Client) error) error {
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientSkipVerify(action)
-}
+func WithClientSkipVerify(action func(context.Context, *client.Client) error, dialOptions ...grpc.DialOption) error {
+	ctx, stop := signalContext()
+	defer stop()
 
-// WithClientAuto automatically selects the appropriate client wrapper based on GlobalArgs.SkipVerify.
-// If SkipVerify is true, uses WithClientSkipVerify, otherwise uses WithClientNoNodes.
-func WithClientAuto(action func(context.Context, *client.Client) error) error {
-	if GlobalArgs.SkipVerify {
-		return WithClientSkipVerify(action)
+	cfg, err := clientconfig.Open(GlobalArgs.Talosconfig)
+	if err != nil {
+		return errors.Wrapf(err, "opening talosconfig %q", GlobalArgs.Talosconfig)
 	}
 
-	return WithClientNoNodes(action)
+	contextName := GlobalArgs.CmdContext
+	if contextName == "" {
+		contextName = cfg.Context
+	}
+
+	configContext, ok := cfg.Contexts[contextName]
+	if !ok {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(
+			errors.Wrapf(errContextNotFound, "%q", contextName),
+			"verify the context name against `talosctl config contexts`",
+		)
+	}
+
+	tlsConfig, err := skipVerifyTLSConfig(configContext)
+	if err != nil {
+		return err
+	}
+
+	c, err := client.New(ctx, skipVerifyClientOptions(configContext, tlsConfig, dialOptions)...)
+	if err != nil {
+		return errors.Wrap(err, "constructing Talos client")
+	}
+	defer func() { _ = c.Close() }()
+
+	// Deliberately no client.WithNodes here: this is the skip-verify backing
+	// for the no-nodes constructors (WithClientNoNodes, withApplyClientBare),
+	// mirroring upstream where WithClientNoNodes never sets node metadata.
+	// Callers that want nodes (WithClient, the per-node apply loop) inject
+	// them in their own wrapper layer. Injecting here would attach a plural
+	// `nodes` key that apid's director rejects for COSI reads (e.g. rotate-ca).
+	return action(ctx, c)
 }
 
 // Commands is a list of commands published by the package.

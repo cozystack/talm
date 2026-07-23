@@ -25,8 +25,8 @@ import (
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
 	"github.com/siderolabs/talos/pkg/machinery/client"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/chart/v2/loader"
 )
 
 // testEndpoint is the cluster endpoint injected by tests that do not
@@ -111,7 +111,7 @@ func renderChartTemplate(t *testing.T, chartPath string, templateFile string, ta
 		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 	}
 
-	rootValues := chartutil.Values{
+	rootValues := common.Values{
 		"Values":       values,
 		"TalosVersion": tv,
 	}
@@ -171,7 +171,7 @@ func renderChartTemplateWithLookup(t *testing.T, chartPath string, templateFile 
 		values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 	}
 
-	rootValues := chartutil.Values{
+	rootValues := common.Values{
 		"Values":       values,
 		"TalosVersion": tv,
 	}
@@ -455,7 +455,7 @@ func TestLegacyCozystack_NrHugepages(t *testing.T) {
 	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values": values,
 	})
 	if err != nil {
@@ -486,7 +486,7 @@ func TestMultiDocCozystack_NrHugepages(t *testing.T) {
 	values["advertisedSubnets"] = []any{testAdvertisedSubnet}
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1076,7 +1076,7 @@ func TestMultiDocCozystack_BondTopology(t *testing.T) {
 	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1113,7 +1113,7 @@ func TestMultiDocCozystack_VlanOnBondTopology(t *testing.T) {
 	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1147,7 +1147,7 @@ func TestMultiDocGeneric_BondTopology(t *testing.T) {
 	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1180,7 +1180,7 @@ func TestMultiDocGeneric_VlanOnBondTopology(t *testing.T) {
 	values["endpoint"] = testEndpoint
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1944,7 +1944,7 @@ func TestMultiDocFailsWhenVLANHasNoVlanID(t *testing.T) {
 	}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -1998,7 +1998,7 @@ func TestMultiDocFailsWhenVLANHasNoParent(t *testing.T) {
 	}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -2142,7 +2142,7 @@ func TestMultiDocFailsOnLegacyInterfacesInRunningConfig(t *testing.T) {
 	}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -6853,7 +6853,7 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 	maps.Copy(values, overrides)
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -6902,7 +6902,7 @@ func renderCozystackExpectError(t *testing.T, lookup func(string, string, string
 	}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": version,
 	})
@@ -6938,7 +6938,7 @@ func renderGenericExpectError(t *testing.T, lookup func(string, string, string) 
 	}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": version,
 	})
@@ -6966,7 +6966,7 @@ func renderGenericWith(t *testing.T, lookup func(string, string, string) (map[st
 	maps.Copy(values, overrides)
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -7062,7 +7062,7 @@ func TestMultiDocCozystack_EndpointRequired(t *testing.T) {
 	values["endpoint"] = ""
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -7090,7 +7090,7 @@ func TestMultiDocCozystack_InvalidClusterNameOverride(t *testing.T) {
 	values["clusterName"] = "InvalidClusterName"
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -7129,7 +7129,7 @@ func TestMultiDocGeneric_InvalidClusterNameOverride(t *testing.T) {
 	values["clusterName"] = "InvalidClusterName"
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -7204,7 +7204,7 @@ func TestMultiDocCozystack_ShippedDefaultsFailFresh(t *testing.T) {
 
 	eng := helmEngine.Engine{}
 	// Render with chrt.Values exactly as shipped — no test injection.
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       chrt.Values,
 		"TalosVersion": "v1.12",
 	})
@@ -7319,7 +7319,7 @@ func renderLegacyChart(t *testing.T, chartDir, templateName string, lookup func(
 	maps.Copy(values, overrides)
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "",
 	})
@@ -7592,7 +7592,7 @@ func TestMultiDocCozystack_EmptyDiscoveryErrors(t *testing.T) {
 	values["advertisedSubnets"] = []any{}
 
 	eng := helmEngine.Engine{}
-	_, err = eng.Render(chrt, chartutil.Values{
+	_, err = eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})
@@ -7631,7 +7631,7 @@ func TestMultiDocCozystack_WorkerValidSubnetsFallsBackToDiscovery(t *testing.T) 
 	values["advertisedSubnets"] = []any{}
 
 	eng := helmEngine.Engine{}
-	out, err := eng.Render(chrt, chartutil.Values{
+	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
 		"TalosVersion": "v1.12",
 	})

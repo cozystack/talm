@@ -23,15 +23,15 @@ import (
 
 	"github.com/gobwas/glob"
 
-	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v4/pkg/chart/common"
 )
 
 // files is a map of files in a chart that can be accessed from a template.
 type files map[string][]byte
 
 // NewFiles creates a new files from chart files.
-// Given an []*chart.File (the format for files in a chart.Chart), extract a map of files.
-func newFiles(from []*chart.File) files {
+// Given an []*common.File (the format for files in a chart), extract a map of files.
+func newFiles(from []*common.File) files {
 	files := make(map[string][]byte)
 	for _, f := range from {
 		files[f.Name] = f.Data

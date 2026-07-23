@@ -29,8 +29,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v4/pkg/chart/common"
+	chart "helm.sh/helm/v4/pkg/chart/v2"
 )
 
 // Disks is a package-level lookup table consulted by chart templates that
@@ -71,7 +71,7 @@ type Engine struct {
 // access to the values set for its parent. If chart "foo" includes chart "bar",
 // "bar" will not have access to the values for "foo".
 //
-// Values should be prepared with something like `chartutils.ReadValues`.
+// Values should be prepared with something like `common.ReadValues`.
 //
 // Values are passed through the templates according to scope. If the top layer
 // chart includes the chart foo, which includes the chart bar, the values map
@@ -79,7 +79,7 @@ type Engine struct {
 // that section of the values will be passed into the "foo" chart. And if that
 // section contains a value named "bar", that value will be passed on to the
 // bar chart during render time.
-func (e Engine) Render(chrt *chart.Chart, values chartutil.Values) (map[string]string, error) {
+func (e Engine) Render(chrt *chart.Chart, values common.Values) (map[string]string, error) {
 	tmap := allTemplates(chrt, values)
 
 	return e.render(tmap)
@@ -87,7 +87,7 @@ func (e Engine) Render(chrt *chart.Chart, values chartutil.Values) (map[string]s
 
 // Render takes a chart, optional values, and value overrides, and attempts to
 // render the Go templates using the default options.
-func Render(chrt *chart.Chart, values chartutil.Values) (map[string]string, error) {
+func Render(chrt *chart.Chart, values common.Values) (map[string]string, error) {
 	return new(Engine).Render(chrt, values)
 }
 
@@ -96,7 +96,7 @@ type renderable struct {
 	// tpl is the current template.
 	tpl string
 	// vals are the values to be supplied to the template.
-	vals chartutil.Values
+	vals common.Values
 	// namespace prefix to the templates of the current chart
 	basePath string
 }
@@ -394,7 +394,7 @@ func (e Engine) render(tpls map[string]renderable) (_ map[string]string, err err
 		}
 		// At render time, add information about the template that is being rendered.
 		vals := tpls[filename].vals
-		vals["Template"] = chartutil.Values{"Name": filename, "BasePath": tpls[filename].basePath}
+		vals["Template"] = common.Values{"Name": filename, "BasePath": tpls[filename].basePath}
 
 		var buf strings.Builder
 
@@ -498,7 +498,7 @@ func (p byPathLen) Less(i, j int) bool {
 // allTemplates returns all templates for a chart and its dependencies.
 //
 // As it goes, it also prepares the values in a scope-sensitive manner.
-func allTemplates(c *chart.Chart, vals chartutil.Values) map[string]renderable {
+func allTemplates(c *chart.Chart, vals common.Values) map[string]renderable {
 	templates := make(map[string]renderable)
 	recAllTpls(c, templates, vals)
 
@@ -509,7 +509,7 @@ func allTemplates(c *chart.Chart, vals chartutil.Values) map[string]renderable {
 //
 // As it recurses, it also sets the values to be appropriate for the template
 // scope.
-func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.Values) map[string]any {
+func recAllTpls(c *chart.Chart, templates map[string]renderable, vals common.Values) map[string]any {
 	subCharts := make(map[string]any)
 	chartMetaData := struct {
 		chart.Metadata
@@ -522,7 +522,7 @@ func recAllTpls(c *chart.Chart, templates map[string]renderable, vals chartutil.
 		"Files":             newFiles(c.Files),
 		"Release":           vals["Release"],
 		"Capabilities":      vals["Capabilities"],
-		"Values":            make(chartutil.Values),
+		"Values":            make(common.Values),
 		"Subcharts":         subCharts,
 		"Disks":             Disks,
 		helmKeyTalosVersion: vals[helmKeyTalosVersion],
