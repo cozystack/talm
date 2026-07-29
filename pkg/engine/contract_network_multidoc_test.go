@@ -1503,3 +1503,1264 @@ func TestContract_NetworkMultidoc_FloatingIPNotInDiscoveredSubnetFallsBackToGate
 		t.Errorf("expected exactly 1 Layer2VIPConfig (fallback path), got %d:\n%s", got, out)
 	}
 }
+
+// Contract: the vips list emits one Layer2VIPConfig per entry,
+// each bound to its declared link — a control-plane VIP on the primary
+// link and a separate VIP on a storage/secondary link, expressible
+// without hand-editing. floatingIP/vipLink remain the single-VIP
+// shorthand and are pinned by the tests above.
+func TestContract_NetworkMultidoc_MultiVIP_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.0.2.254"},
+			map[string]any{"link": "eth1", "ip": "203.0.113.254"},
+		},
+	})
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 2 {
+		t.Errorf("expected 2 Layer2VIPConfig documents, got %d:\n%s", got, out)
+	}
+	assertContains(t, out, `name: "192.0.2.254"`)
+	assertContains(t, out, "link: eth0")
+	assertContains(t, out, `name: "203.0.113.254"`)
+	assertContains(t, out, "link: eth1")
+}
+
+// Contract: a vips entry with a malformed ip fails the render
+// with a hinted message, the same fail-fast floatingIP gets.
+func TestContract_NetworkMultidoc_MultiVIP_InvalidIP_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "not-an-ip"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a validation error for a malformed vips[].ip")
+	}
+	if !strings.Contains(err.Error(), "not-an-ip") {
+		t.Errorf("error should name the malformed ip, got %v", err)
+	}
+}
+
+// Contract: a vips entry with no link fails fast rather than
+// emitting a Layer2VIPConfig with a null link.
+func TestContract_NetworkMultidoc_MultiVIP_EmptyLink_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"ip": "192.0.2.254"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips entry with no link")
+	}
+	if !strings.Contains(err.Error(), "no link") {
+		t.Errorf("error should explain the missing link, got %v", err)
+	}
+}
+
+// Contract: vips are not control-plane-only — a storage VIP on a
+// secondary link is emitted on a worker node too. This is what
+// distinguishes vips from floatingIP (which is control-plane-only).
+func TestContract_NetworkMultidoc_MultiVIP_WorkerRole_Cozystack(t *testing.T) {
+	out := renderCozystackWorkerWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "203.0.113.254"},
+		},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "203.0.113.254"`)
+	assertContains(t, out, "link: eth1")
+}
+
+// Contract: network.preserveExisting emits the running node's
+// machine.network.interfaces verbatim instead of failing (the default
+// multidoc guard) or rebuilding only the primary link. The typed
+// per-link rebuild is skipped so the two don't conflict.
+func TestContract_NetworkMultidoc_PreserveExisting_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+	})
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "192.168.1.10/24")
+	assertNotContains(t, out, "kind: LinkConfig")
+}
+
+// Contract: preserveExisting on a fresh node with no legacy
+// interfaces block falls through to the normal typed rebuild rather than
+// emitting a network-less config (there is nothing to preserve).
+func TestContract_NetworkMultidoc_PreserveExisting_FreshNode_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+	})
+	assertContains(t, out, "kind: LinkConfig")
+	assertContains(t, out, "192.168.201.10/24")
+}
+
+// Contract: preserveExisting carries the running
+// interfaces verbatim and skips the typed per-link rebuild — including
+// the per-link VIP address-strip. A vips entry still emits its own
+// Layer2VIPConfig, so the VIP layers on top of the preserved block rather
+// than being folded into a LinkConfig. This is correct when the preserved
+// block does not itself declare the VIP; if it inlines the same VIP the
+// operator owns that duplicate. Pins the layering so it cannot regress
+// silently; the live-node interaction is called out in B10e.
+func TestContract_NetworkMultidoc_PreserveExisting_WithVIP_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.0.2.254"},
+		},
+	})
+	// The running interfaces are preserved verbatim.
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "192.168.1.10/24")
+	// The typed per-link rebuild is skipped.
+	assertNotContains(t, out, "kind: LinkConfig")
+	// The vips VIP still layers on as its own Layer2VIPConfig.
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 1 {
+		t.Errorf("expected exactly 1 Layer2VIPConfig layered on the preserved block, got %d:\n%s", got, out)
+	}
+	assertContains(t, out, `name: "192.0.2.254"`)
+	assertContains(t, out, "link: eth0")
+}
+
+// Contract: when a VIP ip is also present inside the preserved
+// interfaces block, preserveExisting would double-declare it (verbatim +
+// Layer2VIPConfig). The render fails fast so the operator drops it from
+// one side. legacyInterfacesLookup's eth0 carries 192.168.1.10/24.
+func TestContract_NetworkMultidoc_PreserveExisting_VIPInPreservedBlock_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.168.1.10"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a VIP that also lives in the preserved interfaces block")
+	}
+	if !strings.Contains(err.Error(), "declared twice") {
+		t.Errorf("error should explain the double-declaration, got %v", err)
+	}
+}
+
+// Contract: the double-declaration guard matches whole ip tokens,
+// not bare substrings — a VIP 192.168.1.1 must NOT trip the guard against a
+// preserved 192.168.1.10/24, so a legitimate VIP still renders.
+func TestContract_NetworkMultidoc_PreserveExisting_VIPSubstringNoFalsePositive_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.168.1.1"},
+		},
+	})
+	assertContains(t, out, "kind: Layer2VIPConfig")
+	assertContains(t, out, `name: "192.168.1.1"`)
+}
+
+// Contract: a vips ip equal to floatingIP (or another vips ip)
+// fails fast — Talos rejects two Layer2VIPConfig documents with the same
+// name (each is named after its ip).
+func TestContract_NetworkMultidoc_MultiVIP_DuplicateIP_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "192.0.2.254",
+		"vipLink":           "eth0",
+		"vips": []any{
+			map[string]any{"link": "eth1", "ip": "192.0.2.254"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vips ip duplicating floatingIP")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error should explain the duplicate ip, got %v", err)
+	}
+}
+
+// Contract: with preserveExisting off (the default) and a
+// running legacy interfaces block, the multidoc renderer still fails
+// fast — the guard is only lifted by the opt-in.
+func TestContract_NetworkMultidoc_PreserveExisting_OffStillFails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+	})
+	if err == nil {
+		t.Fatal("expected the legacy-interfaces guard to fail when preserveExisting is off")
+	}
+}
+
+// Contract: network.extraLinks emits typed documents (BondConfig,
+// LinkConfig, VLANConfig) layered on the discovered topology, so a storage
+// bond and extra VLANs that discovery does not reconstruct can be declared
+// in git instead of forking the template.
+func TestContract_NetworkMultidoc_ExtraLinks_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"enp3s0", "enp4s0"}, "mode": "802.3ad"},
+					"addresses": []any{"203.0.113.10/24"},
+				},
+				// A vlans-only entry whose interface names the bond declared
+				// above as its parent — cross-entry parent resolution.
+				map[string]any{
+					"interface": "bond1",
+					"vlans":     []any{map[string]any{"vlanId": 7, "addresses": []any{"198.51.100.10/24"}}},
+				},
+			},
+		},
+	})
+	// bond1 as a BondConfig with its slaves, mode and address
+	assertContains(t, out, "kind: BondConfig")
+	assertContains(t, out, "name: bond1")
+	assertContains(t, out, "- enp3s0")
+	assertContains(t, out, "- enp4s0")
+	assertContains(t, out, "bondMode: 802.3ad")
+	assertContains(t, out, "203.0.113.10/24")
+	// bond1.7 as a VLANConfig parented on the bond declared above
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "vlanID: 7")
+	assertContains(t, out, "parent: bond1")
+	assertContains(t, out, "198.51.100.10/24")
+	// discovery-reconstructed primary link is still present (extraLinks layer, not replace)
+	assertContains(t, out, "kind: LinkConfig")
+}
+
+// Contract: a vlans-only entry may parent a VLAN onto a
+// discovered link. simpleNicLookup discovers eth0; a VLAN on eth0 is
+// valid because the parent link already exists.
+func TestContract_NetworkMultidoc_ExtraLinks_VlanOnDiscoveredLink_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth0",
+					"vlans":     []any{map[string]any{"vlanId": 100, "addresses": []any{"198.51.100.10/24"}}},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: eth0.100")
+	assertContains(t, out, "vlanID: 100")
+	assertContains(t, out, "parent: eth0")
+	assertContains(t, out, "198.51.100.10/24")
+}
+
+// Contract: a vlans-only entry whose interface names a link that
+// is neither discovered nor declared in extraLinks fails fast — Talos
+// rejects a VLANConfig whose parent link does not exist.
+func TestContract_NetworkMultidoc_ExtraLinks_VlanDanglingParent_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond0",
+					"vlans":     []any{map[string]any{"vlanId": 7, "addresses": []any{"198.51.100.10/24"}}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a VLAN parented on a non-existent link")
+	}
+	if !strings.Contains(err.Error(), "bond0") {
+		t.Errorf("error should name the missing parent, got %v", err)
+	}
+}
+
+// Contract: an extraLinks entry with addresses but neither bond
+// nor vlans emits a plain LinkConfig on that interface.
+func TestContract_NetworkMultidoc_ExtraLinks_PlainLink_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth9", "addresses": []any{"203.0.113.20/24"}},
+			},
+		},
+	})
+	assertContains(t, out, "kind: LinkConfig")
+	assertContains(t, out, "name: eth9")
+	assertContains(t, out, "203.0.113.20/24")
+}
+
+// Contract: a bond extraLinks entry with no interfaces fails
+// fast — Talos rejects a BondConfig with an empty links list, so the
+// preset refuses to emit links: null.
+func TestContract_NetworkMultidoc_ExtraLinks_EmptyBond_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond9", "bond": map[string]any{"mode": "802.3ad"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond extraLinks entry with no interfaces")
+	}
+	if !strings.Contains(err.Error(), "bond9") {
+		t.Errorf("error should name the offending interface, got %v", err)
+	}
+}
+
+// Contract: a vlans entry with no vlanId fails fast — VLANConfig
+// requires vlanID on the wire.
+func TestContract_NetworkMultidoc_ExtraLinks_VLANNoVlanId_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond0", "vlans": []any{map[string]any{"addresses": []any{"198.51.100.10/24"}}}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vlans entry with no vlanId")
+	}
+	if !strings.Contains(err.Error(), "bond0") {
+		t.Errorf("error should name the offending interface, got %v", err)
+	}
+}
+
+// Contract: an extraLinks interface that collides with a
+// discovered link fails fast — two documents with the same kind+name are
+// rejected by Talos on apply. simpleNicLookup discovers eth0.
+func TestContract_NetworkMultidoc_ExtraLinks_CollidesWithDiscovered_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth0", "addresses": []any{"203.0.113.10/24"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks interface colliding with a discovered link")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Errorf("error should explain the collision, got %v", err)
+	}
+}
+
+// Contract: two extraLinks entries with the same interface fail
+// fast — duplicate document name.
+func TestContract_NetworkMultidoc_ExtraLinks_DuplicateInterface_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond9", "bond": map[string]any{"interfaces": []any{"a", "b"}, "mode": "802.3ad"}},
+				map[string]any{"interface": "bond9", "addresses": []any{"203.0.113.10/24"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for two extraLinks entries with the same interface")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Errorf("error should explain the collision, got %v", err)
+	}
+}
+
+// Contract: the generic preset carries its own copy of the vips
+// wiring, so pin the multidoc happy path on it too — a copy-paste
+// divergence from the cozystack blocks would otherwise ship untested.
+func TestContract_NetworkMultidoc_MultiVIP_Generic(t *testing.T) {
+	out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips": []any{
+			map[string]any{"link": "eth0", "ip": "192.0.2.254"},
+			map[string]any{"link": "eth1", "ip": "203.0.113.254"},
+		},
+	})
+	if got := strings.Count(out, "kind: Layer2VIPConfig"); got != 2 {
+		t.Errorf("expected 2 Layer2VIPConfig documents, got %d:\n%s", got, out)
+	}
+	assertContains(t, out, `name: "192.0.2.254"`)
+	assertContains(t, out, "link: eth0")
+	assertContains(t, out, `name: "203.0.113.254"`)
+	assertContains(t, out, "link: eth1")
+}
+
+// Contract: the generic preset carries its own preserveExisting
+// gate, so pin the multidoc happy path — the running node's interfaces are
+// emitted verbatim and the typed per-link rebuild is skipped.
+func TestContract_NetworkMultidoc_PreserveExisting_Generic(t *testing.T) {
+	out := renderGenericWith(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+	})
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "192.168.1.10/24")
+	assertNotContains(t, out, "kind: LinkConfig")
+}
+
+// Contract: an extraLinks bond carries the same tuning knobs the
+// discovery-derived BondConfig already emits, so a declaratively-created
+// bond is not a downgrade from a discovered one.
+func TestContract_NetworkMultidoc_ExtraLinks_BondTuning_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond": map[string]any{
+						"interfaces":     []any{"enp3s0", "enp4s0"},
+						"mode":           "802.3ad",
+						"xmitHashPolicy": "layer2+3",
+						"lacpRate":       "slow",
+						"miimon":         100,
+						"updelay":        200,
+						"downdelay":      300,
+					},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "bondMode: 802.3ad")
+	assertContains(t, out, "xmitHashPolicy: layer2+3")
+	assertContains(t, out, "lacpRate: slow")
+	assertContains(t, out, "miimon: 100")
+	assertContains(t, out, "updelay: 200")
+	assertContains(t, out, "downdelay: 300")
+}
+
+// Contract: mtu and routes are settable on an extraLinks entry, both on a
+// bond and on a plain link. A default route is a routes entry with only a
+// gateway, matching what the discovery path emits.
+func TestContract_NetworkMultidoc_ExtraLinks_MtuAndRoutes_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"203.0.113.20/24"},
+					"mtu":       1400,
+					"routes": []any{
+						map[string]any{"gateway": "203.0.113.1"},
+						map[string]any{"destination": "198.51.100.0/24", "gateway": "203.0.113.2"},
+					},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "mtu: 1400")
+	assertContains(t, out, "gateway: 203.0.113.1")
+	assertContains(t, out, "destination: 198.51.100.0/24")
+	assertContains(t, out, "gateway: 203.0.113.2")
+}
+
+// Contract: a VLAN child carries its own mtu and routes. This is the
+// external-uplink shape: a tagged VLAN on a bond holding the default route.
+func TestContract_NetworkMultidoc_ExtraLinks_VlanMtuAndRoutes_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"enp3s0"}, "mode": "802.3ad"},
+					"vlans": []any{
+						map[string]any{
+							"vlanId":    217,
+							"addresses": []any{"203.0.113.10/27"},
+							"mtu":       1400,
+							"routes":    []any{map[string]any{"gateway": "203.0.113.1"}},
+						},
+					},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "vlanID: 217")
+	assertContains(t, out, "mtu: 1400")
+	assertContains(t, out, "gateway: 203.0.113.1")
+}
+
+// Contract: a routes entry without a gateway fails fast rather than
+// emitting a route document Talos rejects.
+func TestContract_NetworkMultidoc_ExtraLinks_RouteNoGateway_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"203.0.113.20/24"},
+					"routes":    []any{map[string]any{"destination": "198.51.100.0/24"}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a routes entry with no gateway")
+	}
+	if !strings.Contains(err.Error(), "gateway") {
+		t.Errorf("error should explain the missing gateway, got %v", err)
+	}
+}
+
+// Contract: under preserveExisting the typed rebuild is skipped and the
+// running interfaces are emitted verbatim, so an extraLinks entry naming
+// one of those preserved devices would declare it twice from two sources.
+// Talos does not reject a v1alpha1-vs-document link conflict, so the
+// render must.
+func TestContract_NetworkMultidoc_ExtraLinks_CollidesWithPreserved_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"preserveExisting": true,
+			"extraLinks": []any{
+				map[string]any{"interface": "eth0", "addresses": []any{"203.0.113.10/24"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks entry naming a preserved interface")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Errorf("error should explain the collision, got %v", err)
+	}
+}
+
+// Contract: the preserved-name guard must not over-fire — a genuinely new
+// link alongside a preserved block still renders.
+func TestContract_NetworkMultidoc_ExtraLinks_NewLinkWithPreserved_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, legacyInterfacesLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"preserveExisting": true,
+			"extraLinks": []any{
+				map[string]any{"interface": "eth9", "addresses": []any{"203.0.113.10/24"}},
+			},
+		},
+	})
+	assertContains(t, out, "interface: eth0")
+	assertContains(t, out, "kind: LinkConfig")
+	assertContains(t, out, "name: eth9")
+}
+
+// Contract: an entry carrying only mtu (or only routes) declares no link,
+// so it would emit nothing at all. Fail rather than silently no-op.
+func TestContract_NetworkMultidoc_ExtraLinks_MtuOnly_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{map[string]any{"interface": "eth9", "mtu": 9000}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks entry with only mtu")
+	}
+	if !strings.Contains(err.Error(), "eth9") {
+		t.Errorf("error should name the offending interface, got %v", err)
+	}
+}
+
+func TestContract_NetworkMultidoc_ExtraLinks_RoutesOnly_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth8", "routes": []any{map[string]any{"gateway": "203.0.113.1"}}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks entry with only routes")
+	}
+	if !strings.Contains(err.Error(), "eth8") {
+		t.Errorf("error should name the offending interface, got %v", err)
+	}
+}
+
+// Contract: a VIP must not also be declared as a static address on an
+// extraLinks link — the discovered path strips exactly this, so the
+// declarative path refuses it instead of shipping both.
+func TestContract_NetworkMultidoc_ExtraLinks_AddressIsVIP_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips":              []any{map[string]any{"link": "eth9", "ip": "203.0.113.254"}},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth9", "addresses": []any{"203.0.113.254/24"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks address that is also a VIP")
+	}
+	if !strings.Contains(err.Error(), "203.0.113.254") {
+		t.Errorf("error should name the VIP, got %v", err)
+	}
+}
+
+// Contract: the same guard applies to a VLAN child's addresses.
+func TestContract_NetworkMultidoc_ExtraLinks_VlanAddressIsVIP_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"vips":              []any{map[string]any{"link": "bond1.7", "ip": "198.51.100.254"}},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"enp3s0"}, "mode": "802.3ad"},
+					"vlans":     []any{map[string]any{"vlanId": 7, "addresses": []any{"198.51.100.254/24"}}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a VLAN address that is also a VIP")
+	}
+	if !strings.Contains(err.Error(), "198.51.100.254") {
+		t.Errorf("error should name the VIP, got %v", err)
+	}
+}
+
+// Contract: Talos BondConfig.Validate() errors with "bond mode must be
+// specified" when bondMode is absent, so a bond without mode fails at
+// render instead of on the node.
+func TestContract_NetworkMultidoc_ExtraLinks_BondNoMode_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "bond1", "bond": map[string]any{"interfaces": []any{"enp3s0"}}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond with no mode")
+	}
+	if !strings.Contains(err.Error(), "mode") {
+		t.Errorf("error should explain the missing mode, got %v", err)
+	}
+}
+
+// Contract: VLANConfig.Validate() requires vlanID between 1 and 4094.
+func TestContract_NetworkMultidoc_ExtraLinks_VlanIdOutOfRange_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth0", "vlans": []any{map[string]any{"vlanId": 5000}}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a vlanId outside 1-4094")
+	}
+	if !strings.Contains(err.Error(), "4094") {
+		t.Errorf("error should state the valid range, got %v", err)
+	}
+}
+
+// Contract: an address without a prefix length fails Talos at DECODE time
+// (netip.ParsePrefix), before validation. The discovery path filters
+// malformed CIDRs; the declarative path must refuse them.
+func TestContract_NetworkMultidoc_ExtraLinks_AddressNoPrefix_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{"interface": "eth9", "addresses": []any{"203.0.113.10"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an address with no prefix length")
+	}
+	if !strings.Contains(err.Error(), "203.0.113.10") {
+		t.Errorf("error should name the malformed address, got %v", err)
+	}
+}
+
+// Contract: an entry with no interface would emit a document with an empty
+// name, which Talos rejects with "name must be specified".
+func TestContract_NetworkMultidoc_ExtraLinks_NoInterface_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{map[string]any{"addresses": []any{"203.0.113.10/24"}}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks entry with no interface")
+	}
+	if !strings.Contains(err.Error(), "interface") {
+		t.Errorf("error should explain the missing interface, got %v", err)
+	}
+}
+
+// Contract: a preserved interfaces entry selected by deviceSelector has no
+// name resolvable at render time, so the extraLinks collision guard cannot
+// prove the operator is not redeclaring that same device. Refuse the
+// combination rather than let a silent double-declaration through.
+func TestContract_NetworkMultidoc_ExtraLinks_PreservedDeviceSelector_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, legacyDeviceSelectorLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"preserveExisting": true,
+			"extraLinks": []any{
+				map[string]any{"interface": "eth9", "addresses": []any{"203.0.113.10/24"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for extraLinks alongside a deviceSelector-preserved interface")
+	}
+	if !strings.Contains(err.Error(), "deviceSelector") {
+		t.Errorf("error should explain the unresolvable device name, got %v", err)
+	}
+}
+
+// Contract: the same preserved block WITHOUT extraLinks still renders —
+// the guard is about the combination, not about deviceSelector itself.
+func TestContract_NetworkMultidoc_PreservedDeviceSelector_NoExtraLinks_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, legacyDeviceSelectorLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network":           map[string]any{"preserveExisting": true},
+	})
+	assertContains(t, out, "deviceSelector")
+	assertContains(t, out, "192.168.1.10/24")
+}
+
+// Contract: a route gateway is decoded into netip.Addr and a destination
+// into netip.Prefix, so a malformed value fails on the node at decode time
+// with a message that does not name the document. Refuse at render, the
+// same way addresses already are.
+func TestContract_NetworkMultidoc_ExtraLinks_RouteBadGateway_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9", "addresses": []any{"203.0.113.10/24"},
+					"routes": []any{map[string]any{"gateway": "not-an-ip"}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a malformed route gateway")
+	}
+	if !strings.Contains(err.Error(), "not-an-ip") {
+		t.Errorf("error should name the malformed gateway, got %v", err)
+	}
+}
+
+func TestContract_NetworkMultidoc_ExtraLinks_RouteBadDestination_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9", "addresses": []any{"203.0.113.10/24"},
+					"routes": []any{map[string]any{"gateway": "203.0.113.1", "destination": "10.0.0.1"}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a destination that is not a CIDR")
+	}
+	if !strings.Contains(err.Error(), "10.0.0.1") {
+		t.Errorf("error should name the malformed destination, got %v", err)
+	}
+}
+
+// Contract: bondMode is a string enum; an unknown value fails on the node
+// with "unknown bond mode", so it is refused at render.
+func TestContract_NetworkMultidoc_ExtraLinks_BadBondMode_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"enp3s0"}, "mode": "802.3ax"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an unknown bond mode")
+	}
+	if !strings.Contains(err.Error(), "802.3ax") {
+		t.Errorf("error should name the bad mode, got %v", err)
+	}
+}
+
+// Contract: the generic preset renders the extraLinks accept path too.
+// The emission is shared, but the presets differ in defaults, so the
+// happy path is pinned on both.
+func TestContract_NetworkMultidoc_ExtraLinks_Generic(t *testing.T) {
+	out := renderGenericWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"mtu":       1400,
+					"bond": map[string]any{
+						"interfaces": []any{"enp3s0", "enp4s0"},
+						"mode":       "802.3ad",
+						"lacpRate":   "slow",
+					},
+					"addresses": []any{"203.0.113.10/24"},
+					"vlans": []any{
+						map[string]any{
+							"vlanId":    7,
+							"addresses": []any{"198.51.100.10/24"},
+							"routes":    []any{map[string]any{"gateway": "198.51.100.1"}},
+						},
+					},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "kind: BondConfig")
+	assertContains(t, out, "name: bond1")
+	assertContains(t, out, "bondMode: 802.3ad")
+	assertContains(t, out, "lacpRate: slow")
+	assertContains(t, out, "mtu: 1400")
+	assertContains(t, out, "kind: VLANConfig")
+	assertContains(t, out, "name: bond1.7")
+	assertContains(t, out, "gateway: 198.51.100.1")
+}
+
+// === VIP address canonicalisation ===
+
+// Contract: a VIP whose spelling differs from the discovered address is
+// still stripped from LinkConfig.addresses. One IPv6 address has many
+// textual forms; Talos reports the canonical one, while values.yaml
+// carries whatever the operator typed. Comparing the two as raw strings
+// leaves the VIP declared twice — once as a permanent address and once
+// as the Layer2VIPConfig target — which is the leader/follower split the
+// strip exists to prevent.
+func TestContract_NetworkMultidoc_VipStrippedRegardlessOfSpelling(t *testing.T) {
+	out := renderCozystackWith(t, ipv6VipActiveOnLinkLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "2001:0DB8::5",
+	})
+	// The permanent addresses stay.
+	assertContains(t, out, "192.168.201.10/24")
+	assertContains(t, out, "2001:db8::10/64")
+	// The VIP-bearing address must not appear as a static address.
+	assertNotContains(t, out, "2001:db8::5/128")
+	assertContains(t, out, "kind: Layer2VIPConfig")
+}
+
+// Contract: the canonical spelling keeps working — the fix must not
+// trade one direction of the comparison for the other.
+func TestContract_NetworkMultidoc_VipStrippedCanonicalSpelling(t *testing.T) {
+	out := renderCozystackWith(t, ipv6VipActiveOnLinkLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"floatingIP":        "2001:db8::5",
+	})
+	assertNotContains(t, out, "2001:db8::5/128")
+	assertContains(t, out, "kind: Layer2VIPConfig")
+}
+
+// Contract: two spellings of one address are one VIP, so declaring it
+// under floatingIP and again under vips is a duplicate. Both documents
+// would be named after the same address and Talos rejects the pair on
+// apply.
+func TestContract_NetworkMultidoc_VipDuplicateAcrossSpellings_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, ipv6VipActiveOnLinkLookup(), map[string]any{
+		"floatingIP": "2001:0DB8::5",
+		"vips": []any{
+			map[string]any{"ip": "2001:db8::5", "link": "eth1"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for one VIP declared under two spellings")
+	}
+
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error should name the duplicate, got %v", err)
+	}
+}
+
+// Contract: the addresses-vs-VIP guard on extraLinks compares addresses
+// the same way, so a differently-spelled VIP as a static extraLinks
+// address is still refused.
+func TestContract_NetworkMultidoc_ExtraLinksAddressIsVipAcrossSpellings_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"vips": []any{
+			map[string]any{"ip": "2001:db8::5", "link": "eth0"},
+		},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"2001:0DB8::5/64"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for an extraLinks address that is also a declared VIP")
+	}
+
+	if !strings.Contains(err.Error(), "VIP") {
+		t.Errorf("error should explain the VIP collision, got %v", err)
+	}
+}
+
+// === extraLinks numeric and CIDR validation ===
+
+// Contract: the prefix half of a CIDR is validated too. A valid IP with
+// a nonsense prefix (/33 on IPv4, /abc, a bare trailing slash) passes an
+// IP-only check and then fails on the node at decode time, in a message
+// that never names the offending document.
+func TestContract_NetworkMultidoc_ExtraLinksAddressBadPrefix_Fails(t *testing.T) {
+	for _, address := range []string{"203.0.113.10/33", "203.0.113.10/abc", "203.0.113.10/"} {
+		t.Run(address, func(t *testing.T) {
+			err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+				"network": map[string]any{
+					"extraLinks": []any{
+						map[string]any{"interface": "eth9", "addresses": []any{address}},
+					},
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected a fail-fast for address %q", address)
+			}
+
+			if !strings.Contains(err.Error(), "prefix length") {
+				t.Errorf("error should name the bad prefix, got %v", err)
+			}
+		})
+	}
+}
+
+// Contract: a route destination gets the same prefix check as an address.
+func TestContract_NetworkMultidoc_ExtraLinksRouteDestinationBadPrefix_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"203.0.113.10/24"},
+					"routes": []any{
+						map[string]any{"gateway": "203.0.113.1", "destination": "198.51.100.0/foo"},
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a route destination with a bad prefix")
+	}
+
+	if !strings.Contains(err.Error(), "prefix length") {
+		t.Errorf("error should name the bad prefix, got %v", err)
+	}
+}
+
+// Contract: mtu is a uint32 on the wire. A non-integer, a negative, an
+// out-of-range value, and a bare 0 (which the truthiness check would
+// otherwise drop without a word) are all refused at render.
+func TestContract_NetworkMultidoc_ExtraLinksBadMTU_Fails(t *testing.T) {
+	cases := []struct {
+		name string
+		mtu  any
+	}{
+		{"string", "jumbo"},
+		{"negative", -5},
+		{"fractional", 1400.5},
+		{"too-large", 99999},
+		{"zero", 0},
+		{"below-ethernet-minimum", 42},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+				"network": map[string]any{
+					"extraLinks": []any{
+						map[string]any{
+							"interface": "eth9",
+							"addresses": []any{"203.0.113.10/24"},
+							"mtu":       tc.mtu,
+						},
+					},
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected a fail-fast for mtu %v", tc.mtu)
+			}
+
+			if !strings.Contains(err.Error(), "mtu") {
+				t.Errorf("error should name the mtu field, got %v", err)
+			}
+		})
+	}
+}
+
+// Contract: a legitimate jumbo mtu still renders.
+func TestContract_NetworkMultidoc_ExtraLinksJumboMTU_Renders(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"203.0.113.10/24"},
+					"mtu":       9000,
+				},
+			},
+		},
+	})
+	assertContains(t, out, "mtu: 9000")
+}
+
+// Contract: a fractional vlanId passes the range check through int
+// truncation but renders verbatim — both as vlanID and inside the
+// document name (eth9.7.5) — and Talos rejects it at decode. Refuse it
+// at render instead.
+func TestContract_NetworkMultidoc_ExtraLinksFractionalVlanID_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"203.0.113.10/24"},
+					"vlans": []any{
+						map[string]any{"vlanId": 7.5, "addresses": []any{"198.51.100.10/24"}},
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a fractional vlanId")
+	}
+
+	if !strings.Contains(err.Error(), "whole number") {
+		t.Errorf("error should explain the integer requirement, got %v", err)
+	}
+}
+
+// === extraLinks bond slaves ===
+
+// Contract: a link enslaved by a declared bond gets no document of its
+// own. The discovery path drops any link whose spec.slaveKind is set,
+// because a standalone LinkConfig next to the master's links[] entry is
+// a conflicting declaration; on the first apply the bond does not exist
+// yet, so the declarative path has to apply the same filter itself.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveGetsNoOwnDocument(t *testing.T) {
+	out := renderCozystackWith(t, spareNicsLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"eth2", "eth3"}, "mode": "802.3ad"},
+					"addresses": []any{"203.0.113.10/24"},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "kind: BondConfig")
+	assertContains(t, out, "name: bond1")
+	// The slaves appear only under the bond, never as document names.
+	for doc := range strings.SplitSeq(out, "\n---\n") {
+		if !strings.Contains(doc, "kind: LinkConfig") {
+			continue
+		}
+
+		for _, slave := range []string{"name: eth2", "name: eth3"} {
+			if strings.Contains(doc, slave) {
+				t.Errorf("%s is enslaved by bond1 but still got its own LinkConfig:\n%s", slave, doc)
+			}
+		}
+	}
+	// The primary link keeps its document.
+	assertContains(t, out, "name: eth0")
+}
+
+// Contract: enslaving a link that carries addresses, without saying where
+// that addressing goes, fails instead of silently dropping it. Filtering
+// the slave's document would take the node's addressing away, and the
+// render cannot infer whether the operator meant to move it.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveWithAddresses_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, multiNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"eth1"}, "mode": "802.3ad"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond slave carrying the node's addressing")
+	}
+
+	if !strings.Contains(err.Error(), "eth1") {
+		t.Errorf("error should name the slave, got %v", err)
+	}
+}
+
+// Contract: the remediation the guard prescribes actually works. Moving an
+// already-addressed NIC into a bond is the headline reason to reach for
+// extraLinks, so restating its addressing on the bond entry is accepted:
+// the slave loses its document and the bond carries what it used to.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveAddressesMovedOntoBond(t *testing.T) {
+	out := renderCozystackWith(t, multiNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond0",
+					"bond":      map[string]any{"interfaces": []any{"eth0", "eth1"}, "mode": "802.3ad"},
+					"addresses": []any{"192.168.201.10/24", "10.0.0.5/24"},
+					"routes": []any{
+						map[string]any{"gateway": "192.168.201.1"},
+						map[string]any{"gateway": "10.0.0.1", "destination": "10.0.0.0/24"},
+					},
+				},
+			},
+		},
+	})
+	assertContains(t, out, "kind: BondConfig")
+	assertContains(t, out, "name: bond0")
+	assertContains(t, out, "  - address: 192.168.201.10/24")
+	assertContains(t, out, "  - gateway: 192.168.201.1")
+
+	for doc := range strings.SplitSeq(out, "\n---\n") {
+		if !strings.Contains(doc, "kind: LinkConfig") {
+			continue
+		}
+
+		for _, slave := range []string{"name: eth0", "name: eth1"} {
+			if strings.Contains(doc, slave) {
+				t.Errorf("%s is enslaved by bond0 but still got its own LinkConfig:\n%s", slave, doc)
+			}
+		}
+	}
+}
+
+// Contract: the default route rides on the slave's own document, which the
+// filter drops, so a bond over the default-route link must restate it. An
+// entry that moves the addresses but forgets the route fails, naming the
+// gateway to restate.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveDefaultRouteNotMoved_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, multiNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond0",
+					"bond":      map[string]any{"interfaces": []any{"eth0", "eth1"}, "mode": "802.3ad"},
+					"addresses": []any{"192.168.201.10/24"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond over the default-route link with no route restated")
+	}
+
+	if !strings.Contains(err.Error(), "192.168.201.1") {
+		t.Errorf("error should name the gateway to restate, got %v", err)
+	}
+}
+
+// Contract: the default-route check is about a default route, not about
+// the routes list being non-empty. A destination-scoped route leaves the
+// node with no way off its subnet, so it does not satisfy the check.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveScopedRouteIsNotDefault_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, multiNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond0",
+					"bond":      map[string]any{"interfaces": []any{"eth0"}, "mode": "802.3ad"},
+					"addresses": []any{"192.168.201.10/24"},
+					"routes": []any{
+						map[string]any{"gateway": "192.168.201.1", "destination": "172.16.0.0/12"},
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast: a scoped route is not a default route")
+	}
+
+	if !strings.Contains(err.Error(), "destination-less") {
+		t.Errorf("error should ask for a destination-less route, got %v", err)
+	}
+}
+
+// Contract: a slave's static routes are lost with its document just as its
+// addresses are — quieter, because the default path still works and only a
+// subnet goes unreachable. eth1 carries 10.0.0.0/24 via 10.0.0.1.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveStaticRouteNotMoved_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, multiNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"eth1"}, "mode": "802.3ad"},
+					"addresses": []any{"10.0.0.5/24"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond slave whose static route is not restated")
+	}
+
+	if !strings.Contains(err.Error(), "10.0.0.0/24") {
+		t.Errorf("error should name the route to restate, got %v", err)
+	}
+}
+
+// Contract: a slave that another extraLinks entry declares as a link of
+// its own is the same conflicting pair, with both halves written by the
+// operator.
+func TestContract_NetworkMultidoc_ExtraLinksBondSlaveDeclaredElsewhere_Fails(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"network": map[string]any{
+			"extraLinks": []any{
+				map[string]any{
+					"interface": "bond1",
+					"bond":      map[string]any{"interfaces": []any{"eth9"}, "mode": "802.3ad"},
+					"addresses": []any{"203.0.113.10/24"},
+				},
+				map[string]any{
+					"interface": "eth9",
+					"addresses": []any{"198.51.100.10/24"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a bond slave declared as its own link")
+	}
+
+	if !strings.Contains(err.Error(), "eth9") {
+		t.Errorf("error should name the slave, got %v", err)
+	}
+}

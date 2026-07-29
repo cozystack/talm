@@ -174,6 +174,52 @@ func legacyInterfacesLookup() func(string, string, string) (map[string]any, erro
 	}
 }
 
+// legacyMultiInterfaceLookup models a node re-applied on the legacy
+// schema: its running MachineConfig carries two interfaces (eth0, eth1)
+// that the legacy renderer emits verbatim, and the default route leaves
+// via eth0. Used to exercise the vips / vipLink guards against a link
+// already present in that preserved block.
+func legacyMultiInterfaceLookup() func(string, string, string) (map[string]any, error) {
+	machineconfig := map[string]any{
+		"spec": map[string]any{
+			"machine": map[string]any{
+				"network": map[string]any{
+					"interfaces": []any{
+						map[string]any{"interface": "eth0", "addresses": []any{"192.168.1.10/24"}},
+						map[string]any{"interface": "eth1", "addresses": []any{"10.0.0.5/24"}},
+					},
+				},
+			},
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.1.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "machineconfig":
+			if id == "v1alpha1" {
+				return machineconfig, nil
+			}
+		case "routes":
+			return routesList, nil
+		}
+		return map[string]any{}, nil
+	}
+}
+
 // Contract: multi-doc renderer aborts if the running MachineConfig
 // already carries machine.network.interfaces[]. The fail message
 // explains both the why (renderer cannot translate legacy block to
@@ -385,5 +431,31 @@ func TestContract_Errors_MultidocVLANMissingVlanID(t *testing.T) {
 				t.Errorf("error must reference spec.vlan.vlanID (the discovery field), got: %s", msg)
 			}
 		})
+	}
+}
+
+// legacyDeviceSelectorLookup models a running MachineConfig whose
+// interfaces block selects its device by matcher instead of by name, so
+// the device name cannot be resolved at render time.
+func legacyDeviceSelectorLookup() func(string, string, string) (map[string]any, error) {
+	machineconfig := map[string]any{
+		"spec": map[string]any{
+			"machine": map[string]any{
+				"network": map[string]any{
+					"interfaces": []any{
+						map[string]any{
+							"deviceSelector": map[string]any{"busPath": "0000:01:00.0"},
+							"addresses":      []any{"192.168.1.10/24"},
+						},
+					},
+				},
+			},
+		},
+	}
+	return func(resource, _, id string) (map[string]any, error) {
+		if resource == "machineconfig" && id == "v1alpha1" {
+			return machineconfig, nil
+		}
+		return map[string]any{}, nil
 	}
 }
