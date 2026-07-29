@@ -6440,6 +6440,180 @@ func vipActiveOnLinkLookup() func(string, string, string) (map[string]any, error
 	}
 }
 
+// spareNicsLookup is the shape the extraLinks bond example targets: a
+// primary NIC carrying the node's addressing and default route, plus two
+// physically present but unaddressed NICs waiting to be bonded. On the
+// first apply the bond does not exist yet, so discovery still reports
+// the future slaves as ordinary configurable links.
+func spareNicsLookup() func(string, string, string) (map[string]any, error) {
+	nic := func(id string, index int, mac, bus string) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"id": id},
+			"spec": map[string]any{
+				"kind":         "physical",
+				"index":        index,
+				"hardwareAddr": mac,
+				"busPath":      bus,
+			},
+		}
+	}
+	eth0 := nic("eth0", 1, "aa:bb:cc:00:00:01", "pci-0000:00:1f.0")
+	eth2 := nic("eth2", 2, "aa:bb:cc:00:00:02", "pci-0000:00:1f.1")
+	eth3 := nic("eth3", 3, "aa:bb:cc:00:00:03", "pci-0000:00:1f.2")
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.201.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0, eth2, eth3},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.201.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{"dnsServers": []any{"8.8.8.8"}},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			switch id {
+			case "eth0":
+				return eth0, nil
+			case "eth2":
+				return eth2, nil
+			case "eth3":
+				return eth3, nil
+			case "":
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
+// ipv6VipActiveOnLinkLookup is vipActiveOnLinkLookup's dual-stack
+// sibling: eth0 carries the IPv4 default route plus a permanent IPv6
+// address and an active IPv6 VIP. COSI reports addresses in netip's
+// canonical form (2001:db8::5/128), which is what makes it possible
+// for an operator-written spelling of the same address to differ.
+func ipv6VipActiveOnLinkLookup() func(string, string, string) (map[string]any, error) {
+	eth0 := map[string]any{
+		"metadata": map[string]any{"id": "eth0"},
+		"spec": map[string]any{
+			"kind":         "physical",
+			"index":        1,
+			"hardwareAddr": "aa:bb:cc:00:00:01",
+			"busPath":      "pci-0000:00:1f.0",
+		},
+	}
+	routesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{
+				"spec": map[string]any{
+					"dst":         "",
+					"gateway":     "192.168.201.1",
+					"outLinkName": "eth0",
+					"family":      "inet4",
+					"table":       "main",
+				},
+			},
+		},
+	}
+	linksList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items":      []any{eth0},
+	}
+	addressesList := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"items": []any{
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "192.168.201.10/24", "family": "inet4", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "2001:db8::10/64", "family": "inet6", "scope": "global"}},
+			map[string]any{"spec": map[string]any{"linkName": "eth0", "address": "2001:db8::5/128", "family": "inet6", "scope": "global"}},
+		},
+	}
+	nodeDefault := map[string]any{
+		"spec": map[string]any{
+			"addresses": []any{"192.168.201.10/24"},
+		},
+	}
+	resolvers := map[string]any{
+		"spec": map[string]any{
+			"dnsServers": []any{"8.8.8.8"},
+		},
+	}
+
+	return func(resource, _, id string) (map[string]any, error) {
+		switch resource {
+		case "routes":
+			return routesList, nil
+		case "links":
+			if id == "eth0" {
+				return eth0, nil
+			}
+
+			if id == "" {
+				return linksList, nil
+			}
+
+			return map[string]any{}, nil
+		case "addresses":
+			return addressesList, nil
+		case "nodeaddress":
+			if id == "default" {
+				return nodeDefault, nil
+			}
+		case "resolvers":
+			if id == "resolvers" {
+				return resolvers, nil
+			}
+		}
+
+		return map[string]any{}, nil
+	}
+}
+
 // bridgeWithGatewayLookup returns a lookup fixture where a discovered
 // bridge br0 carries the IPv4 default route (typical shape: VMs sit
 // behind br0, the bridge gets the host's address). The renderer
@@ -6861,6 +7035,40 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 		t.Fatalf("render: %v", err)
 	}
 	return out["cozystack/templates/controlplane.yaml"]
+}
+
+// renderCozystackWorkerWith mirrors renderCozystackWith but returns the
+// rendered worker template, for pinning behavior that must also hold on
+// worker nodes (e.g. a vips entry on a storage link).
+func renderCozystackWorkerWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+	t.Helper()
+	origLookup := helmEngine.LookupFunc
+	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
+	helmEngine.LookupFunc = lookup
+
+	chrt, err := loader.LoadDir("../../charts/cozystack")
+	if err != nil {
+		t.Fatalf("load chart: %v", err)
+	}
+
+	values := cloneValues(chrt.Values)
+	if v, _ := values["endpoint"].(string); v == "" {
+		values["endpoint"] = testEndpoint
+	}
+
+	maps.Copy(values, overrides)
+
+	eng := helmEngine.Engine{}
+
+	out, err := eng.Render(chrt, common.Values{
+		"Values":       values,
+		"TalosVersion": "v1.12",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	return out["cozystack/templates/worker.yaml"]
 }
 
 // renderCozystackExpectError mirrors renderCozystackWith but returns

@@ -264,6 +264,7 @@ func (e Engine) initFunMap(tmpl *template.Template) {
 	funcMap["cidrContains"] = cidrContains
 	funcMap["cidrPrefixLen"] = cidrPrefixLen
 	funcMap["ipIsValid"] = ipIsValid
+	funcMap["ipCanonical"] = ipCanonical
 
 	tmpl.Funcs(funcMap)
 }
@@ -312,6 +313,29 @@ func ipIsValid(addrStr string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// ipCanonical returns the canonical text form of an IP literal, and the input
+// verbatim when it does not parse. IPv6 has many spellings for one address
+// (2001:0DB8::5, 2001:db8:0:0:0:0:0:5, 2001:db8::5) and Talos reports
+// discovered addresses in netip's canonical form, so a chart-side comparison
+// between an operator-written VIP and a discovered address has to normalise
+// both sides first or it silently misses a match — leaving the same address
+// declared both as a static address and as a VIP.
+//
+// Unparseable input is returned unchanged rather than erroring, matching the
+// lenient contract of the other net helpers: the callers run over operator
+// values that are validated separately by ipIsValid, and over COSI address
+// entries where a single corrupt row must not crash the render. An
+// unparseable value simply fails to equal anything canonical.
+func ipCanonical(addrStr string) (string, error) {
+	addr, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		//nolint:nilerr // parse-failure deliberately yields the input verbatim, see docstring
+		return addrStr, nil
+	}
+
+	return addr.String(), nil
 }
 
 // cidrContains reports whether the given IP literal falls inside the given

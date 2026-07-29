@@ -14,6 +14,8 @@
 
 package applycheck
 
+import "strings"
+
 // HostSnapshot captures the host-side resource inventory the validator
 // compares declared refs against. Fields are populated from COSI
 // `links` and `disks` reads at apply time; tests construct fakes
@@ -98,6 +100,8 @@ func ValidateRefs(refs []Ref, snapshot HostSnapshot) []Finding {
 		linkSet[name] = struct{}{}
 	}
 
+	unionCreatedLinks(linkSet, refs)
+
 	// Disk-literal validation accepts DevPath (`/dev/sda`) and every
 	// stable Symlink alternative (/dev/disk/by-id/wwn-…, by-path/…,
 	// by-diskseq/…). The recommended Talos pattern is by-id, so the
@@ -123,10 +127,95 @@ func ValidateRefs(refs []Ref, snapshot HostSnapshot) []Finding {
 			findings = appendIfMissing(findings, ref, diskPaths, diskPathList(snapshot.Disks), "disk")
 		case RefKindDiskSelector:
 			findings = appendSelectorFinding(findings, ref, snapshot.Disks)
+		case RefKindLinkCreated:
+			// Nothing to validate: this names a link the apply itself
+			// creates, so it is not expected on the node. Its only job was
+			// to seed linkSet above.
 		}
 	}
 
 	return findings
+}
+
+// unionCreatedLinks adds every link the config brings into existence to
+// linkSet. A config may create virtual links (bond, bridge, VLAN,
+// wireguard, dummy, alias) and reference them from its own other
+// documents in the same apply; those names are legitimate targets even
+// though the node does not carry them yet.
+//
+// A LinkAliasConfig name may end in a %d verb, which Talos expands into
+// one sequential alias per matched link (net0, net1, ...). The literal
+// name is then the one thing that never exists, while the expansions are
+// exactly what other documents reference — so a pattern contributes its
+// prefix instead of its name, and the second pass admits the references
+// that match it.
+func unionCreatedLinks(linkSet map[string]struct{}, refs []Ref) {
+	var aliasPrefixes []string
+
+	for i := range refs {
+		if refs[i].Kind != RefKindLinkCreated {
+			continue
+		}
+
+		if prefix, ok := aliasPatternPrefix(refs[i].Name); ok {
+			aliasPrefixes = append(aliasPrefixes, prefix)
+
+			continue
+		}
+
+		linkSet[refs[i].Name] = struct{}{}
+	}
+
+	if len(aliasPrefixes) == 0 {
+		return
+	}
+
+	for i := range refs {
+		if refs[i].Kind != RefKindLink {
+			continue
+		}
+
+		for _, prefix := range aliasPrefixes {
+			if matchesAliasPattern(refs[i].Name, prefix) {
+				linkSet[refs[i].Name] = struct{}{}
+
+				break
+			}
+		}
+	}
+}
+
+// aliasPatternPrefix reports whether a created-link name is a
+// LinkAliasConfig pattern, and returns the prefix its expansions carry.
+// The accepted shape mirrors machinery's own validation: a non-empty
+// prefix followed by a single trailing %d verb (link_alias.go
+// IsPatternAlias + Validate). Anything else — no verb at all, or a verb
+// machinery rejects — is an ordinary name.
+func aliasPatternPrefix(name string) (string, bool) {
+	prefix, suffix, found := strings.Cut(name, "%")
+	if !found || suffix != "d" || prefix == "" {
+		return "", false
+	}
+
+	return prefix, true
+}
+
+// matchesAliasPattern reports whether a link name is one of the
+// expansions of an alias pattern with the given prefix: the prefix
+// followed by at least one digit and nothing else.
+func matchesAliasPattern(name, prefix string) bool {
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok || rest == "" {
+		return false
+	}
+
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // appendIfMissing appends a blocker finding when ref.Name isn't in present.
