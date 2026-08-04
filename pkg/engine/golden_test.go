@@ -55,12 +55,12 @@ func TestGoldenRender(t *testing.T) {
 		templateFile string
 		talosVersion string
 	}{
-		{"cozystack-controlplane-multidoc", cozystackChartPath, "templates/controlplane.yaml", "v1.12"},
-		{"cozystack-worker-multidoc", cozystackChartPath, "templates/worker.yaml", "v1.12"},
+		{"cozystack-controlplane-multidoc", cozystackChartPath, "templates/controlplane.yaml", "v1.13"},
+		{"cozystack-worker-multidoc", cozystackChartPath, "templates/worker.yaml", "v1.13"},
 		{"cozystack-controlplane-legacy", cozystackChartPath, "templates/controlplane.yaml", "v1.11"},
 		{"cozystack-worker-legacy", cozystackChartPath, "templates/worker.yaml", "v1.11"},
-		{"generic-controlplane-multidoc", genericChartPath, "templates/controlplane.yaml", "v1.12"},
-		{"generic-worker-multidoc", genericChartPath, "templates/worker.yaml", "v1.12"},
+		{"generic-controlplane-multidoc", genericChartPath, "templates/controlplane.yaml", "v1.13"},
+		{"generic-worker-multidoc", genericChartPath, "templates/worker.yaml", "v1.13"},
 		{"generic-controlplane-legacy", genericChartPath, "templates/controlplane.yaml", "v1.11"},
 		{"generic-worker-legacy", genericChartPath, "templates/worker.yaml", "v1.11"},
 	}
