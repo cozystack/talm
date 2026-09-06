@@ -1,0 +1,49 @@
+name: Documentation Validation
+
+# No paths filter, deliberately. A workflow skipped by a paths filter stays in
+# a Pending check, and a merge blocked on a required check that never reports
+# is blocked forever — so a filtered workflow can never be a required check at
+# all. This build is the only thing that sees a relative link or an anchor
+# inside docs/, so it has to be able to block. The cost is well under a minute
+# on a Go-only change.
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # git-revision-date-localized runs in the build below and reads each
+          # page's last commit; a shallow clone has none.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install dependencies
+        run: pip install --requirement requirements-docs.txt
+
+      # The site only builds for real on a push to main, where a failure lands
+      # on the published documentation. Build it here too: relative links and
+      # anchors inside docs/ are checked by this and nothing else.
+      #
+      # --quiet must never be added: --strict fails on the warning COUNT and
+      # --quiet suppresses the warnings before anything counts them, so the two
+      # together report success while checking nothing.
+      - name: Build documentation
+        run: mkdocs build --strict

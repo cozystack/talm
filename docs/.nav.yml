@@ -1,0 +1,22 @@
+# Site navigation. This lives here rather than in mkdocs.yml because
+# awesome-nav owns the nav tree, and only from here can the generated
+# reference/ section expand through its own .nav.yml.
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Initializing a project: getting-started/init.md
+  - Configuration:
+      - Node files: configuration/node-files.md
+      - Endpoints and VIPs: configuration/endpoints-and-vips.md
+      - Talos versions and output format: configuration/talos-versions.md
+      - Templates and values: configuration/templates.md
+      - Encryption: configuration/encryption.md
+  - Operations:
+      - Applying with side-patches: operations/side-patches.md
+      - Apply-time safety gates: operations/safety-gates.md
+      - talosctl-compatible commands: operations/talosctl-commands.md
+      - Upgrading talm: operations/upgrading.md
+  - CLI reference: reference
+  - Cozystack: https://cozystack.io

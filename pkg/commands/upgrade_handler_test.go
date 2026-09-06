@@ -443,26 +443,25 @@ func TestWrapUpgradeCommand_BadReconcileWindow_FailsFastBeforeOriginalRunE(t *te
 	}
 }
 
-// TestReadmePostUpgradeVerify_NoHardcoded90s mirrors
+// TestPostUpgradeVerifyDocs_NoHardcoded90s mirrors
 // TestPostUpgradeVersionMismatchHint_NoHardcoded90s for the
-// operator-facing README. An earlier copy claimed "waits 90s for
-// the node to finish booting"; the window is now operator-tunable
-// via --post-upgrade-reconcile-window, so the README must reference
-// "the configured reconcile window" rather than a literal 90s.
-// Pin the absence of the literal so a future README edit
-// re-introducing it fails this test.
-func TestReadmePostUpgradeVerify_NoHardcoded90s(t *testing.T) {
+// operator-facing documentation. An earlier copy claimed "waits 90s for
+// the node to finish booting"; the window is operator-tunable via
+// --post-upgrade-reconcile-window, so the docs must reference "the
+// configured reconcile window" rather than a literal 90s. Pin the
+// absence of the literal so a future edit re-introducing it fails here.
+func TestPostUpgradeVerifyDocs_NoHardcoded90s(t *testing.T) {
 	t.Parallel()
 
-	readmePath := filepath.Join("..", "..", "README.md")
+	docsPath := filepath.Join("..", "..", "docs", "operations", "safety-gates.md")
 
-	body, err := os.ReadFile(readmePath)
+	body, err := os.ReadFile(docsPath)
 	if err != nil {
-		t.Skipf("README.md not present at %s (likely a vendored source release without the repo layout): %v", readmePath, err)
+		t.Skipf("%s not present (likely a vendored source release without the repo layout): %v", docsPath, err)
 	}
 
 	if strings.Contains(string(body), "waits 90s") {
-		t.Errorf("README.md must not hardcode 'waits 90s' — the post-upgrade reconcile window is operator-tunable via --post-upgrade-reconcile-window; replace with 'the configured reconcile window (default 90s, tune via --post-upgrade-reconcile-window)'")
+		t.Errorf("%s must not hardcode 'waits 90s' — the post-upgrade reconcile window is operator-tunable via --post-upgrade-reconcile-window; replace with 'the configured reconcile window (default 90s, tune via --post-upgrade-reconcile-window)'", docsPath)
 	}
 }
 
