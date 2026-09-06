@@ -101,8 +101,10 @@ func main() {
 // Extracted from Execute so tests can exercise the registration
 // without running cobra's executor. Single-call contract: cobra
 // panics on duplicate flag registration, so production calls this
-// exactly once from Execute; tests must build a fresh
-// *cobra.Command for each invocation.
+// exactly once from Execute. A test must either pass a fresh
+// *cobra.Command or, when it needs rootCmd itself, check first
+// whether the flags are already on it — rootCmd is a package global
+// and survives across tests and across `go test -count=N`.
 func registerRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(
 		&commands.GlobalArgs.Talosconfig,

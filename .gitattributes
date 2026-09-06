@@ -27,3 +27,8 @@ pkg/generated/** linguist-generated
 # not hand-edited. Marking them generated keeps the rendered YAML dumps
 # out of language stats and collapses them in PR diffs by default.
 pkg/engine/testdata/golden/** linguist-generated
+
+# docs/reference/ is rendered from the cobra command tree by
+# `make docs`, not hand-edited. Marking it generated keeps it out of
+# language stats and collapses it in PR diffs by default.
+docs/reference/*.md linguist-generated
