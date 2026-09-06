@@ -29,11 +29,11 @@ talm template [flags]
   -i, --insecure                    template using the insecure (encrypted with no auth) maintenance service
       --kubernetes-version string   desired kubernetes version to run (default "1.36.2")
       --offline                     disable gathering information and lookup functions
-      --set stringArray             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). For IP / CIDR / version literals use --set-string — dots in --set values are interpreted as YAML key nesting.
+      --set stringArray             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
       --set-file stringArray        set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)
       --set-json stringArray        set JSON values on the command line (can specify multiple or separate values with commas: key1=jsonval1,key2=jsonval2)
       --set-literal stringArray     set a literal STRING value on the command line
-      --set-string stringArray      set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Use for IP addresses, CIDR blocks, version strings, or any literal value where dots must NOT be interpreted as YAML key nesting.
+      --set-string stringArray      set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Nothing is type-converted, so the value reaches the template exactly as typed.
       --show-secrets                print values from encrypted value files (*.encrypted.yaml) verbatim in stdout output (default: redacted to ***; never affects -I, which always omits them). Counterpart on apply is --show-secrets-in-drift, which governs the same values in apply's drift preview.
       --talos-version string        the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)
   -t, --template strings            specify templates to render manifest from (can specify multiple)

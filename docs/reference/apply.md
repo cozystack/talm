@@ -42,11 +42,11 @@ talm apply [flags]
   -i, --insecure                                    apply using the insecure (encrypted with no auth) maintenance service
       --kubernetes-version string                   desired kubernetes version to run (default "1.36.2")
   -m, --mode auto, no-reboot, reboot, staged, try   apply config mode (default auto)
-      --set stringArray                             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). For IP / CIDR / version literals use --set-string — dots in --set values are interpreted as YAML key nesting.
+      --set stringArray                             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
       --set-file stringArray                        set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)
       --set-json stringArray                        set JSON values on the command line (can specify multiple or separate values with commas: key1=jsonval1,key2=jsonval2)
       --set-literal stringArray                     set a literal STRING value on the command line
-      --set-string stringArray                      set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Use for IP addresses, CIDR blocks, version strings, or any literal value where dots must NOT be interpreted as YAML key nesting.
+      --set-string stringArray                      set STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Nothing is type-converted, so the value reaches the template exactly as typed.
       --show-secrets-in-drift                       show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers both the Talos bootstrap allowlist (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.
       --skip-drift-preview                          skip the pre-apply diff of on-node vs rendered MachineConfig
       --skip-post-apply-verify                      skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands) (default true)

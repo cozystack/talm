@@ -26,18 +26,21 @@ Querying disks map example:
 
 This returns the system disk device name.
 
-## `--set` vs `--set-string` for IP / version literals
+## `--set` vs `--set-string`
 
-Helm's `--set` parser interprets dots in the right-hand side as YAML key nesting:
-
-```bash
-talm template --set endpoint=10.0.0.1   # parsed as: endpoint: {10: {0: {0: 1}}}
-```
-
-For IP addresses, CIDR blocks, or version strings, use `--set-string` to keep the value verbatim:
+`--set` converts a value that parses as an integer or a boolean into that type:
 
 ```bash
-talm template --set-string endpoint=10.0.0.1   # parsed as: endpoint: "10.0.0.1"
+talm template --set port=8080       # port: 8080     (integer)
+talm template --set enabled=true    # enabled: true  (boolean)
 ```
 
-`talm` warns on stderr when it detects an IP-, CIDR-, or version-shaped value in `--set` and points at `--set-string` as the fix. The warning is non-fatal — rendering proceeds with the (likely-broken) nested map so existing automation does not break. For values containing characters Helm's strvals treats specially (e.g. `=`, `,` inside the value, or content that should be opaque to all parsing), use `--set-literal` — it stores the entire RHS as a verbatim string without any escape interpretation.
+Use `--set-string` where the template or the Talos schema wants a string:
+
+```bash
+talm template --set-string port=8080   # port: "8080"
+```
+
+Dots only nest on the left of the `=`, so `--set a.b=x` sets `a.b` while a dotted value stays whole: `--set endpoint=10.0.0.1` renders `endpoint: "10.0.0.1"`, and IP addresses, CIDR blocks and version strings need no special handling.
+
+For values containing characters Helm's strvals treats specially (e.g. `=`, `,` inside the value, or content that should be opaque to all parsing), use `--set-literal` — it stores the entire RHS as a verbatim string without any escape interpretation.
