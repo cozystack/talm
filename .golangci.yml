@@ -4,7 +4,16 @@ linters:
   default: all
   disable:
     - depguard
+    # exhaustruct: v2.13 ships the v5 rewrite under a new name and keeps
+    # both generations enabled under `default: all`, so disabling one
+    # leaves the other reporting. Both names are needed.
+    #
+    # This pins a floor: `run` on v2.12.2 dies with
+    # `unknown linters: 'exhaustruct_v5'` before it analyses anything
+    # (`config verify` does not catch it). That matches the version this
+    # repository pins in CI, so a local binary has to keep up with it.
     - exhaustruct
+    - exhaustruct_v5
     - gochecknoinits
     - wsl
     - lll
@@ -135,6 +144,13 @@ linters:
           # failed for the same reason. Disable goconst on test files.
           - goconst
         path: _test\.go
+      # pkg/engine/helm is a copy of helm.sh/helm/v4/pkg/engine kept close
+      # to upstream so it can be re-synced. Its doc.go carries upstream's
+      # canonical-import-path comment, which Go ignores in module mode;
+      # rewriting it would buy nothing and add a diff against upstream.
+      - linters:
+          - modernize
+        path: pkg/engine/helm/
 
 formatters:
   enable:

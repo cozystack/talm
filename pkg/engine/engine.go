@@ -935,7 +935,7 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // upstream replace then leaves rendered untouched. Skipping kicks in
 // only on the partial-edit branches below the deep-equal check.
 //
-//nolint:gochecknoglobals,goconst // immutable lookup table consulted by pruneIdenticalKeysAt; init-time literal, never mutated. The second occurrence of each path string is in the docstring above (where it documents the v1alpha1 merge behaviour); making it a const just to satisfy goconst would split documentation from data without runtime benefit.
+//nolint:gochecknoglobals // immutable lookup table consulted by pruneIdenticalKeysAt; init-time literal, never mutated.
 var replaceSemanticPaths = map[string]struct{}{
 	"cluster/network/podSubnets":     {},
 	"cluster/network/serviceSubnets": {},
