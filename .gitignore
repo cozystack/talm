@@ -1,3 +1,6 @@
 talm
 dist/
 .claude/
+
+# MkDocs build output
+/site/

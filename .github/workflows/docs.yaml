@@ -1,0 +1,78 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.in"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a deploy mid-flight: the site is replaced wholesale, so a
+# cancelled run can leave the artifact half-uploaded. Queue instead.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # git-revision-date-localized reads each page's last commit for the
+          # footer date; a shallow clone has no history to read it from.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      # Provisions the Pages site when the repository has none yet, so the
+      # deploy below does not fail on a repository where Pages was never
+      # switched on. Idempotent once it exists. The custom domain is not
+      # expressible here and has to be set in the repository settings.
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
+      - name: Install dependencies
+        run: pip install --requirement requirements-docs.txt
+
+      # --strict fails the build on warnings; the validation block in
+      # mkdocs.yml is what makes a dead anchor, an unrecognized link and a page
+      # missing from the nav warnings at all. Both halves are needed.
+      - name: Build documentation
+        run: mkdocs build --strict
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      # Unlike a gh-pages branch push, this waits on the Pages deployment
+      # itself and fails if it does not converge, so a stalled deploy turns
+      # this job red instead of leaving a stale site behind a green run.
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

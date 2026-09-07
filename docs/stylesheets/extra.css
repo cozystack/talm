@@ -1,0 +1,31 @@
+/* Cozystack brand palette. Both schemes declare `primary: custom` and
+   `accent: custom` in mkdocs.yml, which is what routes them here. */
+:root {
+  --md-primary-fg-color: #3d6ddd;
+  --md-primary-fg-color--light: #5f86e3;
+  --md-primary-fg-color--dark: #243f80;
+  --md-accent-fg-color: #3eaf7c;
+}
+
+/* On the slate background #243f80 is too close to the surface to read as a
+   link, so the scale shifts one step lighter. */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #5f86e3;
+  --md-primary-fg-color--light: #c3d2f4;
+  --md-primary-fg-color--dark: #3d6ddd;
+  --md-accent-fg-color: #3eaf7c;
+}
+
+/* Command names, flags and Talos document kinds run long and are full of
+   hyphens; breaking mid-identifier makes them unreadable in the narrow
+   content column. */
+.md-typeset code {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Rendered machine configs and discovery comments carry meaning in their
+   alignment — let them scroll instead of reflowing. */
+.md-typeset pre > code {
+  overflow-x: auto;
+}

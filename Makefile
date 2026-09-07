@@ -9,3 +9,11 @@ TALOS_VERSION=$(shell  go list -m github.com/siderolabs/talos | awk '{sub(/^v/, 
 
 build:
 	go build -ldflags="-X 'main.Version=$(VERSION)'"
+
+# Rewrite docs/reference/ from the cobra command tree. TestReferenceDocs
+# compares the committed pages against that tree on every `go test ./...`,
+# so run this after adding a command or bumping Talos.
+docs:
+	TALM_UPDATE_DOCS=1 go test . -run TestReferenceDocs
+
+.PHONY: build docs

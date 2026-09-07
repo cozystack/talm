@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+
+site_name: Talm
+site_url: https://talm.cozystack.io
+site_author: Cozystack Authors
+site_description: >-
+  Manage Talos Linux the GitOps way. Talm renders per-node machine configs from
+  Go templates, discovers each node's real disks and interfaces, and applies the
+  result with the flags you already know from talosctl.
+
+repo_name: cozystack/talm
+repo_url: https://github.com/cozystack/talm
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2026 Cozystack Authors
+
+# docs/manual-test-plan.md is an internal QA script, not user documentation.
+# Leaving it out of the nav is not enough: MkDocs would still copy it into the
+# site and index it for search. Patterns follow the gitignore format.
+exclude_docs: |
+  manual-test-plan.md
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+
+  # Brand colours are not in Material's named palettes, so both schemes use
+  # `custom` and take their values from stylesheets/extra.css.
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to auto mode
+
+  font:
+    text: Montserrat
+    code: Roboto Mono
+
+  features:
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+plugins:
+  - search:
+      lang: en
+  # The CLI reference is generated from the cobra command tree, so its page
+  # list changes whenever a command is added — including on a Talos bump, since
+  # talm wraps talosctl's commands. A glob keeps that out of this file.
+  - awesome-nav
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: timeago
+      fallback_to_build_date: true
+  - minify:
+      minify_html: true
+
+# --strict fails the build on WARNINGS, and MkDocs reports a dead anchor, an
+# unrecognized link and a page missing from the nav at INFO — only a broken
+# link to a PAGE warns by default. Raising these three is what makes the CI
+# gate mean what it claims: a cross-reference lost while splitting a page
+# fails the build instead of shipping.
+validation:
+  anchors: warn
+  unrecognized_links: warn
+  nav:
+    omitted_files: warn
+    not_found: warn
+
+use_directory_urls: true
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: cozystack
+      repo: talm
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/cozystack/talm
+      name: GitHub
+    - icon: material/web
+      link: https://cozystack.io
+      name: Cozystack
+  generator: false
+
+extra_css:
+  - stylesheets/extra.css

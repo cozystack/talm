@@ -1,0 +1,6 @@
+# Pages here are generated from the cobra command tree, so the list changes
+# whenever a command is added — including on a Talos bump, since talm wraps
+# talosctl's commands. Match them by glob instead of naming each one.
+nav:
+  - index.md
+  - "*.md"

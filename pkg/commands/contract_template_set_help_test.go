@@ -19,58 +19,72 @@ import (
 	"testing"
 )
 
-// TestTemplateFlag_SetHelpText_MentionsSetString pins the operator-
-// facing UX: `talm template --help` must surface the --set-string
-// escape hatch directly in the --set flag description. Operators
-// hitting the strvals dot-nesting footgun (e.g.
-// `--set endpoint=10.0.0.1` parsed as nested map) check --help
-// before CHANGELOG. The Usage string must name --set-string so the
-// hint lands in front of them.
-func TestTemplateFlag_SetHelpText_MentionsSetString(t *testing.T) {
-	flag := templateCmd.Flags().Lookup("set")
-	if flag == nil {
-		t.Fatal("expected templateCmd to register a --set flag, got nil")
-	}
+// setFlagCommands are the commands that expose the --set family. The help
+// contracts below hold for every one of them, so a flag reworded on one
+// command and not the other is a failure.
+//
+//nolint:gochecknoglobals // immutable lookup table read by the help contract tests.
+var setFlagCommands = map[string]func(name string) string{
+	"template": func(name string) string { return templateCmd.Flags().Lookup(name).Usage },
+	"apply":    func(name string) string { return applyCmd.Flags().Lookup(name).Usage },
+}
 
-	if !strings.Contains(flag.Usage, "--set-string") {
-		t.Errorf("--set Usage must point at --set-string as the escape hatch for IP / version literals; got:\n%s", flag.Usage)
+// TestSetHelpText_PointsAtSetString pins the operator-facing UX: an
+// operator deciding between the two flags reads `--help`, so the --set
+// description has to name --set-string as the alternative.
+func TestSetHelpText_PointsAtSetString(t *testing.T) {
+	t.Parallel()
+
+	for name, usage := range setFlagCommands {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := usage("set"); !strings.Contains(got, "--set-string") {
+				t.Errorf("talm %s --set Usage must name --set-string as the alternative; got:\n%s", name, got)
+			}
+		})
 	}
 }
 
-// TestTemplateFlag_SetStringHelpText_MentionsLiteralStability pins
-// the sibling contract: --set-string Usage must describe its niche
-// (IP / CIDR / version literals — values that must not be type-
-// coerced or dot-nested). Without this, the help text reads as
-// "set STRING values" with no clue when to prefer it over --set.
-func TestTemplateFlag_SetStringHelpText_MentionsLiteralStability(t *testing.T) {
-	flag := templateCmd.Flags().Lookup("set-string")
-	if flag == nil {
-		t.Fatal("expected templateCmd to register a --set-string flag, got nil")
-	}
+// TestSetStringHelpText_ExplainsTypeConversion pins the reason to reach
+// for --set-string. Integers and booleans are the only values --set
+// converts, so "set STRING values" alone leaves an operator with no way
+// to tell when it matters.
+func TestSetStringHelpText_ExplainsTypeConversion(t *testing.T) {
+	t.Parallel()
 
-	// The Usage must surface the literal-stability niche. The
-	// word "literal" is the canonical anchor; the sibling words
-	// (IP / CIDR / version) all describe shapes that need it.
-	usage := strings.ToLower(flag.Usage)
-	if !strings.Contains(usage, "literal") {
-		t.Errorf("--set-string Usage must name the literal-stability use case; got:\n%s", flag.Usage)
+	for name, usage := range setFlagCommands {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := usage("set-string"); !strings.Contains(strings.ToLower(got), "convert") {
+				t.Errorf("talm %s --set-string Usage must say that nothing is type-converted; got:\n%s", name, got)
+			}
+		})
 	}
 }
 
-// TestTemplateFlag_SetStringHelpText_DoesNotOverpromiseHostnames pins
-// the alignment between the --set-string Usage copy and the actual
-// detector in pkg/engine/setvalue_warn.go. The screener matches
-// IPv4 / IPv4 CIDR / semver shapes only — hostnames like
-// `foo.example.com` are NOT flagged, so the Usage must NOT advertise
-// hostname coverage. A previous revision did, which mislead operators
-// into thinking `--set host=foo.example.com` would be screened.
-func TestTemplateFlag_SetStringHelpText_DoesNotOverpromiseHostnames(t *testing.T) {
-	flag := templateCmd.Flags().Lookup("set-string")
-	if flag == nil {
-		t.Fatal("expected templateCmd to register a --set-string flag, got nil")
-	}
+// TestSetHelpText_DoesNotClaimDotNesting keeps a long-standing false
+// claim from coming back. The help text used to tell operators that a
+// dot in a --set value nested it into a map, so that
+// `--set endpoint=10.0.0.1` supposedly rendered
+// {endpoint: {10: {0: {0: 1}}}} and IP literals needed --set-string.
+// strvals stops key scanning at '=', so dots only nest on the left of
+// it and a dotted value stays whole — see
+// TestSetValueDotsNestOnlyInTheKey in pkg/engine, which pins the
+// parser behaviour this text describes.
+func TestSetHelpText_DoesNotClaimDotNesting(t *testing.T) {
+	t.Parallel()
 
-	if strings.Contains(strings.ToLower(flag.Usage), "hostname") {
-		t.Errorf("--set-string Usage must NOT claim hostname coverage — the screener does not detect hostname-shaped values; got:\n%s", flag.Usage)
+	for name, usage := range setFlagCommands {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, flag := range []string{"set", "set-string"} {
+				if got := strings.ToLower(usage(flag)); strings.Contains(got, "nesting") || strings.Contains(got, "nested") {
+					t.Errorf("talm %s --%s Usage must not describe dots in a value as key nesting; got:\n%s", name, flag, got)
+				}
+			}
+		})
 	}
 }

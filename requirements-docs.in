@@ -1,0 +1,20 @@
+# What mkdocs.yml loads. This is the SOURCE; requirements-docs.txt is the
+# compiled lock that CI installs — edit here, then regenerate:
+#
+#   pip-compile --generate-hashes --no-index --output-file=requirements-docs.txt requirements-docs.in
+#
+# The lock exists because pinning only these five leaves the ~35 packages
+# underneath them floating, and one of those owns the output: python-markdown
+# ships the toc slugify that decides every heading anchor on the site, so a
+# release changing it would silently move every deep link.
+
+# MkDocs core
+mkdocs==1.6.1
+
+# Material theme
+mkdocs-material==9.7.7
+
+# Plugins
+mkdocs-awesome-nav==3.3.0
+mkdocs-git-revision-date-localized-plugin==1.5.4
+mkdocs-minify-plugin==0.8.0
