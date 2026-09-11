@@ -50,7 +50,7 @@ Full documentation lives at **[talm.cozystack.io](https://talm.cozystack.io/)**.
 - [Initializing a project](https://talm.cozystack.io/getting-started/init/) — `--image`, `--cluster-endpoint`, `--root`.
 - [Node files](https://talm.cozystack.io/configuration/node-files/) — the modeline, discovery comments, per-node overrides.
 - [Endpoints and VIPs](https://talm.cozystack.io/configuration/endpoints-and-vips/) — `endpoint`, `floatingIP`, `vipLink`.
-- [Talos versions and output format](https://talm.cozystack.io/configuration/talos-versions/) — the v1.12 multi-document split.
+- [Talos versions and output format](https://talm.cozystack.io/configuration/talos-versions/) — which schema a render targets, and the version keys to pin.
 - [Templates and values](https://talm.cozystack.io/configuration/templates/) — `lookup`, `--set` vs `--set-string`.
 - [Encryption](https://talm.cozystack.io/configuration/encryption/) — age-encrypted secrets and user values.
 - [Applying with side-patches](https://talm.cozystack.io/operations/side-patches/) — the `-f` chain.

@@ -648,10 +648,10 @@ parent: bond9
 	}
 }
 
-// A wireguard link is created by the apply, exactly like a bond or a dummy:
-// a wireguard link is one the apply brings into existence, not one the node is
-// expected to already carry. A VLAN parented to it, or a VIP on it, is a
-// config Talos accepts, so neither may block.
+// A wireguard link is one this apply brings into existence, exactly like a bond
+// or a dummy, not a reference to something the node is expected to carry
+// already. Blocking a document that points at it would reject the apply that
+// creates it.
 //
 // WireguardConfig is dispatched by both walkers — the net-addr one validates its
 // peer endpoints — which is safe because the ref side only records the created

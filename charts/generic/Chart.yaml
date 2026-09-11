@@ -12,9 +12,14 @@ templateOptions:
   fileValues: []
   jsonValues: []
   literalValues: []
-  talosVersion: ""
+  # Pin both: an empty key either renders what the node picks (with a warning)
+  # or stops the render on newer contracts. The Kubernetes version is the
+  # default of the pinned Talos line, so a fresh project lands on what that
+  # line ships and a re-sync does not move the control plane. Replace it with
+  # the version your cluster runs.
+  talosVersion: "v1.13"
   withSecrets: "secrets.yaml"
-  kubernetesVersion: ""
+  kubernetesVersion: "v1.36.2"
   full: false
 applyOptions:
   preserve: false
