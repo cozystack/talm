@@ -926,6 +926,7 @@ The Section C entries above smoke the apply pipe end-to-end. This section is the
 | Typoed VLAN parent | Add `VLANConfig{name: ens5.99, parent: ghost0, vlanID: 99}` (YAML key is `parent`, NOT `link` — `vlan.go ParentLinkConfig`) | Blocker on `parent: ghost0`; `name: ens5.99` not flagged (new VLAN) |
 | Typoed bridge slave | Add `BridgeConfig{name: br99, links: [ghost0]}` (YAML key is `links`, NOT `ports` — `bridge.go BridgeLinks`) | Blocker on `ghost0` only; `br99` not flagged |
 | Typoed Layer2VIP link | Set `vipLink: ghost0` in values | Blocker on `link: ghost0` |
+| VIP on a veth end | Add `VethConfig{name: veth0, peer: {name: veth1}}` plus `Layer2VIPConfig{link: veth1}` | No finding — both ends are links the apply creates (Talos v1.14 kind) |
 | Legacy v1.11 interface | `machine.network.interfaces[].interface: eth9999` | Blocker; same hint shape |
 
 #### Disk references

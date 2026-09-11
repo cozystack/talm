@@ -495,3 +495,41 @@ kind: LinkConfig
 		})
 	}
 }
+
+// TestWalkRefs_v1_14_VethCreatesBothEnds pins that a VethConfig seeds both
+// ends of the pair into the created-link set, so a document elsewhere in the
+// same apply may reference either one. Talos v1.14 added the kind; before it
+// was registered the walker ignored it, and a VIP or VLAN pointing at a veth
+// end failed validation as a missing link on a config Talos accepts.
+func TestWalkRefs_v1_14_VethCreatesBothEnds(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: VethConfig
+name: veth0
+peer:
+  name: veth1
+---
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+link: veth1
+ip: 192.0.2.10
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	for _, end := range []string{"veth0", "veth1"} {
+		if _, ok := findRef(refs, applycheck.RefKindLinkCreated, end); !ok {
+			t.Errorf("veth end %q not recorded as a created link, got refs=%+v", end, refs)
+		}
+	}
+
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"ens5"}})
+	for i := range findings {
+		if findings[i].IsBlocker() {
+			t.Errorf("veth-backed VIP blocked the apply: %+v", findings[i])
+		}
+	}
+}

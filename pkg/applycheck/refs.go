@@ -207,8 +207,11 @@ var multidocHandlers = map[string]multidocHandler{
 	// resolves. WireguardConfig also creates a link but is deliberately
 	// absent here: it belongs to the parallel net-addr walker, and the
 	// two dispatch maps must stay disjoint or a kind gets double-walked.
-	"DummyLinkConfig":  handleCreatorOnly,
-	"LinkAliasConfig":  handleCreatorOnly,
+	"DummyLinkConfig": handleCreatorOnly,
+	"LinkAliasConfig": handleCreatorOnly,
+	// A veth pair brings both of its ends into existence (veth.go MetaName
+	// plus VethPeerConfig.name), so both are recorded rather than validated.
+	"VethConfig":       handleVeth,
 	"UserVolumeConfig": handleUserVolume,
 }
 
@@ -244,6 +247,19 @@ func appendCreatedRef(refs []Ref, doc map[string]any, basePath string) []Ref {
 // resource and which carry no reference to an existing link.
 func handleCreatorOnly(refs []Ref, doc map[string]any, basePath string) []Ref {
 	return appendCreatedRef(refs, doc, basePath)
+}
+
+// handleVeth records both ends of a veth pair as links this config creates:
+// the doc's own .name and its .peer.name.
+func handleVeth(refs []Ref, doc map[string]any, basePath string) []Ref {
+	refs = appendCreatedRef(refs, doc, basePath)
+
+	peer, ok := doc["peer"].(map[string]any)
+	if !ok {
+		return refs
+	}
+
+	return appendCreatedRef(refs, peer, basePath+".peer")
 }
 
 // handleListOnly records the doc's own .name as a link this config
