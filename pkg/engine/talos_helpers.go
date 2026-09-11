@@ -50,6 +50,12 @@ func failIfMultiNodes(ctx context.Context, command string) error {
 // forEachResource resolves a resource kind and runs callback for every resource
 // of that kind, on every node named in the context's outgoing metadata.
 //
+// The per-node loop is not unit-tested: resolving the kind goes through
+// client.ResolveResourceKind, which is a concrete method on the Talos client
+// and cannot be substituted. walkNodeResources below carries the per-node body
+// and is tested directly; the loop itself is covered by the multi-node lookup
+// case in the manual test plan.
+//
 // The kind is resolved once, against the first node: a resource definition is
 // cluster-wide, so which node answers does not matter. A per-node lookup failure
 // is handed to the callback rather than returned, which is what lets a caller

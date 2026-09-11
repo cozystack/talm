@@ -2,7 +2,6 @@ module github.com/cozystack/talm
 
 go 1.27.1
 
-// Kubernetes dependencies sharing the same version.
 require (
 	filippo.io/age v1.3.1
 	github.com/BurntSushi/toml v1.6.0

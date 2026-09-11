@@ -1977,7 +1977,13 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			mtype[cosiMetaKeyType] = "unknown"
 		}
 
-		if cluster, ok := cfg["cluster"].(map[string]any); ok {
+		// Blanking a field here is what forces it into the diff, so the node
+		// file pins it instead of inheriting whatever the next render computes.
+		// It only works while the field is still a v1alpha1 one: from the
+		// contract that moved the cluster identity into KubeClusterConfig,
+		// blanking would invent a key the serialized config no longer has, and
+		// the diff would come out as a delete directive against nothing.
+		if cluster, ok := cfg["cluster"].(map[string]any); ok && !versionContract.MultidocKubernetesConfigSupported() {
 			cluster["clusterName"] = ""
 
 			controlPlane, ok := cluster["controlPlane"].(map[string]any)
@@ -2015,40 +2021,152 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		}
 	}
 
-	var targetNode yaml.Node
-
-	err = yaml.Unmarshal(target, &targetNode)
+	buf, err := assembleTargetDocuments(target, talosPatches, extraDocs)
 	if err != nil {
-		return nil, errors.Wrap(err, "unmarshaling target config")
+		return nil, err
 	}
 
-	// Copy comments from source configuration to the final output
+	return buf.Bytes(), nil
+}
+
+// assembleTargetDocuments turns the serialized target into the bytes the render
+// returns: every document preserved in order, with the operator's comments
+// carried over onto the v1alpha1 one, followed by the chart's own documents.
+//
+// A chart document replaces the bundle's document of the same identity rather
+// than joining it. From contract v1.12 the bundle emits typed documents the
+// charts also emit (HostnameConfig is the common one), and Talos rejects a
+// config carrying two documents with the same apiVersion/kind/name.
+func assembleTargetDocuments(target []byte, talosPatches, extraDocs []string) (*bytes.Buffer, error) {
+	// Decode the whole stream: a Talos config is multi-document, and from the
+	// contract that moved Kubernetes settings out of v1alpha1 the generated
+	// bundle puts the certificate authorities, the service-account key, the
+	// kubelet and the control-plane settings in documents of their own.
+	// Unmarshaling into a single node keeps only the first one, which would drop
+	// everything after machine and cluster.
+	targetDocs, err := decodeYAMLDocuments(target)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(targetDocs) == 0 {
+		return nil, errors.New("rendered config is empty")
+	}
+
 	for _, configPatch := range talosPatches {
 		var sourceNode yaml.Node
 
-		err = yaml.Unmarshal([]byte(configPatch), &sourceNode)
-		if err != nil {
+		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
 			return nil, errors.Wrap(err, "unmarshaling source patch for comment propagation")
 		}
 
 		dstPaths := make(map[string]*yaml.Node)
-		yamltools.CopyComments(&sourceNode, &targetNode, "", dstPaths)
-		yamltools.ApplyComments(&targetNode, "", dstPaths)
+		yamltools.CopyComments(&sourceNode, targetDocs[0], "", dstPaths)
+		yamltools.ApplyComments(targetDocs[0], "", dstPaths)
 	}
 
-	buf := &bytes.Buffer{}
-	if err := encodeYAMLNodeIndented(buf, &targetNode); err != nil {
+	extraIdentities, err := documentIdentities(extraDocs)
+	if err != nil {
 		return nil, err
 	}
 
-	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
-	for _, extraDoc := range extraDocs {
-		buf.WriteString("---\n")
-		buf.WriteString(extraDoc)
-		buf.WriteString("\n")
+	buf := &bytes.Buffer{}
+	written := 0
+
+	for _, doc := range targetDocs {
+		if len(doc.Content) > 0 {
+			if _, superseded := extraIdentities[documentIdentityFromNode(doc.Content[0])]; superseded {
+				continue
+			}
+		}
+
+		if written > 0 {
+			buf.WriteString("---\n")
+		}
+
+		if err := encodeYAMLNodeIndented(buf, doc); err != nil {
+			return nil, err
+		}
+
+		written++
 	}
 
-	return buf.Bytes(), nil
+	// Extra documents (UserVolumeConfig and the chart's typed documents) are
+	// emitted verbatim, so operator formatting survives the round-trip.
+	for _, extraDoc := range extraDocs {
+		if written > 0 {
+			buf.WriteString("---\n")
+		}
+
+		buf.WriteString(extraDoc)
+		buf.WriteString("\n")
+
+		written++
+	}
+
+	return buf, nil
+}
+
+// documentIdentities indexes raw YAML documents by apiVersion/kind/name.
+func documentIdentities(docs []string) (map[string]struct{}, error) {
+	identities := make(map[string]struct{}, len(docs))
+
+	for _, doc := range docs {
+		var node yaml.Node
+
+		if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
+			return nil, errors.Wrap(err, "unmarshaling extra document")
+		}
+
+		if len(node.Content) == 0 {
+			continue
+		}
+
+		identity := documentIdentityFromNode(node.Content[0])
+
+		// legacyRootIdentity is the sentinel for a mapping with neither
+		// apiVersion nor kind, which is what the v1alpha1 document itself
+		// returns. Indexing it would make any untyped extra document supersede
+		// machine and cluster, silently emptying the config.
+		if identity == legacyRootIdentity {
+			continue
+		}
+
+		identities[identity] = struct{}{}
+	}
+
+	return identities, nil
+}
+
+// decodeYAMLDocuments splits a YAML stream into one node per document,
+// preserving order. Documents that hold nothing (a trailing separator, a
+// comment-only chunk) are dropped rather than re-emitted as empty ones.
+func decodeYAMLDocuments(data []byte) ([]*yaml.Node, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+
+	var docs []*yaml.Node
+
+	for {
+		var doc yaml.Node
+
+		err := dec.Decode(&doc)
+
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			return nil, errors.Wrap(err, "unmarshaling target config")
+		}
+
+		if len(doc.Content) == 0 {
+			continue
+		}
+
+		docs = append(docs, &doc)
+	}
+
+	return docs, nil
 }
 
 // encodeYAMLNodeIndented writes node to w as 2-space-indented YAML

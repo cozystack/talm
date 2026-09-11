@@ -43,6 +43,7 @@ Upstream stopped registering `--insecure` on `upgrade` in v1.14 (it had been dep
 ## `talm reset` — `--insecure` is gone on Talos v1.14
 
 Upstream dropped `--insecure` from `reset` in v1.14, so `talm reset --insecure` fails with `unknown flag: --insecure`. Resetting a node that has no valid configuration is done from the maintenance side instead: boot the node into a maintenance image and apply a fresh config, rather than resetting over an unauthenticated connection.
+
 ## `talm reset` — META-preserving default
 
 `talm reset` diverges from upstream `talosctl reset` on one default. Upstream defaults to `--wipe-mode=all`, which wipes the Talos META partition along with STATE and EPHEMERAL — the node cannot self-recover and comes up in maintenance mode requiring a full re-apply. Talm instead populates `--system-labels-to-wipe=STATE,EPHEMERAL` when neither `--wipe-mode` nor `--system-labels-to-wipe` was passed, which preserves META so the node rejoins the cluster from its META-stored bootstrap config on the next boot.
