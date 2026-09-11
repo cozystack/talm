@@ -60,3 +60,7 @@ Full documentation lives at **[talm.cozystack.io](https://talm.cozystack.io/)**.
 - [CLI reference](https://talm.cozystack.io/reference/) — commands and flags.
 
 The site is built from `docs/` in this repository; the CLI reference under `docs/reference/` is generated from the command tree.
+
+## License
+
+Apache-2.0, except for two files ported from [siderolabs/talos](https://github.com/siderolabs/talos), which is MPL-2.0: `pkg/engine/talos_helpers.go` and `pkg/commands/talos_client.go` carry Talos code that v1.14 stopped exporting, so they stay under MPL-2.0 and say so in their headers. MPL-2.0 section 3.3 covers distributing the combined work under Apache-2.0.

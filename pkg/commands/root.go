@@ -18,11 +18,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -52,38 +49,6 @@ var SkipVerify bool
 // errContextNotFound is returned when the requested context is absent from the
 // talosconfig.
 var errContextNotFound = errors.New("context not found in talosconfig")
-
-// signalContext returns a context cancelled on SIGINT/SIGTERM, mirroring the
-// wrappers talosctl builds its own clients with.
-//
-// It unregisters the handler on the first signal, so a second Ctrl+C kills the
-// process outright. signal.NotifyContext would keep the registration, and the
-// second signal would land in a full channel and be discarded, leaving a stuck
-// call with no way out from the keyboard.
-//
-// Follows siderolabs/talos pkg/cli/context.go, which is licensed under MPL-2.0:
-// https://github.com/siderolabs/talos/blob/v1.14.0/pkg/cli/context.go
-func signalContext() (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		select {
-		case <-sigCh:
-			signal.Stop(sigCh)
-			fmt.Fprintln(os.Stderr, "Signal received, aborting, press Ctrl+C once again to abort immediately...")
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	return ctx, func() {
-		signal.Stop(sigCh)
-		cancel()
-	}
-}
 
 // skipVerifyTLSConfig builds a TLS config that skips server-certificate
 // verification while preserving client-certificate authentication taken from the
@@ -181,48 +146,7 @@ func WithClientNoNodes(action func(context.Context, *client.Client) error, dialO
 		return WithClientSkipVerify(action, dialOptions...)
 	}
 
-	ctx, stop := signalContext()
-	defer stop()
-
-	// Built on pkg/machinery/client rather than the talosctl wrapper: Talos
-	// v1.14 replaced that wrapper with a ClientFactory which refuses to
-	// construct without nodes, which is the one thing this function allows.
-	//
-	// The option set follows siderolabs/talos
-	// cmd/talosctl/pkg/talos/global/client.go (MPL-2.0):
-	// https://github.com/siderolabs/talos/blob/v1.13.7/cmd/talosctl/pkg/talos/global/client.go
-	cfg, err := clientconfig.Open(GlobalArgs.Talosconfig)
-	if err != nil {
-		return errors.Wrapf(err, "opening talosconfig %q", GlobalArgs.Talosconfig)
-	}
-
-	opts := []client.OptionFunc{
-		client.WithConfig(cfg),
-		client.WithDefaultGRPCDialOptions(),
-		client.WithGRPCDialOptions(dialOptions...),
-		client.WithSideroV1KeysDir(clientconfig.CustomSideroV1KeysDirPath(GlobalArgs.SideroV1KeysDir)),
-	}
-
-	if GlobalArgs.CmdContext != "" {
-		opts = append(opts, client.WithContextName(GlobalArgs.CmdContext))
-	}
-
-	if len(GlobalArgs.Endpoints) > 0 {
-		opts = append(opts, client.WithEndpoints(GlobalArgs.Endpoints...))
-	}
-
-	if GlobalArgs.Cluster != "" {
-		opts = append(opts, client.WithCluster(GlobalArgs.Cluster))
-	}
-
-	c, err := client.New(ctx, opts...)
-	if err != nil {
-		return errors.Wrap(err, "constructing Talos client")
-	}
-
-	defer func() { _ = c.Close() }()
-
-	return action(ctx, c)
+	return newClientNoNodes(action, dialOptions...)
 }
 
 // withNodesMetadata attaches the plural "nodes" key to the request context.
@@ -261,38 +185,6 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 		},
 		dialOptions...,
 	)
-}
-
-// WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).
-//
-// One client spans every node in GlobalArgs.Nodes, as the talosctl wrapper did
-// before v1.14 hid it behind a per-node ClientFactory; callers that need a
-// single-endpoint client narrow the list themselves (openClientPerNodeMaintenance).
-// GlobalArgs.Nodes is read synchronously because that narrowing restores the
-// saved list as soon as action returns.
-//
-// Follows the same upstream file as WithClientNoNodes above (MPL-2.0).
-func WithClientMaintenance(enforceFingerprints []string, action func(context.Context, *client.Client) error) error {
-	ctx, stop := signalContext()
-	defer stop()
-
-	nodes := GlobalArgs.Nodes
-
-	c, err := client.New(ctx,
-		client.WithDefaultGRPCDialOptions(),
-		// Taken for the insecure TLS config and the fingerprint pinning. Its node
-		// argument is inert here: options are applied in order, and WithEndpoints
-		// below overwrites the single endpoint it sets.
-		client.WithMaintenanceMode("", enforceFingerprints),
-		client.WithEndpoints(nodes...),
-	)
-	if err != nil {
-		return errors.Wrap(err, "constructing maintenance client")
-	}
-
-	defer func() { _ = c.Close() }()
-
-	return action(ctx, c)
 }
 
 // skipVerifyClientOptions assembles the client options for a --skip-verify

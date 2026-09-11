@@ -141,6 +141,9 @@ func TestWithClientNoNodes_UsesContextEndpointsWithoutNodes(t *testing.T) {
 // contract: a signal cancels the context the client call runs under. The second
 // half (a second Ctrl+C killing the process) follows from unregistering the
 // handler, which Go's default disposition then handles.
+//
+// The raise is process-scope, so this test must not run in parallel and the
+// package must not gain a second test that installs its own SIGTERM handler.
 func TestSignalContext_CancelsOnSignal(t *testing.T) {
 	ctx, stop := signalContext()
 	defer stop()
