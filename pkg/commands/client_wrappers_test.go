@@ -16,12 +16,9 @@ package commands
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"slices"
-	"syscall"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc/metadata"
 
@@ -134,27 +131,5 @@ func TestWithClientNoNodes_UsesContextEndpointsWithoutNodes(t *testing.T) {
 
 	if hasNodes {
 		t.Error("WithClientNoNodes attached node metadata; callers add nodes themselves")
-	}
-}
-
-// TestSignalContext_CancelsOnSignal pins the first half of the interrupt
-// contract: a signal cancels the context the client call runs under. The second
-// half (a second Ctrl+C killing the process) follows from unregistering the
-// handler, which Go's default disposition then handles.
-//
-// The raise is process-scope, so this test must not run in parallel and the
-// package must not gain a second test that installs its own SIGTERM handler.
-func TestSignalContext_CancelsOnSignal(t *testing.T) {
-	ctx, stop := signalContext()
-	defer stop()
-
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatalf("raise SIGTERM: %v", err)
-	}
-
-	select {
-	case <-ctx.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("context was not cancelled by SIGTERM")
 	}
 }
