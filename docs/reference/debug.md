@@ -3,7 +3,7 @@
 Run a debug container from an image archive or reference
 
 ```
-talm debug <image-tar-path|image ref> [args] [flags]
+talm debug [<image-tar-path|image ref>] [flags]
 ```
 
 ## Examples

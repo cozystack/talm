@@ -19,9 +19,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -51,12 +49,6 @@ var SkipVerify bool
 // errContextNotFound is returned when the requested context is absent from the
 // talosconfig.
 var errContextNotFound = errors.New("context not found in talosconfig")
-
-// signalContext returns a context cancelled on SIGINT/SIGTERM so a --skip-verify
-// client connection can be interrupted cleanly, mirroring talosctl's own wrappers.
-func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-}
 
 // skipVerifyTLSConfig builds a TLS config that skips server-certificate
 // verification while preserving client-certificate authentication taken from the
@@ -154,8 +146,21 @@ func WithClientNoNodes(action func(context.Context, *client.Client) error, dialO
 		return WithClientSkipVerify(action, dialOptions...)
 	}
 
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientNoNodes(action, dialOptions...)
+	return newClientNoNodes(action, dialOptions...)
+}
+
+// withNodesMetadata attaches the plural "nodes" key to the request context.
+//
+// Upstream deprecated client.WithNodes in favor of WithNode plus client-side
+// multiplexing, but the plural key is what forEachResource and failIfMultiNodes
+// read (pkg/engine/talos_helpers.go); with only the singular key a template
+// `lookup` resolves against an empty target and fails at the RPC. Migrating
+// means moving those two off the metadata, so the deprecated call is kept here
+// as the single place that has to change.
+//
+//nolint:staticcheck // SA1019: see above — the plural key is load-bearing for template lookups.
+func withNodesMetadata(ctx context.Context, nodes ...string) context.Context {
+	return client.WithNodes(ctx, nodes...)
 }
 
 // WithClient builds upon WithClientNoNodes to provide set of nodes on request context based on config & flags.
@@ -174,18 +179,12 @@ func WithClient(action func(context.Context, *client.Client) error, dialOptions 
 				GlobalArgs.Nodes = configContext.Nodes
 			}
 
-			ctx = client.WithNodes(ctx, GlobalArgs.Nodes...)
+			ctx = withNodesMetadata(ctx, GlobalArgs.Nodes...)
 
 			return action(ctx, cli)
 		},
 		dialOptions...,
 	)
-}
-
-// WithClientMaintenance wraps common code to initialize Talos client in maintenance (insecure mode).
-func WithClientMaintenance(enforceFingerprints []string, action func(context.Context, *client.Client) error) error {
-	//nolint:wrapcheck // thin pass-through to talos global.Args; error already carries Talos context
-	return GlobalArgs.WithClientMaintenance(enforceFingerprints, action)
 }
 
 // skipVerifyClientOptions assembles the client options for a --skip-verify

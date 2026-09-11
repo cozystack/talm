@@ -115,7 +115,7 @@ func TestClassifyLookupError_Resource_InvalidArgument(t *testing.T) {
 	}
 }
 
-// Contract: NotFound from the helpers.ForEachResource return value
+// Contract: NotFound from the forEachResource return value
 // (ResolveResourceKind couldn't find the kind in the target Talos
 // version) classifies as Resource, NOT Unknown. The per-node
 // callback filters NotFound for missing instances, so any NotFound

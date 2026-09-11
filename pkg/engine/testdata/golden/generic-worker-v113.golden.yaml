@@ -1,0 +1,45 @@
+
+machine:
+  type: worker
+  kubelet:
+    nodeIP:
+      validSubnets:
+        - 192.168.1.0/24
+  install:
+    
+    # -- Discovered disks:
+    disk: "/dev/sda"
+
+cluster:
+  network:
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/16
+  clusterName: "generic"
+  controlPlane:
+    endpoint: "https://talm-test.invalid:6443"
+# -- Discovered interfaces:
+# eth0:
+#   hardwareAddr:aa:bb:cc:00:00:01
+#   busPath: pci-0000:00:1f.0
+#   driver: 
+#   vendor: 
+#   product: )
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: "talos-23c56"
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: "8.8.8.8"
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: eth0
+addresses:
+  - address: 192.168.201.10/24
+routes:
+  - gateway: 192.168.201.1

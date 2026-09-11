@@ -29,16 +29,17 @@ import (
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	"helm.sh/helm/v4/pkg/strvals"
 
-	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
-
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/bundle"
+	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/siderolabs/talos/pkg/machinery/config/configpatcher"
+	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // Options encapsulates all parameters necessary for rendering.
@@ -159,8 +160,8 @@ func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.
 
 	// Updating parameters after applying patches
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
-	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
-	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+	clusterName := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterName()
+	clusterEndpoint := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterEndpoint()
 
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
@@ -193,20 +194,53 @@ func FullConfigProcess(opts Options, patches []string) (*bundle.Bundle, machine.
 	return configBundle, machineType, nil
 }
 
+// renderContract resolves the contract a render targets. An unset talosVersion
+// means the version of Talos this binary was built against, which is what
+// machinery defaults to on its own.
+func renderContract(talosVersion string) (*config.VersionContract, error) {
+	if talosVersion == "" {
+		return config.TalosVersionCurrent, nil
+	}
+
+	contract, err := config.ParseContractFromVersion(talosVersion)
+	if err != nil {
+		return nil, errors.Wrap(err, "invalid talos-version")
+	}
+
+	return contract, nil
+}
+
+// kubeVersion returns the Kubernetes version (without the leading "v") for the
+// config bundle, falling back to the version this binary's machinery was built
+// against when unset.
+//
+// Talos v1.14's config/generate errors on an empty version, where earlier
+// machinery emitted no image fields at all and left every component to the node's
+// own default. The fallback exists to satisfy the generator; stripDefaultedImages
+// then removes what it produced, so an unpinned project keeps the earlier
+// behaviour rather than silently adopting this binary's Kubernetes version.
+func kubeVersion(v string) string {
+	if v == "" {
+		v = constants.DefaultKubernetesVersion
+	}
+
+	return strings.TrimPrefix(v, "v")
+}
+
 // InitializeConfigBundle initializes a Talos configuration bundle from opts.
 //
 //nolint:gocritic // hugeParam: Options is the package's public facing configuration carrier; converting this to a pointer would propagate the change across every caller in pkg/commands and break the API for external consumers.
 func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 	genOptions := []generate.Option{}
 
-	if opts.TalosVersion != "" {
-		versionContract, err := config.ParseContractFromVersion(opts.TalosVersion)
-		if err != nil {
-			return nil, errors.Wrap(err, "invalid talos-version")
-		}
-
-		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
+	versionContract, err := renderContract(opts.TalosVersion)
+	if err != nil {
+		return nil, err
 	}
+
+	// Safe to pass unconditionally: an unset version resolves to the typed nil
+	// machinery uses for "current", which is also what the generator defaults to.
+	genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 
 	if opts.WithSecrets != "" {
 		secretsBundle, err := secrets.LoadBundle(opts.WithSecrets)
@@ -222,7 +256,7 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 			&bundle.InputOptions{
 				ClusterName: opts.ClusterName,
 				Endpoint:    opts.Endpoint,
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -238,13 +272,31 @@ func InitializeConfigBundle(opts Options) (*bundle.Bundle, error) {
 }
 
 // SerializeConfiguration serializes the configuration bundle for machineType.
-func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Type) ([]byte, error) {
-	out, err := configBundle.Serialize(encoder.CommentsDisabled, machineType)
+//
+// talosVersion and kubernetesVersion must be the ones the bundle was built with.
+// They decide whether the component images the generator produced are kept, and
+// passing a different pair silently strips images out of documents that require
+// one, yielding non-empty bytes the node then rejects.
+func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Type, talosVersion, kubernetesVersion string) ([]byte, error) {
+	versionContract, err := renderContract(talosVersion)
 	if err != nil {
-		return nil, errors.Wrap(err, "serializing config bundle")
+		return nil, err
 	}
 
-	return out, nil
+	// The direct-patch apply path comes through here rather than through the
+	// render, so it needs both the warning and the conflict check of its own.
+	warnUnpinnedKubernetesVersion(os.Stderr, versionContract, kubernetesVersion)
+
+	serialized, err := serializeBundle(configBundle, machineType, versionContract, kubernetesVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := checkSupersededFields(serialized, talosVersion); err != nil {
+		return nil, err
+	}
+
+	return serialized, nil
 }
 
 // MergeFileAsPatch overlays the YAML body of patchFile onto rendered using
@@ -1404,6 +1456,10 @@ const (
 	// cosiKindList is the COSI Kind value emitted when newLookupFunction
 	// wraps multi-item lookups into a List envelope for template iteration.
 	cosiKindList = "List"
+	// imageKey is the document key holding a Kubernetes component's image, both
+	// in v1alpha1 and in the typed documents that replaced it.
+	imageKey = "image"
+
 	// k8sKeyAPIVersion is the standard Kubernetes/COSI document key
 	// used as part of the (apiVersion, kind, name) identity tuple.
 	k8sKeyAPIVersion = "apiVersion"
@@ -1595,7 +1651,7 @@ func Render(ctx context.Context, c *client.Client, opts Options) ([]byte, error)
 			cmdName = cmdNameTalm
 		}
 
-		err := helpers.FailIfMultiNodes(ctx, cmdName)
+		err := failIfMultiNodes(ctx, cmdName)
 		if err != nil {
 			return nil, errors.Wrap(err, "checking node selector")
 		}
@@ -1859,14 +1915,14 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	// Generate options for the configuration based on the provided flags
 	genOptions := []generate.Option{}
 
-	if opts.TalosVersion != "" {
-		versionContract, err := config.ParseContractFromVersion(opts.TalosVersion)
-		if err != nil {
-			return nil, errors.Wrap(err, "invalid talos-version")
-		}
-
-		genOptions = append(genOptions, generate.WithVersionContract(versionContract))
+	versionContract, err := renderContract(opts.TalosVersion)
+	if err != nil {
+		return nil, err
 	}
+
+	// Safe to pass unconditionally: an unset version resolves to the typed nil
+	// machinery uses for "current", which is also what the generator defaults to.
+	genOptions = append(genOptions, generate.WithVersionContract(versionContract))
 
 	if opts.WithSecrets != "" {
 		secretsBundle, err := secrets.LoadBundle(opts.WithSecrets)
@@ -1880,7 +1936,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	configBundleOpts := []bundle.Option{
 		bundle.WithInputOptions(
 			&bundle.InputOptions{
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1912,8 +1968,8 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	}
 
 	machineType := configBundle.ControlPlaneCfg.Machine().Type()
-	clusterName := configBundle.ControlPlaneCfg.Cluster().Name()
-	clusterEndpoint := configBundle.ControlPlaneCfg.Cluster().Endpoint()
+	clusterName := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterName()
+	clusterEndpoint := configBundle.ControlPlaneCfg.K8sClusterConfig().ClusterEndpoint()
 
 	if machineType == machine.TypeUnknown {
 		machineType = machine.TypeWorker
@@ -1929,7 +1985,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			&bundle.InputOptions{
 				ClusterName: clusterName,
 				Endpoint:    clusterEndpoint.String(),
-				KubeVersion: strings.TrimPrefix(opts.KubernetesVersion, "v"),
+				KubeVersion: kubeVersion(opts.KubernetesVersion),
 				GenOptions:  genOptions,
 			},
 		),
@@ -1943,7 +1999,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 
 	var configOrigin, configFull []byte
 	if !opts.Full {
-		configOrigin, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
+		configOrigin, err = serializeBundle(configBundle, machineType, versionContract, opts.KubernetesVersion)
 		if err != nil {
 			return nil, errors.Wrap(err, "serializing original config bundle")
 		}
@@ -1960,7 +2016,13 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 			mtype[cosiMetaKeyType] = "unknown"
 		}
 
-		if cluster, ok := cfg["cluster"].(map[string]any); ok {
+		// Blanking a field here is what forces it into the diff, so the node
+		// file pins it instead of inheriting whatever the next render computes.
+		// It only works while the field is still a v1alpha1 one: from the
+		// contract that moved the cluster identity into KubeClusterConfig,
+		// blanking would invent a key the serialized config no longer has, and
+		// the diff would come out as a delete directive against nothing.
+		if cluster, ok := cfg["cluster"].(map[string]any); ok && !versionContract.MultidocKubernetesConfigSupported() {
 			cluster["clusterName"] = ""
 
 			controlPlane, ok := cluster["controlPlane"].(map[string]any)
@@ -1983,9 +2045,29 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, errors.Wrap(err, "applying patches to reloaded bundle")
 	}
 
-	configFull, err = configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	warnUnpinnedKubernetesVersion(os.Stderr, versionContract, opts.KubernetesVersion)
+
+	configFull, err = serializeBundle(configBundle, machineType, versionContract, opts.KubernetesVersion)
 	if err != nil {
 		return nil, errors.Wrap(err, "serializing patched config bundle")
+	}
+
+	// Validated on the bundle assembled with the chart's own documents, which is
+	// what an apply sends. The bundle alone would miss a chart that emits a typed
+	// document while leaving the v1alpha1 field in place — the half-migrated
+	// state the hint below invites — and a plain concatenation would carry the
+	// bundle's copy of that document alongside it, which machinery rejects as a
+	// duplicate before the conflict check is ever reached.
+	//
+	// A non-full render returns a patch rather than a config, so what it returns
+	// is deliberately not what gets checked here.
+	assembled, err := assembleTargetDocuments(configFull, nil, extraDocs)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := checkSupersededFields(assembled.Bytes(), opts.TalosVersion); err != nil {
+		return nil, err
 	}
 
 	var target []byte
@@ -1998,40 +2080,397 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		}
 	}
 
-	var targetNode yaml.Node
-
-	err = yaml.Unmarshal(target, &targetNode)
+	buf, err := assembleTargetDocuments(target, talosPatches, extraDocs)
 	if err != nil {
-		return nil, errors.Wrap(err, "unmarshaling target config")
-	}
-
-	// Copy comments from source configuration to the final output
-	for _, configPatch := range talosPatches {
-		var sourceNode yaml.Node
-
-		err = yaml.Unmarshal([]byte(configPatch), &sourceNode)
-		if err != nil {
-			return nil, errors.Wrap(err, "unmarshaling source patch for comment propagation")
-		}
-
-		dstPaths := make(map[string]*yaml.Node)
-		yamltools.CopyComments(&sourceNode, &targetNode, "", dstPaths)
-		yamltools.ApplyComments(&targetNode, "", dstPaths)
-	}
-
-	buf := &bytes.Buffer{}
-	if err := encodeYAMLNodeIndented(buf, &targetNode); err != nil {
 		return nil, err
 	}
 
-	// Append extra documents (like UserVolumeConfig) that are not part of Talos config
+	return buf.Bytes(), nil
+}
+
+// checkSupersededFields fails the render when the config sets a v1alpha1 field
+// that the targeted contract has moved into a document of its own. Talos rejects
+// such a config outright, so catching it here turns an apply-time rejection into
+// a render-time error naming the way out.
+//
+// The check asks each document directly rather than matching validation text:
+// machinery exposes V1Alpha1ConflictValidate on every document that supersedes a
+// v1alpha1 field, which is the same call its own container validation makes.
+// Reading the messages instead would mean enumerating a dozen phrasings and
+// silently missing whichever one gets added next.
+//
+// Only that class is reported: a render is legitimately incomplete in other ways
+// (no install disk yet, no endpoint), and those are the operator's to fill in.
+func checkSupersededFields(rendered []byte, talosVersion string) error {
+	cfg, err := configloader.NewFromBytes(rendered)
+	if err != nil {
+		// Not this check's job to decide the config is unloadable; the render
+		// carries on and the node reports whatever is wrong. The cost is that a
+		// chart document machinery cannot parse — an unregistered kind, say —
+		// takes this check down with it, so say so rather than vanish.
+		// The error is reported, so the return is not silent; it is just not
+		// this check's to fail on.
+		fmt.Fprintf(os.Stderr, "warning: could not load the rendered config for the v1alpha1 conflict check: %v\n", err)
+
+		return nil
+	}
+
+	legacy := cfg.RawV1Alpha1()
+	if legacy == nil {
+		return nil
+	}
+
+	var conflicts []error
+
+	for _, doc := range cfg.Documents() {
+		validator, supersedes := doc.(container.V1Alpha1ConflictValidator)
+		if !supersedes {
+			continue
+		}
+
+		if err := validator.V1Alpha1ConflictValidate(legacy); err != nil {
+			conflicts = append(conflicts, err)
+		}
+	}
+
+	if len(conflicts) == 0 {
+		return nil
+	}
+
+	pinned := talosVersion
+	if pinned == "" {
+		pinned = "unset, so the render targets the Talos version talm was built from"
+	}
+
+	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+	return errors.WithHintf(
+		errors.Wrap(errors.Join(conflicts...), "rendered config mixes v1alpha1 fields with the documents that superseded them"),
+		"templateOptions.talosVersion is %s. Pin it to %s or lower in Chart.yaml; above that "+
+			"contract Talos keeps these settings in documents of their own, which the charts do not emit.",
+		pinned,
+		config.TalosVersion1_13,
+	)
+}
+
+// assembleTargetDocuments turns the serialized target into the bytes the render
+// returns: every document preserved in order, with the operator's comments
+// carried over onto the v1alpha1 one, followed by the chart's own documents.
+//
+// A chart document replaces the bundle's document of the same identity rather
+// than joining it. From contract v1.12 the bundle emits typed documents the
+// charts also emit (HostnameConfig is the common one), and Talos rejects a
+// config carrying two documents with the same apiVersion/kind/name.
+func assembleTargetDocuments(target []byte, talosPatches, extraDocs []string) (*bytes.Buffer, error) {
+	// Decode the whole stream: a Talos config is multi-document, and from the
+	// contract that moved Kubernetes settings out of v1alpha1 the generated
+	// bundle puts the certificate authorities, the service-account key, the
+	// kubelet and the control-plane settings in documents of their own.
+	// Unmarshaling into a single node keeps only the first one, which would drop
+	// everything after machine and cluster.
+	targetDocs, err := decodeYAMLDocuments(target)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(targetDocs) == 0 {
+		return nil, errors.New("rendered config is empty")
+	}
+
+	if err := propagatePatchComments(targetDocs[0], talosPatches); err != nil {
+		return nil, err
+	}
+
+	extraIdentities, err := documentIdentities(extraDocs)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := &bytes.Buffer{}
+	written := 0
+
+	for _, doc := range targetDocs {
+		if len(doc.Content) > 0 {
+			if _, superseded := extraIdentities[documentIdentityFromNode(doc.Content[0])]; superseded {
+				continue
+			}
+		}
+
+		if written > 0 {
+			buf.WriteString("---\n")
+		}
+
+		if err := encodeYAMLNodeIndented(buf, doc); err != nil {
+			return nil, err
+		}
+
+		written++
+	}
+
+	// Extra documents (UserVolumeConfig and the chart's typed documents) are
+	// emitted verbatim, so operator formatting survives the round-trip.
 	for _, extraDoc := range extraDocs {
-		buf.WriteString("---\n")
+		if written > 0 {
+			buf.WriteString("---\n")
+		}
+
 		buf.WriteString(extraDoc)
 		buf.WriteString("\n")
+
+		written++
+	}
+
+	return buf, nil
+}
+
+// propagatePatchComments carries the operator's comments from the patches onto
+// the rendered v1alpha1 document.
+func propagatePatchComments(doc *yaml.Node, talosPatches []string) error {
+	for _, configPatch := range talosPatches {
+		var sourceNode yaml.Node
+
+		if err := yaml.Unmarshal([]byte(configPatch), &sourceNode); err != nil {
+			return errors.Wrap(err, "unmarshaling source patch for comment propagation")
+		}
+
+		dstPaths := make(map[string]*yaml.Node)
+		yamltools.CopyComments(&sourceNode, doc, "", dstPaths)
+		yamltools.ApplyComments(doc, "", dstPaths)
+	}
+
+	return nil
+}
+
+// documentIdentities indexes raw YAML documents by apiVersion/kind/name.
+func documentIdentities(docs []string) (map[string]struct{}, error) {
+	identities := make(map[string]struct{}, len(docs))
+
+	for _, doc := range docs {
+		var node yaml.Node
+
+		if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
+			return nil, errors.Wrap(err, "unmarshaling extra document")
+		}
+
+		if len(node.Content) == 0 {
+			continue
+		}
+
+		identity := documentIdentityFromNode(node.Content[0])
+
+		// legacyRootIdentity is the sentinel for a mapping with neither
+		// apiVersion nor kind, which is what the v1alpha1 document itself
+		// returns. Indexing it would make any untyped extra document supersede
+		// machine and cluster, silently emptying the config.
+		if identity == legacyRootIdentity {
+			continue
+		}
+
+		identities[identity] = struct{}{}
+	}
+
+	return identities, nil
+}
+
+// mappingValue returns the value node for key in a mapping node, or nil.
+func mappingValue(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+
+	return nil
+}
+
+// dropMappingKey removes key from a mapping node, if present.
+func dropMappingKey(mapping *yaml.Node, key string) {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return
+	}
+
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+
+			return
+		}
+	}
+}
+
+// v1alpha1ComponentImages maps the v1alpha1 cluster component to the repository
+// the generator defaults its image to.
+//
+//nolint:gochecknoglobals // immutable lookup used by stripDefaultedImages.
+var v1alpha1ComponentImages = map[string]string{
+	"apiServer":         constants.KubernetesAPIServerImage,
+	"controllerManager": constants.KubernetesControllerManagerImage,
+	"proxy":             constants.KubeProxyImage,
+	"scheduler":         constants.KubernetesSchedulerImage,
+}
+
+// defaultedImage reports whether value is exactly what the empty-version
+// fallback would have produced for repository.
+func defaultedImage(value, repository string) bool {
+	return value == fmt.Sprintf("%s:v%s", repository, kubeVersion(""))
+}
+
+// dropDefaultedImage removes mapping's image key only when it still carries the
+// value the fallback generated. An operator who wrote their own image — a mirror
+// for an airgapped registry, a pinned build — keeps it, unless they wrote the
+// exact string the fallback produces, which is indistinguishable from it.
+func dropDefaultedImage(mapping *yaml.Node, repository string) {
+	image := mappingValue(mapping, imageKey)
+	if image == nil || !defaultedImage(image.Value, repository) {
+		return
+	}
+
+	dropMappingKey(mapping, imageKey)
+}
+
+// stripDefaultedImages removes the generator's own component images from a
+// config whose project pinned no kubernetesVersion. An image the operator wrote
+// is left alone.
+//
+// v1.14 refuses to generate without a version, and the fallback that satisfies
+// it would write this binary's Kubernetes version into the config — moving a
+// cluster to a version the operator never chose, invisibly, since the render's
+// diff drops fields equal to the bundle default.
+//
+// This is a new contract rather than a restored one. Machinery before v1.14
+// emitted no image for an unset version, but talm never passed one through: it
+// substituted its own built-in default before the value reached machinery, so an
+// unpinned project used to get that. Removing the images means an unpinned
+// project now follows each node's Talos release instead — which is a change in
+// its own right, and why the render says so.
+//
+// It runs on the serialized stream rather than the bundle so it reaches the
+// v1alpha1 document wherever the generator placed it.
+func stripDefaultedImages(serialized []byte) ([]byte, error) {
+	docs, err := decodeYAMLDocuments(serialized)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, doc := range docs {
+		if len(doc.Content) == 0 {
+			continue
+		}
+
+		root := doc.Content[0]
+
+		// A typed document only reaches here on a contract that keeps the
+		// Kubernetes settings in v1alpha1, where it carries no component image.
+		// The contract that moved them is refused upstream of this call.
+		if mappingValue(root, k8sKeyKind) != nil {
+			continue
+		}
+
+		dropDefaultedImage(mappingValue(mappingValue(root, "machine"), "kubelet"), constants.KubeletImage)
+
+		cluster := mappingValue(root, "cluster")
+		for component, repository := range v1alpha1ComponentImages {
+			dropDefaultedImage(mappingValue(cluster, component), repository)
+		}
+	}
+
+	buf := &bytes.Buffer{}
+
+	for i, doc := range docs {
+		if i > 0 {
+			buf.WriteString("---\n")
+		}
+
+		if err := encodeYAMLNodeIndented(buf, doc); err != nil {
+			return nil, err
+		}
 	}
 
 	return buf.Bytes(), nil
+}
+
+// serializeBundle serializes the bundle for machineType, dropping the component
+// images when the project pinned no Kubernetes version and the contract still
+// lets the node choose one.
+func serializeBundle(
+	configBundle *bundle.Bundle,
+	machineType machine.Type,
+	versionContract *config.VersionContract,
+	kubernetesVersion string,
+) ([]byte, error) {
+	out, err := configBundle.Serialize(encoder.CommentsDisabled, machineType)
+	if err != nil {
+		return nil, errors.Wrap(err, "serializing config bundle")
+	}
+
+	if kubernetesVersion != "" {
+		return out, nil
+	}
+
+	// From the contract that moved the Kubernetes settings into documents of
+	// their own, those documents require the image: machinery rejects an empty
+	// one, and there is no node-side default left to fall back to. Stripping
+	// there would produce a config the node refuses, so the version has to be
+	// pinned instead.
+	if versionContract.MultidocKubernetesConfigSupported() {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return nil, errors.WithHint(
+			errors.New("templateOptions.kubernetesVersion is not set"),
+			"this Talos contract keeps the Kubernetes settings in their own documents, which require an image. "+
+				"Pin templateOptions.kubernetesVersion in Chart.yaml to the version your cluster runs.",
+		)
+	}
+
+	return stripDefaultedImages(out)
+}
+
+// warnUnpinnedKubernetesVersion says out loud that the component versions now
+// follow each node's own Talos release rather than a value in the project. It
+// belongs to the render rather than to serializeBundle, which runs twice on the
+// default path and would say it twice.
+func warnUnpinnedKubernetesVersion(w io.Writer, versionContract *config.VersionContract, kubernetesVersion string) {
+	if kubernetesVersion != "" || versionContract.MultidocKubernetesConfigSupported() {
+		return
+	}
+
+	fmt.Fprintln(w,
+		"warning: templateOptions.kubernetesVersion is not set, so no component images are pinned "+
+			"and each node picks the Kubernetes version of the Talos release it runs. "+
+			"Pin the key in Chart.yaml to choose it yourself.")
+}
+
+// decodeYAMLDocuments splits a YAML stream into one node per document,
+// preserving order. A chunk the decoder returns with no content — a
+// comment-only document — is dropped rather than re-emitted as an empty one.
+func decodeYAMLDocuments(data []byte) ([]*yaml.Node, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+
+	var docs []*yaml.Node
+
+	for {
+		var doc yaml.Node
+
+		err := dec.Decode(&doc)
+
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			return nil, errors.Wrap(err, "decoding YAML documents")
+		}
+
+		if len(doc.Content) == 0 {
+			continue
+		}
+
+		docs = append(docs, &doc)
+	}
+
+	return docs, nil
 }
 
 // encodeYAMLNodeIndented writes node to w as 2-space-indented YAML
@@ -2121,10 +2560,10 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 
 		var resources []map[string]any
 
-		// Signature is fixed by helpers.ForEachResource; the callback
+		// Signature is fixed by forEachResource; the callback
 		// always returns nil because per-item errors are accumulated
 		// into multiErr / passed through for retry classification.
-		//nolint:unparam // callback shape fixed by helpers.ForEachResource API
+		//nolint:unparam // callback shape fixed by forEachResource API
 		callbackResource := func(_ context.Context, _ string, r resource.Resource, callError error) error {
 			if callError != nil {
 				// Ignore NotFound and PermissionDenied errors - resource doesn't exist or is not accessible
@@ -2163,7 +2602,7 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 		// half-collected partial result from a failed attempt does not
 		// leak into the next one.
 		//
-		// helpers.ForEachResource routes per-node dial failures (the
+		// forEachResource routes per-node dial failures (the
 		// dominant transient class — a single node briefly partitioned
 		// from the rest of a multi-node lookup) through callbackResource
 		// as callError, where they land in multiErr and ForEachResource
@@ -2199,7 +2638,7 @@ func newLookupFunction(ctx context.Context, c *client.Client, commandName string
 			multiErr = nil
 			resources = resources[:0]
 
-			return firstLookupError(helpers.ForEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID), multiErr)
+			return firstLookupError(forEachResource(ctx, c, callbackRD, callbackResource, namespace, kind, docID), multiErr)
 		}, shouldRetry, defaultRetryPolicy())
 		if attemptErr != nil {
 			return map[string]any{}, wrapLookupError(attemptErr, kind, namespace, docID, endpoints, commandName)

@@ -748,3 +748,32 @@ func TestReleaseVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadConfig_EmptyKubernetesVersionStaysEmpty pins that an unset
+// templateOptions.kubernetesVersion reaches the engine as an empty string.
+//
+// Substituting the machinery default here would move a cluster's Kubernetes
+// version on a talm upgrade — and invisibly, since the images equal the bundle
+// default and the render's diff drops them. The engine is what decides what an
+// unset version means: on contracts where the node can still choose it emits no
+// image at all, and on the ones where the typed documents require an image it
+// reports the missing pin. Neither is reachable if the value arrives filled in.
+func TestLoadConfig_EmptyKubernetesVersionStaysEmpty(t *testing.T) {
+	dir := t.TempDir()
+	chartPath := filepath.Join(dir, "Chart.yaml")
+	body := "apiVersion: v2\nname: test\nversion: 0.1.0\ntemplateOptions:\n  kubernetesVersion: \"\"\n"
+
+	if err := os.WriteFile(chartPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write Chart.yaml: %v", err)
+	}
+
+	snapshotConfigState(t)
+
+	if err := loadConfig(chartPath); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	if got := commands.Config.TemplateOptions.KubernetesVersion; got != "" {
+		t.Errorf("an unset kubernetesVersion reached the engine as %q; it must stay empty so the engine decides", got)
+	}
+}

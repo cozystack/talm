@@ -106,7 +106,7 @@ func classifyLookupError(err error) lookupErrorClass {
 		return lookupErrAuthn
 	case codes.Internal, codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound, codes.Unimplemented:
 		// NotFound and Unimplemented at this level come from the
-		// ResolveResourceKind path inside helpers.ForEachResource —
+		// ResolveResourceKind path inside forEachResource —
 		// the operator asked for a resource kind the target Talos
 		// version doesn't know about. The per-node callback already
 		// filters NotFound for missing instances (engine.go), so any
@@ -150,7 +150,7 @@ func classifyLookupError(err error) lookupErrorClass {
 //     right remedy for the classified failure mode.
 //
 // Returns nil when err is nil so call sites can use it
-// unconditionally after `helpers.ForEachResource`.
+// unconditionally after `forEachResource`.
 func wrapLookupError(err error, kind, namespace, docID string, endpoints []string, commandName string) error {
 	if err == nil {
 		return nil
@@ -304,7 +304,7 @@ func interAttemptBackoff(attempt int) time.Duration {
 }
 
 // firstLookupError picks the most operator-relevant error from the
-// two paths through which `helpers.ForEachResource` reports failure:
+// two paths through which `forEachResource` reports failure:
 // the direct return value (resource-definition resolution against
 // the first endpoint) and the per-node multierror that accumulates
 // callback failures (per-node dial issues against the rest of a

@@ -15,8 +15,10 @@ talm service [<id> [start|stop|restart|status]] [flags]
 ## Options
 
 ```
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -h, --help           help for service
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for service
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
 ## Options inherited from parent commands

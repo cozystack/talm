@@ -20,31 +20,37 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
 	"github.com/spf13/cobra"
 )
 
-// TestComplete_ApplyMode_ReturnsFixedEnum pins the apply --mode
-// completion: five upstream-supported values, no file fallback.
-// Operators get tab-completed enums instead of meaningless file
-// suggestions.
-func TestComplete_ApplyMode_ReturnsFixedEnum(t *testing.T) {
+// TestComplete_ApplyMode_OffersOnlyAcceptedValues pins the apply --mode
+// completion against the flag itself: every suggestion has to parse, and no
+// file fallback. Counting the values instead would keep passing after a Talos
+// bump changes the set, which is how "reboot" survived in the suggestions
+// after v1.14 stopped accepting it.
+func TestComplete_ApplyMode_OffersOnlyAcceptedValues(t *testing.T) {
 	got, directive := completeApplyMode(nil, nil, "")
 
-	if !slices.Equal(got, applyModeOptions) {
-		t.Errorf("--mode completion = %v, want %v", got, applyModeOptions)
+	if len(got) == 0 {
+		t.Fatal("--mode completion returned nothing")
 	}
-	// Sanity: every value upstream's helpers.AddModeFlags
-	// registers must surface. The string forms are pinned in
-	// upstream's mode.go (modeAuto, modeNoReboot, …).
-	if len(got) != 5 {
-		t.Errorf("--mode completion must surface five upstream-supported modes; got %v", got)
+
+	for _, value := range got {
+		var mode helpers.Mode
+
+		helpers.AddModeFlags(&mode, &cobra.Command{})
+
+		if err := mode.Set(value); err != nil {
+			t.Errorf("--mode completion offers %q, which the flag rejects: %v", value, err)
+		}
 	}
-	// Pin presence of the always-default mode by string so a
-	// future rename of applyModeOptions still produces a
-	// detectable failure mode.
+
+	// The always-default mode, pinned by string so a rename still fails here.
 	if !slices.Contains(got, "auto") {
 		t.Errorf("--mode completion missing default mode; got %v", got)
 	}
+
 	if directive != cobra.ShellCompDirectiveNoFileComp {
 		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
 	}

@@ -27,4 +27,8 @@ Wipe block device or volumes
 
 * [talm](index.md)	 - Manage Talos the GitOps Way!
 * [talm wipe disk](wipe_disk.md)	 - Wipe a block device (disk or partition) which is not used as a volume
+* [talm wipe lv](wipe_lv.md)	 - Remove an LVM logical volume
+* [talm wipe md](wipe_md.md)	 - Destroy an MD (software RAID) array
+* [talm wipe pv](wipe_pv.md)	 - Remove an LVM physical volume label
+* [talm wipe vg](wipe_vg.md)	 - Remove an LVM volume group (cascades to its LVs)
 

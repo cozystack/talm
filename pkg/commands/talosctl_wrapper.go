@@ -141,6 +141,47 @@ func propagatePersistentFlags(cmd, wrappedCmd *cobra.Command) {
 	})
 }
 
+// republishContainerFlags re-registers a container command's local flags as
+// persistent ones on the wrapper.
+//
+// A local flag on a command that only hosts subcommands cannot be used at all:
+// cobra merges a parent's persistent flags into a child at parse time but not
+// its local ones, and a container command takes no arguments of its own. Talos
+// v1.14 registers `meta`'s --insecure that way, which is what made
+// `talosctl meta write --insecure` stop parsing (siderolabs/talos#14346). The
+// flag object is reused rather than redeclared, so it still writes to the
+// upstream variable the command's RunE reads.
+//
+// TODO: remove once siderolabs/talos#14347 ships in a Talos release talm
+// depends on. It is merged upstream but sits on main, with no backport to the
+// v1.14 branch, so v1.14.x still needs this. A flag that is already persistent
+// is skipped, so the fix arriving turns this into a no-op, not a conflict.
+//
+//nolint:godox // deliberate removal marker tied to a specific upstream PR.
+func republishContainerFlags(cmd, wrappedCmd *cobra.Command) {
+	if !cmd.HasSubCommands() {
+		return
+	}
+
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if _, shadowed := rootShadowedPersistentFlags[flag.Name]; shadowed {
+			return
+		}
+
+		if wrappedCmd.PersistentFlags().Lookup(flag.Name) != nil {
+			return
+		}
+
+		if flag.Shorthand == "f" {
+			wrappedCmd.PersistentFlags().AddFlag(renameFlagShorthand(flag, "F"))
+
+			return
+		}
+
+		wrappedCmd.PersistentFlags().AddFlag(flag)
+	})
+}
+
 // warnSkipVerifyUnsupported writes a warning to w when --skip-verify is set for
 // a wrapped talosctl passthrough command. Those commands run upstream RunE code
 // that builds its own client through upstream global.Args, which has no
@@ -211,6 +252,7 @@ func wrapTalosCommand(cmd *cobra.Command, cmdName string) *cobra.Command {
 	// "f". Today no such upstream flag exists, but the cost is one
 	// branch and the surface stays uniform with the local-flag loop.
 	propagatePersistentFlags(cmd, wrappedCmd)
+	republishContainerFlags(cmd, wrappedCmd)
 
 	// Add --file flag only if it doesn't already exist in the original command
 	var configFiles []string

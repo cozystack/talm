@@ -40,6 +40,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -682,7 +683,18 @@ var initCmd = &cobra.Command{
 
 		// Generate talosconfig only if it doesn't exist
 		if !talosconfigFileExists {
-			configBundle, err := gen.GenerateConfigBundle(genOptions, clusterName, "https://192.168.0.1:6443", "", []string{}, []string{}, []string{})
+			configBundle, err := gen.GenerateConfigBundle(
+				genOptions,
+				clusterName,
+				"https://192.168.0.1:6443", // dummy endpoint, not used for talosconfig
+				// Only the PKI and secrets are read back out of this bundle, so the
+				// Kubernetes version does not reach the project. Talos v1.14's
+				// generate refuses an empty one, hence the default.
+				constants.DefaultKubernetesVersion,
+				[]string{},
+				[]string{},
+				[]string{},
+			)
 			if err != nil {
 				return errors.Wrap(err, "generating talos config bundle")
 			}

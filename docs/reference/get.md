@@ -14,12 +14,13 @@ talm get <type> [<id>] [flags]
 ## Options
 
 ```
-  -f, --file strings       specify config files or patches in a YAML file (can specify multiple)
-  -h, --help               help for get
-  -i, --insecure           get resources using the insecure (encrypted with no auth) maintenance service
-      --namespace string   resource namespace (default is to use default namespace per resource)
-  -o, --output string      output mode (json, table, yaml, jsonpath) (default "table")
-  -w, --watch              watch resource changes
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for get
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
+      --namespace string           resource namespace (default is to use default namespace per resource)
+  -o, --output string              output mode (json, table, yaml, jsonpath) (default "table")
+  -w, --watch                      watch resource changes
 ```
 
 ## Options inherited from parent commands

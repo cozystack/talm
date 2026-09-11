@@ -18,12 +18,12 @@ talm edit machineconfig [flags]
 ## Options
 
 ```
-      --dry-run                                     do not apply the change after editing and print the change summary instead
-  -f, --file strings                                specify config files or patches in a YAML file (can specify multiple)
-  -h, --help                                        help for edit
-  -m, --mode auto, no-reboot, reboot, staged, try   apply config mode (default auto)
-      --namespace string                            resource namespace (default is to use default namespace per resource)
-      --timeout duration                            the config will be rolled back after specified timeout (if try mode is selected) (default 1m0s)
+      --dry-run                             do not apply the change after editing and print the change summary instead
+  -f, --file strings                        specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                                help for edit
+  -m, --mode auto, no-reboot, staged, try   apply config mode (default auto)
+      --namespace string                    resource namespace (default is to use default namespace per resource)
+      --timeout duration                    the config will be rolled back after specified timeout (if try mode is selected) (default 1m0s)
 ```
 
 ## Options inherited from parent commands

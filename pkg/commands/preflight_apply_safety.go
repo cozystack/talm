@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -600,6 +602,20 @@ func readWithFreshTimeout[T any](parent context.Context, timeout time.Duration, 
 	return op(ctx)
 }
 
+// snapshotLinkNames collects every name a link answers to: its ID, its alias
+// and its altnames. Machinery documents the link-name fields of BondConfig,
+// VRFConfig and BGPInstanceConfig as accepting an alias in place of the ID, so
+// a snapshot holding only IDs blocks an apply Talos would accept.
+func snapshotLinkNames(links iter.Seq[*network.LinkStatus]) []string {
+	var names []string
+
+	for link := range links {
+		names = append(names, slices.Collect(network.AllLinkNames(link))...)
+	}
+
+	return names
+}
+
 // cosiLinksDisksReader returns a linksDisksReader backed by the node's
 // COSI state. Both LinkStatus (network namespace) and Disk (block
 // namespace) are NonSensitive, so the maintenance / insecure path can
@@ -618,11 +634,7 @@ func cosiLinksDisksReader(c *client.Client) linksDisksReader {
 		}
 
 		snapshot := applycheck.HostSnapshot{
-			Links: make([]string, 0, links.Len()),
-		}
-
-		for link := range links.All() {
-			snapshot.Links = append(snapshot.Links, link.Metadata().ID())
+			Links: snapshotLinkNames(links.All()),
 		}
 
 		disks, err := readWithFreshTimeout(ctx, preflightCOSIReadTimeout, func(ctx context.Context) (safe.List[*block.Disk], error) {
