@@ -32,6 +32,7 @@ Talos v1.14 registers `meta`'s `--insecure` on that command's local flag set ins
 That is the only way to write a META key over the maintenance service, which is what you do before a node has a machine config, so talm re-publishes such flags as persistent on its wrapper. `talm meta write --insecure` and the `-i` shorthand keep working, and `--cert-fingerprint` travels with them.
 
 Reported upstream as [siderolabs/talos#14346](https://github.com/siderolabs/talos/issues/14346) and fixed by [siderolabs/talos#14347](https://github.com/siderolabs/talos/pull/14347), which is merged to `main` but not backported to the v1.14 branch. Once the fix ships in a Talos release talm depends on, the wrapper step becomes redundant and is dropped.
+
 ## `talm apply` — `--mode=reboot` is gone on Talos v1.14
 
 Upstream stopped registering `reboot` among the values of the apply mode flag in v1.14, so `talm apply --mode=reboot` fails with `invalid argument "reboot" for "-m, --mode" flag`. Use `--mode=auto`, which the node promotes to a reboot when the change requires one. Shell completion reads the accepted values back from the flag, so it no longer suggests `reboot` either.
@@ -43,6 +44,14 @@ Upstream stopped registering `--insecure` on `upgrade` in v1.14 (it had been dep
 ## `talm reset` — `--insecure` is gone on Talos v1.14
 
 Upstream dropped `--insecure` from `reset` in v1.14, so `talm reset --insecure` fails with `unknown flag: --insecure`. Resetting a node that has no valid configuration is done from the maintenance side instead: boot the node into a maintenance image and apply a fresh config, rather than resetting over an unauthenticated connection.
+
+## `talm support` — the bundle is encrypted by default on Talos v1.14
+
+Upstream changed the default: `talm support` now encrypts the generated bundle with age, to a built-in list of Sidero Labs recipients. `--no-encryption` turns that off, `--encryption-recipients` sends it to recipients you choose, and `--encryption-no-default-recipients` keeps yours while dropping theirs. Worth knowing before collecting a bundle from a cluster whose contents you would rather not hand to a third party, encrypted or otherwise.
+
+## `talm containers`, `logs`, `restart`, `stats` — `-k` / `--kubernetes` is deprecated
+
+Upstream replaced the flag with `--namespace`, which takes `system`, `cri` or `taloscontainers`. The old spelling still works and prints `Flag --kubernetes has been deprecated, use --namespace cri instead`, so scripts keep running for now; move them over before the flag goes the way of the others on this page.
 
 ## `talm reset` — META-preserving default
 

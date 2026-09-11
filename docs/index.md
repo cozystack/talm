@@ -82,6 +82,6 @@ talm apply -f nodes/node1.yaml -i
 
 - [Initializing a project](getting-started/init.md) — `--image`, `--cluster-endpoint`, `--root`.
 - [Endpoints and VIPs](configuration/endpoints-and-vips.md) — `endpoint`, `floatingIP`, `vipLink`.
-- [Talos versions and output format](configuration/talos-versions.md) — the v1.12 multi-document split.
+- [Talos versions and output format](configuration/talos-versions.md) — which schema a render targets, and the version keys to pin.
 - [Applying with side-patches](operations/side-patches.md) — the `-f` chain.
 - [CLI reference](reference/index.md) — generated from the command tree.

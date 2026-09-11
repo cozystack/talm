@@ -27,7 +27,7 @@ talm template [flags]
   -h, --help                        help for template
   -I, --in-place                    re-template and update generated files in place (overwrite them)
   -i, --insecure                    template using the insecure (encrypted with no auth) maintenance service
-      --kubernetes-version string   desired kubernetes version to run (default "1.37.0")
+      --kubernetes-version string   desired kubernetes version to run; defaults to templateOptions.kubernetesVersion from Chart.yaml
       --offline                     disable gathering information and lookup functions
       --set stringArray             set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
       --set-file stringArray        set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)

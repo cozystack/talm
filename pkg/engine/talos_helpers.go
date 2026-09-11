@@ -53,8 +53,9 @@ func failIfMultiNodes(ctx context.Context, command string) error {
 // The per-node loop is not unit-tested: resolving the kind goes through
 // client.ResolveResourceKind, which is a concrete method on the Talos client
 // and cannot be substituted. walkNodeResources below carries the per-node body
-// and is tested directly; the loop itself is covered by the multi-node lookup
-// case in the manual test plan.
+// and is tested directly. The loop cannot run more than one iteration from talm
+// anyway: Render calls failIfMultiNodes before installing the lookup function,
+// so a render is always single-node.
 //
 // The kind is resolved once, against the first node: a resource definition is
 // cluster-wide, so which node answers does not matter. A per-node lookup failure

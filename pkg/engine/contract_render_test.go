@@ -90,6 +90,7 @@ func TestContract_Render_NoTemplateFilesShortCircuitsBeforeRender(t *testing.T) 
 func TestContract_Render_TemplateNotFoundError(t *testing.T) {
 	chartRoot := createTestChart(t, "tc", "config.yaml", "machine:\n  type: worker\n")
 	_, err := Render(context.Background(), nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          chartRoot,
 		TemplateFiles: []string{"templates/does-not-exist.yaml"},
@@ -107,6 +108,7 @@ func TestContract_Render_TemplateNotFoundError(t *testing.T) {
 func TestContract_Render_ChartLoadError(t *testing.T) {
 	bogus := filepath.Join(t.TempDir(), "no-such-chart")
 	_, err := Render(context.Background(), nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          bogus,
 		TemplateFiles: []string{"templates/config.yaml"},
@@ -122,6 +124,7 @@ func TestContract_Render_ChartLoadError(t *testing.T) {
 func TestContract_Render_BadValueFileError(t *testing.T) {
 	chartRoot := createTestChart(t, "tc", "config.yaml", "machine:\n  type: worker\n")
 	_, err := Render(context.Background(), nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          chartRoot,
 		ValueFiles:    []string{"/path/that/does/not/exist.yaml"},
@@ -144,6 +147,7 @@ func TestContract_Render_BadValueFileError(t *testing.T) {
 func TestContract_Render_HappyPathOfflineWorker(t *testing.T) {
 	chartRoot := createTestChart(t, "tc", "config.yaml", "machine:\n  type: worker\n")
 	out, err := Render(context.Background(), nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          chartRoot,
 		TemplateFiles: []string{"templates/config.yaml"},
@@ -171,6 +175,7 @@ func TestContract_Render_SetValuesReachTemplate(t *testing.T) {
 `
 	chartRoot := createTestChart(t, "tc", "config.yaml", tmpl)
 	out, err := Render(context.Background(), nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          chartRoot,
 		Values:        []string{"customImage=registry.example.com/talos:test"},
@@ -241,7 +246,8 @@ func TestContract_InitializeConfigBundle_BadTalosVersionError(t *testing.T) {
 // surfaces a 'failed to load secrets bundle' error naming the cause.
 func TestContract_InitializeConfigBundle_MissingSecretsError(t *testing.T) {
 	_, err := InitializeConfigBundle(Options{
-		WithSecrets: filepath.Join(t.TempDir(), "missing-secrets.yaml"),
+		TalosVersion: legacyContract,
+		WithSecrets:  filepath.Join(t.TempDir(), "missing-secrets.yaml"),
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -256,18 +262,26 @@ func TestContract_InitializeConfigBundle_MissingSecretsError(t *testing.T) {
 // controlplane serialization is meaningfully different from the
 // worker one (controlplane has cluster.* fields worker does not).
 func TestContract_SerializeConfiguration_ControlplaneVsWorker(t *testing.T) {
-	b, err := InitializeConfigBundle(Options{})
+	b, err := InitializeConfigBundle(Options{TalosVersion: legacyContract, KubernetesVersion: "v1.34.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpBytes, err := SerializeConfiguration(b, machine.TypeControlPlane)
+	cpBytes, err := SerializeConfiguration(b, machine.TypeControlPlane, legacyContract, "v1.34.3")
 	if err != nil {
 		t.Fatalf("controlplane: %v", err)
 	}
-	workerBytes, err := SerializeConfiguration(b, machine.TypeWorker)
+	workerBytes, err := SerializeConfiguration(b, machine.TypeWorker, legacyContract, "v1.34.3")
 	if err != nil {
 		t.Fatalf("worker: %v", err)
 	}
+	// The contract passed to SerializeConfiguration has to be the one the bundle
+	// was built on: mismatch them and the images are stripped out of documents
+	// that require one, producing a config the node rejects while the test still
+	// sees non-empty bytes.
+	if !strings.Contains(string(cpBytes), "image:") {
+		t.Errorf("controlplane serialization carries no component image:\n%s", cpBytes)
+	}
+
 	if len(cpBytes) == 0 || len(workerBytes) == 0 {
 		t.Fatal("expected non-empty serialization")
 	}
@@ -356,6 +370,7 @@ func TestContract_Render_OfflineSkipsMultiNodeCheck(t *testing.T) {
 	// Context with multiple nodes — would trip FailIfMultiNodes online.
 	ctx := context.Background()
 	_, err := Render(ctx, nil, Options{
+		TalosVersion:  legacyContract,
 		Offline:       true,
 		Root:          chartRoot,
 		TemplateFiles: []string{"templates/config.yaml"},

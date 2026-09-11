@@ -567,12 +567,12 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 		)
 	}
 
-	result, err := engine.SerializeConfiguration(configBundle, machineType)
+	result, err := engine.SerializeConfiguration(configBundle, machineType, opts.TalosVersion, opts.KubernetesVersion)
 	if err != nil {
 		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
 		return errors.WithHint(
 			errors.Wrap(err, "serializing configuration"),
-			"the merged config bundle could not be encoded back to YAML; this is internal — file an issue if reproducible",
+			"if the message above names a templateOptions key or a v1alpha1 conflict, it is the project's Chart.yaml to fix; anything else is internal — file an issue if reproducible",
 		)
 	}
 
@@ -1240,11 +1240,11 @@ func init() {
 	applyCmd.Flags().StringArrayVar(&applyCmdFlags.literalValues, "set-literal", []string{}, "set a literal STRING value on the command line")
 	applyCmd.Flags().StringVar(&applyCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	applyCmd.Flags().StringVar(&applyCmdFlags.withSecrets, "with-secrets", "", "use a secrets file generated using 'gen secrets'")
-	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
+	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", "", "desired kubernetes version to run; defaults to templateOptions.kubernetesVersion from Chart.yaml")
 	applyCmd.Flags().BoolVarP(&applyCmdFlags.debug, "debug", "", false, "show only rendered patches")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.dryRun, "dry-run", false, "check how the config change will be applied in dry-run mode")
 	applyCmd.Flags().DurationVar(&applyCmdFlags.configTryTimeout, "timeout", constants.ConfigTryTimeout, "the config will be rolled back after specified timeout (if try mode is selected)")
-	applyCmd.Flags().StringSliceVar(&applyCmdFlags.certFingerprints, "cert-fingerprint", nil, "list of server certificate fingeprints to accept (defaults to no check)")
+	applyCmd.Flags().StringSliceVar(&applyCmdFlags.certFingerprints, "cert-fingerprint", nil, "list of server certificate fingerprints to accept (defaults to no check)")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.force, "force", false, "will overwrite existing files")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")

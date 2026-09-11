@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -200,6 +201,9 @@ func TestContract_GenerateOutput_ComposesModelineWarningAndRender(t *testing.T) 
 	}{
 		offline:       true,
 		templateFiles: []string{testTemplateConfig},
+		// A contract from before the Kubernetes settings moved into their own
+		// documents, where an unpinned Kubernetes version is still valid.
+		talosVersion: "v1.13",
 	}
 	GlobalArgs.Nodes = []string{testNodeAddrA}
 	GlobalArgs.Endpoints = []string{testNodeAddrA}
@@ -242,6 +246,7 @@ func TestContract_GenerateOutput_MissingTemplateError(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
+	templateCmdFlags.talosVersion = "v1.13"
 	templateCmdFlags.templateFiles = []string{"templates/does-not-exist.yaml"}
 	GlobalArgs.Nodes = []string{testNodeAddrA}
 
@@ -262,6 +267,7 @@ func TestContract_GenerateOutput_NoTemplatesError(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
+	templateCmdFlags.talosVersion = "v1.13"
 	templateCmdFlags.templateFiles = nil
 	GlobalArgs.Nodes = []string{testNodeAddrA}
 
@@ -282,6 +288,7 @@ func TestContract_Template_PrintsToStdout(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
+	templateCmdFlags.talosVersion = "v1.13"
 	templateCmdFlags.templateFiles = []string{testTemplateConfig}
 	GlobalArgs.Nodes = []string{testNodeAddrA}
 	GlobalArgs.Endpoints = []string{testNodeAddrA}
@@ -310,6 +317,7 @@ func TestContract_Template_PropagatesError(t *testing.T) {
 	chartRoot := makeMinimalChart(t)
 	Config.RootDir = chartRoot
 	templateCmdFlags.offline = true
+	templateCmdFlags.talosVersion = "v1.13"
 	templateCmdFlags.templateFiles = []string{testTemplateMissing}
 	GlobalArgs.Nodes = []string{testNodeAddrA}
 
@@ -414,4 +422,24 @@ func captureStdout(t *testing.T, fn func()) string {
 	fn()
 	_ = w.Close()
 	return <-done
+}
+
+// TestContract_KubernetesVersionFlagDefaultsEmpty pins that the flag advertises
+// no version of its own.
+//
+// PreRunE overwrites the flag with the Chart.yaml value whenever the operator
+// did not pass it, so a registered default is unreachable — and a reachable one
+// would mean an unpinned project silently adopts the Kubernetes version talm
+// was built with. `--talos-version` already registers empty for the same reason.
+func TestContract_KubernetesVersionFlagDefaultsEmpty(t *testing.T) {
+	for _, cmd := range []*cobra.Command{templateCmd, applyCmd} {
+		flag := cmd.Flags().Lookup("kubernetes-version")
+		if flag == nil {
+			t.Fatalf("%s has no --kubernetes-version flag", cmd.Name())
+		}
+
+		if flag.DefValue != "" {
+			t.Errorf("%s advertises --kubernetes-version default %q; an unpinned project must not get a version it never chose", cmd.Name(), flag.DefValue)
+		}
+	}
 }

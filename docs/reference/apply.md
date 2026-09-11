@@ -33,14 +33,14 @@ talm apply [flags]
 ## Options
 
 ```
-      --cert-fingerprint strings            list of server certificate fingeprints to accept (defaults to no check)
+      --cert-fingerprint strings            list of server certificate fingerprints to accept (defaults to no check)
       --debug                               show only rendered patches
       --dry-run                             check how the config change will be applied in dry-run mode
   -f, --file .yaml                          node config files / patches (.yaml / `.yml`; shell completion narrows to these extensions). First -f is the modelined anchor (must live under a `talm init`'d project root); subsequent -f files are side-patches stacked onto the anchor's rendered config and may live anywhere.
       --force                               will overwrite existing files
   -h, --help                                help for apply
   -i, --insecure                            apply using the insecure (encrypted with no auth) maintenance service
-      --kubernetes-version string           desired kubernetes version to run (default "1.37.0")
+      --kubernetes-version string           desired kubernetes version to run; defaults to templateOptions.kubernetesVersion from Chart.yaml
   -m, --mode auto, no-reboot, staged, try   apply config mode (default auto)
       --set stringArray                     set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Values that parse as an integer or a boolean are converted to that type; use --set-string to keep them as strings.
       --set-file stringArray                set values from respective files specified via the command line (can specify multiple or separate values with commas: key1=path1,key2=path2)

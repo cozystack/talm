@@ -24,11 +24,10 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// TestShouldRunPostUpgradeVerify_SkipMatrix pins the predicate that
-// gates Phase 2C scheduling. The gate cannot produce a meaningful
-// result on --insecure (no auth COSI path) or --stage (new partition
-// not yet booted), which must be skipped to avoid a false-positive
-// blocker. The skip flag overrides everything (operator opt-out).
+// TestShouldRunPostUpgradeVerify_SkipMatrix pins Phase 2C scheduling. The verify
+// cannot produce a meaningful result after --stage (the new partition is not yet
+// booted, so runtime.Version still reports the old version), and the skip flag
+// overrides everything as an operator opt-out.
 //
 // Talos v1.14 removed upgrade's --insecure, which used to be the other skip.
 func TestShouldRunPostUpgradeVerify_SkipMatrix(t *testing.T) {

@@ -112,13 +112,12 @@ func TestContract_RenderLeavesV1Alpha1ComponentsAloneOnMultidocContract(t *testi
 // it needs to join, which the node file itself does not carry.
 func TestContract_ApplyPathCarriesEveryDocument(t *testing.T) {
 	opts := Options{KubernetesVersion: "v1.34.3", TalosVersion: "v1.14"}
+	// No cluster.controlPlane.endpoint: on this contract that field lives in
+	// KubeClusterConfig, and setting both is the conflict the render refuses.
 	patch := `machine:
   type: controlplane
   install:
     disk: /dev/sda
-cluster:
-  controlPlane:
-    endpoint: https://192.0.2.4:6443
 `
 
 	configBundle, machineType, err := FullConfigProcess(opts, []string{patch})
@@ -126,7 +125,7 @@ cluster:
 		t.Fatalf("FullConfigProcess: %v", err)
 	}
 
-	out, err := SerializeConfiguration(configBundle, machineType)
+	out, err := SerializeConfiguration(configBundle, machineType, opts.TalosVersion, opts.KubernetesVersion)
 	if err != nil {
 		t.Fatalf("SerializeConfiguration: %v", err)
 	}

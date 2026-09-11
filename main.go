@@ -448,10 +448,6 @@ func loadConfig(filename string) error {
 		commands.GlobalArgs.Talosconfig = commands.Config.GlobalOptions.Talosconfig
 	}
 
-	if commands.Config.TemplateOptions.KubernetesVersion == "" {
-		commands.Config.TemplateOptions.KubernetesVersion = constants.DefaultKubernetesVersion
-	}
-
 	// Fill in the default-string path BEFORE parsing so both the
 	// "operator left timeout empty" and "operator supplied a value"
 	// branches end up with TimeoutDuration populated. The previous

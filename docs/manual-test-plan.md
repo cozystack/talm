@@ -48,6 +48,21 @@ Watch for:
 - `talm.key` written without the security-information banner.
 - `.gitignore` not updated.
 
+### A1a. Version pins on a project created before them
+
+Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.12"`).
+
+```bash
+sed -i'' -e 's|talosVersion: .*|talosVersion: ""|' -e 's|kubernetesVersion: .*|kubernetesVersion: ""|' Chart.yaml
+talm template --offline --full -t templates/controlplane.yaml
+```
+
+Expected: the render stops with `templateOptions.kubernetesVersion is not set` and a hint naming the key.
+
+Restore `talosVersion: "v1.12"` alone and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore the preset's `kubernetesVersion: "v1.34.3"` too and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on that version.
+
+`--full` matters here. A default render is a diff against the same bundle, so the images cancel out on both sides and never appear in a node file either way.
+
 ### A2. `talm init` second run without `--force`
 
 ```bash
