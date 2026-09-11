@@ -184,7 +184,7 @@ func republishContainerFlags(cmd, wrappedCmd *cobra.Command) {
 
 // warnSkipVerifyUnsupported writes a warning to w when --skip-verify is set for
 // a wrapped talosctl passthrough command. Those commands run upstream RunE code
-// that builds its own client through upstream global.Args, which has no
+// that builds its own client through upstream's ClientFactory, which has no
 // skip-verify concept — only the dropped cozystack/talos fork could inject it
 // at the library level. So --skip-verify is a no-op for them; the warning keeps
 // the user from chasing an opaque TLS SAN failure. talm-native commands (apply,

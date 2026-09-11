@@ -1,3 +1,21 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+// The code in this file is derived from siderolabs/talos, which is licensed
+// under MPL-2.0, and is therefore kept under MPL-2.0 itself. The rest of talm
+// stays under Apache-2.0; MPL-2.0 §3.3 covers that combination.
+//
+// Talos v1.14.0 dropped FailIfMultiNodes and ForEachResource from
+// cmd/talosctl/pkg/talos/helpers: talosctl inlined the resource loop into its
+// own get command and left no exported replacement. The versions here follow
+// resources.go (the resource walk) and checks.go (the multi-node guard) and
+// behave as the helpers did, which is what the callers in engine.go expect:
+// https://github.com/siderolabs/talos/tree/v1.13.7/cmd/talosctl/pkg/talos/helpers
+//
+// Errors here go through the stdlib rather than cockroachdb/errors as the rest
+// of talm does, so the bodies stay diffable against upstream when it changes.
+
 package engine
 
 import (
@@ -12,18 +30,6 @@ import (
 
 	"github.com/siderolabs/talos/pkg/machinery/client"
 )
-
-// Talos v1.14.0 dropped FailIfMultiNodes and ForEachResource from
-// cmd/talosctl/pkg/talos/helpers: talosctl inlined the resource loop into its
-// own get command and left no exported replacement. Both are thin wrappers over
-// the public client API, so talm carries its own, the same way it carries
-// --skip-verify since the fork was dropped. Behaviour matches what the helpers
-// did before they were dropped, which is what the callers in engine.go expect.
-//
-// These follow the structure of siderolabs/talos
-// cmd/talosctl/pkg/talos/helpers/resources.go (the resource walk) and
-// checks.go (the multi-node guard), both licensed under MPL-2.0:
-// https://github.com/siderolabs/talos/tree/v1.13.7/cmd/talosctl/pkg/talos/helpers
 
 // ErrMultiNodeUnsupported is returned for a command that only makes sense
 // against a single node when the context names more than one.

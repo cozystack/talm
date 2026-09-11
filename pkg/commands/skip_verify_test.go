@@ -250,7 +250,7 @@ func withGlobalArgsReset(t *testing.T) {
 
 // TestSkipVerifyClientOptions_ClusterThreaded pins that --cluster is not lost on
 // the skip-verify path: setting GlobalArgs.Cluster adds exactly one option
-// (client.WithCluster), matching upstream global.Args.WithClientNoNodes. The
+// (client.WithCluster), matching newClientNoNodes. The
 // option slice is the only observable surface — client.Options fields are
 // unexported — so coverage is by option count.
 func TestSkipVerifyClientOptions_ClusterThreaded(t *testing.T) {
