@@ -512,8 +512,8 @@ peer:
 ---
 apiVersion: v1alpha1
 kind: Layer2VIPConfig
+name: 192.0.2.10
 link: veth1
-ip: 192.0.2.10
 `
 	refs, err := applycheck.WalkRefs([]byte(body))
 	if err != nil {
@@ -530,6 +530,174 @@ ip: 192.0.2.10
 	for i := range findings {
 		if findings[i].IsBlocker() {
 			t.Errorf("veth-backed VIP blocked the apply: %+v", findings[i])
+		}
+	}
+}
+
+// TestWalkRefs_v1_14_BGPNeighborLink pins that an unnumbered BGP neighbor's
+// link is validated like any other existing-link reference, while a numbered
+// neighbor (which carries an address instead) contributes nothing. Talos v1.14
+// added the kind.
+func TestWalkRefs_v1_14_BGPNeighborLink(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: BGPInstanceConfig
+name: bgp0
+localASN: 64496
+neighbors:
+  - link: ghost0
+    peerASN: 64497
+  - address: 192.0.2.1
+    peerASN: 64498
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	if _, ok := findRef(refs, applycheck.RefKindLink, "ghost0"); !ok {
+		t.Errorf("unnumbered neighbor link not validated, got refs=%+v", refs)
+	}
+
+	if _, ok := findRef(refs, applycheck.RefKindLink, "bgp0"); ok {
+		t.Error("instance name leaked as a link ref; it names the BGP instance, not a link")
+	}
+}
+
+// TestWalkRefs_v1_14_BGPAdvertiseLinks pins that the links an instance
+// originates addresses from are validated too. They are existing links, the
+// same shape as BondConfig.links, and a typo there otherwise reaches the node.
+func TestWalkRefs_v1_14_BGPAdvertiseLinks(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: BGPInstanceConfig
+name: bgp0
+localASN: 64496
+advertise:
+  - ghost0
+  - ens5
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	for _, link := range []string{"ghost0", "ens5"} {
+		if _, ok := findRef(refs, applycheck.RefKindLink, link); !ok {
+			t.Errorf("advertise link %q not validated, got refs=%+v", link, refs)
+		}
+	}
+}
+
+// TestWalkRefs_v1_14_BGPAdvertiseAcceptsCreatedLinks pins that a BGP instance
+// may advertise links the same apply creates. Wireguard overlays and VRF
+// devices are the common cases, and both are link-creating document kinds
+// upstream, so blocking them would reject a config Talos accepts.
+func TestWalkRefs_v1_14_BGPAdvertiseAcceptsCreatedLinks(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: WireguardConfig
+name: wg0
+---
+apiVersion: v1alpha1
+kind: VRFConfig
+name: vrf-blue
+---
+apiVersion: v1alpha1
+kind: BGPInstanceConfig
+name: bgp0
+localASN: 64496
+advertise:
+  - wg0
+  - vrf-blue
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"eth0"}})
+	for i := range findings {
+		if findings[i].IsBlocker() {
+			t.Errorf("advertising a link this apply creates must not block: %+v", findings[i])
+		}
+	}
+}
+
+// TestWalkRefs_v1_14_VRFLinksValidated pins the other half of the VRF handler:
+// the links a VRF enslaves must exist, the same as a bond's or a bridge's.
+func TestWalkRefs_v1_14_VRFLinksValidated(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: VRFConfig
+name: vrf-blue
+links:
+  - ghost0
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	if _, ok := findRef(refs, applycheck.RefKindLink, "ghost0"); !ok {
+		t.Errorf("an enslaved link is not validated, got refs=%+v", refs)
+	}
+
+	if _, ok := findRef(refs, applycheck.RefKindLink, "vrf-blue"); ok {
+		t.Error("the VRF's own name leaked as an existing-link ref; this apply creates it")
+	}
+}
+
+// TestWalkRefs_v1_14_BGPVRFValidated pins that the VRF a session runs in is
+// resolved like any other link reference. Machinery does not check it, and the
+// node only notices at runtime, where the miss takes the BGP projection down.
+func TestWalkRefs_v1_14_BGPVRFValidated(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: BGPInstanceConfig
+name: bgp0
+localASN: 64496
+vrf: ghost-vrf
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	if _, ok := findRef(refs, applycheck.RefKindLink, "ghost-vrf"); !ok {
+		t.Errorf("the VRF reference is not validated, got refs=%+v", refs)
+	}
+}
+
+// A VRF created by the same apply satisfies the reference, so declaring both
+// documents together is not a blocker.
+func TestWalkRefs_v1_14_BGPVRFAcceptsCreatedVRF(t *testing.T) {
+	t.Parallel()
+
+	body := `apiVersion: v1alpha1
+kind: VRFConfig
+name: vrf-blue
+---
+apiVersion: v1alpha1
+kind: BGPInstanceConfig
+name: bgp0
+localASN: 64496
+vrf: vrf-blue
+`
+	refs, err := applycheck.WalkRefs([]byte(body))
+	if err != nil {
+		t.Fatalf("WalkRefs: %v", err)
+	}
+
+	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"ens5"}})
+	for i := range findings {
+		if findings[i].IsBlocker() {
+			t.Errorf("a VRF this apply creates must satisfy the reference: %+v", findings[i])
 		}
 	}
 }

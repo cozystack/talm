@@ -362,19 +362,29 @@ func TestWalkNetAddrFindings_RealSchema_NetworkRuleConfig(t *testing.T) {
 	}
 }
 
-// TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers pins the
-// dispatch-map disjointness contract: net-addr handlers run in a
-// parallel walker, so a kind that appears in BOTH maps would get
-// double-walked (one finding from each pipeline) — silent
-// duplication. None of the three net-addr kinds (StaticHostConfig,
-// NetworkRuleConfig, WireguardConfig) are in multidocHandlers today;
-// pin that contract so a future entry doesn't create overlap.
-func TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers(t *testing.T) {
+// TestMultidocNetAddrHandlers_OverlapEmitsNoValidatedRefs pins what the two
+// dispatch maps must not do together: report the same thing twice.
+//
+// A kind may appear in both — WireguardConfig does, because the net-addr walker
+// checks its peer endpoints while the ref walker records the link it creates.
+// That is safe only while the ref side emits nothing that gets validated: a
+// created-link ref seeds the known-links set and produces no finding of its own.
+// A kind that emitted an existing-link ref from one map and a finding from the
+// other would surface the same mistake twice.
+func TestMultidocNetAddrHandlers_OverlapEmitsNoValidatedRefs(t *testing.T) {
 	t.Parallel()
 
 	for kind := range multidocNetAddrHandlers {
-		if _, exists := multidocHandlers[kind]; exists {
-			t.Errorf("kind %q registered in BOTH multidocHandlers (ref-based) and multidocNetAddrHandlers (syntactic) — duplicate findings; pick one pipeline", kind)
+		handler, overlaps := multidocHandlers[kind]
+		if !overlaps {
+			continue
+		}
+
+		refs := handler(nil, map[string]any{"name": "probe0"}, "doc[0]")
+		for _, ref := range refs {
+			if ref.Kind != RefKindLinkCreated {
+				t.Errorf("kind %q is in both dispatch maps and emits a validated ref (%v) — the same mistake would be reported twice", kind, ref.Kind)
+			}
 		}
 	}
 }

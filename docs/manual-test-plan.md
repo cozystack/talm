@@ -927,6 +927,9 @@ The Section C entries above smoke the apply pipe end-to-end. This section is the
 | Typoed bridge slave | Add `BridgeConfig{name: br99, links: [ghost0]}` (YAML key is `links`, NOT `ports` — `bridge.go BridgeLinks`) | Blocker on `ghost0` only; `br99` not flagged |
 | Typoed Layer2VIP link | Set `vipLink: ghost0` in values | Blocker on `link: ghost0` |
 | VIP on a veth end | Add `VethConfig{name: veth0, peer: {name: veth1}}` plus `Layer2VIPConfig{link: veth1}` | No finding — both ends are links the apply creates (Talos v1.14 kind) |
+| Typoed BGP neighbor link | Add `BGPInstanceConfig{name: bgp0, neighbors: [{link: ghost0}]}` | Blocker on `neighbors[0].link`; `bgp0` not flagged (names the instance, not a link) |
+| BGP advertising a link the apply creates | Add `WireguardConfig{name: wg0}` plus `BGPInstanceConfig{advertise: [wg0]}` | No finding — wireguard, VRF, veth, bond, bridge and VLAN documents all create links the rest of the config may reference |
+| Link named by its alias | On a node whose `talosctl get links` shows an alias or altname for a NIC, reference that alias from `BondConfig.links[]`, `VRFConfig.links[]`, `BGPInstanceConfig.advertise[]` or `neighbors[].link` | No finding — machinery accepts an alias wherever it accepts a link name, so the snapshot carries aliases and altnames alongside IDs |
 | Legacy v1.11 interface | `machine.network.interfaces[].interface: eth9999` | Blocker; same hint shape |
 
 #### Disk references

@@ -165,6 +165,10 @@ func walkV1Alpha1Root(refs []Ref, machine map[string]any, basePath string) []Ref
 	return refs
 }
 
+// wireguardConfigKind is dispatched by both walkers: here for the link it
+// creates, and in the net-addr walker for its peer endpoints.
+const wireguardConfigKind = "WireguardConfig"
+
 // multidocHandler emits the refs for one v1.12 multi-doc kind. Handlers are
 // registered in multidocHandlers and dispatched by walkMultidocKind; this
 // keeps walkMultidocKind a flat lookup instead of a giant switch.
@@ -204,15 +208,23 @@ var multidocHandlers = map[string]multidocHandler{
 	// created. Their .name is the new resource, not an existing-link
 	// reference, so it is recorded as created rather than validated —
 	// that way a VLAN or VIP pointing at one of them in the same config
-	// resolves. WireguardConfig also creates a link but is deliberately
-	// absent here: it belongs to the parallel net-addr walker, and the
-	// two dispatch maps must stay disjoint or a kind gets double-walked.
+	// resolves.
 	"DummyLinkConfig": handleCreatorOnly,
 	"LinkAliasConfig": handleCreatorOnly,
+	// WireguardConfig and VRFConfig create a link the rest of the config may
+	// point at. WireguardConfig is also dispatched by the net-addr walker, which
+	// checks its peer endpoints; the two walkers produce different kinds of
+	// output, and a created-link ref is never validated, so neither duplicates
+	// the other. VRFConfig additionally names the links it enslaves.
+	wireguardConfigKind: handleCreatorOnly,
+	"VRFConfig":         handleListOnly("links"),
 	// A veth pair brings both of its ends into existence (veth.go MetaName
 	// plus VethPeerConfig.name), so both are recorded rather than validated.
-	"VethConfig":       handleVeth,
-	"UserVolumeConfig": handleUserVolume,
+	"VethConfig": handleVeth,
+	// An unnumbered BGP session names an existing link or alias to run over
+	// (bgp.go NeighborLinkConfig `yaml:"link"`); .name is the instance, not a link.
+	"BGPInstanceConfig": handleBGPInstance,
+	"UserVolumeConfig":  handleUserVolume,
 }
 
 // walkMultidocKind handles v1.12 multi-doc shapes by kind discriminator.
@@ -262,14 +274,59 @@ func handleVeth(refs []Ref, doc map[string]any, basePath string) []Ref {
 	return appendCreatedRef(refs, peer, basePath+".peer")
 }
 
+// handleBGPInstance emits an existing-link ref for every link the instance
+// names: the .advertise[] entries whose addresses are originated into BGP, and
+// each neighbor running an unnumbered session over a link. Numbered neighbors
+// carry .address instead and reference no link, and .name is the instance.
+//
+// .vrf names the VRF the session runs in. Machinery does not resolve it —
+// BGPInstanceConfig.Validate only reads the field to reject BFD in a VRF — and
+// the miss surfaces only in the node's controller at runtime, where it takes the
+// whole BGP projection down. A VRF device is a link, and VRFConfig registers its
+// name as one this apply creates, so the reference resolves the same way the
+// others do.
+func handleBGPInstance(refs []Ref, doc map[string]any, basePath string) []Ref {
+	refs = appendListRefs(refs, doc, "advertise", basePath+".advertise")
+
+	if vrf, ok := doc["vrf"].(string); ok && vrf != "" {
+		refs = append(refs, Ref{Kind: RefKindLink, Name: vrf, Source: basePath + ".vrf"})
+	}
+
+	neighbors, ok := doc["neighbors"].([]any)
+	if !ok {
+		return refs
+	}
+
+	for i, entry := range neighbors {
+		neighbor, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		link, ok := neighbor["link"].(string)
+		if !ok || link == "" {
+			continue
+		}
+
+		refs = append(refs, Ref{
+			Kind:   RefKindLink,
+			Name:   link,
+			Source: fmt.Sprintf("%s.neighbors[%d].link", basePath, i),
+		})
+	}
+
+	return refs
+}
+
 // handleListOnly records the doc's own .name as a link this config
 // creates, then emits one existing-link ref per entry of its list-valued
-// slaves/ports. Used for BondConfig and BridgeConfig: the .name
+// slaves/ports. Used for BondConfig, BridgeConfig and VRFConfig: the .name
 // describes a virtual link the apply brings into existence — validating
 // it against the node would reject every bond on its first apply, while
 // recording it lets a VLAN or VIP elsewhere in the same config resolve
-// against it. The .links[] members are pre-existing physical NICs that
-// must already be present.
+// against it. The .links[] members must resolve too, either to a link on
+// the node or to one another document in the same apply creates. A member may
+// name a link by its alias, which is why the host snapshot carries aliases.
 func handleListOnly(listKey string) multidocHandler {
 	return func(refs []Ref, doc map[string]any, basePath string) []Ref {
 		refs = appendCreatedRef(refs, doc, basePath)

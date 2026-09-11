@@ -648,13 +648,15 @@ parent: bond9
 	}
 }
 
-// WireguardConfig is deliberately the exception to the created-link union:
-// it belongs to the net-addr walker (which validates peers[].endpoint) and
-// stays out of the link dispatch map, so it does NOT register its .name as
-// a created link. A VLAN or VIP layered on a wireguard link therefore still
-// blocks on first apply. This pins that boundary so the README claim and
-// the code cannot drift.
-func TestValidateRefs_WireguardCreatedLinkDoesNotSatisfyReferences(t *testing.T) {
+// A wireguard link is created by the apply, exactly like a bond or a dummy:
+// a wireguard link is one the apply brings into existence, not one the node is
+// expected to already carry. A VLAN parented to it, or a VIP on it, is a
+// config Talos accepts, so neither may block.
+//
+// WireguardConfig is dispatched by both walkers — the net-addr one validates its
+// peer endpoints — which is safe because the ref side only records the created
+// link and emits nothing that gets validated.
+func TestValidateRefs_WireguardCreatedLinkSatisfiesReferences(t *testing.T) {
 	t.Parallel()
 
 	rendered := []byte(`apiVersion: v1alpha1
@@ -680,21 +682,10 @@ link: wg0
 
 	findings := applycheck.ValidateRefs(refs, applycheck.HostSnapshot{Links: []string{"eth0"}})
 
-	var parentBlocked, linkBlocked bool
 	for i := range findings {
-		f := &findings[i]
-		if !f.IsBlocker() || !strings.Contains(f.Ref.Name, "wg0") {
-			continue
+		if findings[i].IsBlocker() && strings.Contains(findings[i].Ref.Name, "wg0") {
+			t.Errorf("a reference to a wireguard link created by this apply must not block: %+v", findings[i])
 		}
-		if strings.HasSuffix(f.Ref.Source, ".parent") {
-			parentBlocked = true
-		}
-		if strings.HasSuffix(f.Ref.Source, ".link") {
-			linkBlocked = true
-		}
-	}
-	if !parentBlocked || !linkBlocked {
-		t.Errorf("a VLAN parent and a VIP link on a wireguard-created link must both still block, got %+v", findings)
 	}
 }
 
