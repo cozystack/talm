@@ -1341,16 +1341,17 @@ talm get metakey --nodes $NODE --endpoints $NODE
 
 Expected: table of META keys with their values.
 
-### G1a. `--insecure` does not reach `meta` subcommands on Talos v1.14
+### G1a. `--insecure` reaches `meta` subcommands
 
 ```bash
 talm meta write --insecure 0x0a "test-value" --nodes $NODE --endpoints $NODE
+talm meta write -i 0x0a "test-value" --nodes $NODE --endpoints $NODE
 talm meta --insecure write 0x0a "test-value" --nodes $NODE --endpoints $NODE
 ```
 
-Expected on v1.14: both forms fail with `unknown flag: --insecure`. Upstream registers the flag on `metaCmd.Flags()` rather than `PersistentFlags()`, so it reaches neither the subcommand (a local parent flag is not inherited) nor the parent (which takes no args), and `talosctl` behaves the same way. talm mirrors upstream instead of compensating, so META writes against a node in maintenance mode need a Talos-side fix.
+Expected: all three reach the node over the maintenance service. Run this against a node in maintenance mode, before it has a machine config, which is the case the flag exists for.
 
-Tracked upstream as [siderolabs/talos#14346](https://github.com/siderolabs/talos/issues/14346). Re-run this case after every Talos bump: once upstream restores the flag, the first form starts working again and this case flips to pinning that.
+Talos v1.14 registers the flag on `metaCmd.Flags()` rather than `PersistentFlags()`, where it reaches neither the subcommands nor the parent, so plain `talosctl` rejects all three spellings. talm re-publishes container-command flags as persistent to keep this path working ([siderolabs/talos#14346](https://github.com/siderolabs/talos/issues/14346), fixed by [#14347](https://github.com/siderolabs/talos/pull/14347), merged to `main` and not yet in a v1.14 release). Re-run after every Talos bump: once the fix ships in the release talm tracks, the wrapper step is redundant and should be removed.
 
 ### G2. Write a test key
 

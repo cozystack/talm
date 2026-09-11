@@ -632,19 +632,17 @@ func TestWrapTalosCommand_RealCrashdumpPopulatesNodesFromControlPlane(t *testing
 	}
 }
 
-// TestWrapTalosCommand_RealMetaPropagatesInsecure pins that the wrapper copies
-// the upstream meta command's --insecure across, long form and -i shorthand
-// both, so a future regression that copies the flag but drops the shorthand
-// attribute is caught.
+// TestWrapTalosCommand_RealMetaReachesSubcommandsWithInsecure pins that
+// --insecure reaches `meta write`, long form and -i shorthand both.
 //
-// It asserts on `meta`, not on `meta write`. Talos v1.14.0 moved --insecure
-// from metaCmd.PersistentFlags() to metaCmd.Flags() when it introduced
-// global.InsecureFlags, and a local flag does not reach a subcommand, so
-// `talosctl meta write --insecure` stopped parsing upstream as well. talm
-// mirrors upstream here rather than papering over it; compensating would mean
-// talm accepting a flag talosctl rejects. Reported as
-// https://github.com/siderolabs/talos/issues/14346.
-func TestWrapTalosCommand_RealMetaPropagatesInsecure(t *testing.T) {
+// Talos v1.14.0 moved the flag from metaCmd.PersistentFlags() to metaCmd.Flags()
+// when it introduced global.InsecureFlags. A local flag on a container command
+// reaches neither its subcommands nor the command itself, which took away the
+// only way to write a META key over the maintenance service
+// (https://github.com/siderolabs/talos/issues/14346). The wrapper re-publishes
+// such flags as persistent, so writing META on a node in maintenance mode keeps
+// working while the upstream fix is in flight.
+func TestWrapTalosCommand_RealMetaReachesSubcommandsWithInsecure(t *testing.T) {
 	var metaCmd *cobra.Command
 
 	for _, cmd := range taloscommands.Commands {
@@ -661,23 +659,109 @@ func TestWrapTalosCommand_RealMetaPropagatesInsecure(t *testing.T) {
 
 	wrapped := wrapTalosCommand(metaCmd, "meta")
 
-	// Long form.
-	if err := wrapped.ParseFlags([]string{"--insecure"}); err != nil {
-		t.Fatalf("ParseFlags --insecure on wrapped meta: %v", err)
+	writeCmd, _, err := wrapped.Find([]string{"write"})
+	if err != nil {
+		t.Fatalf("Find write under wrapped meta: %v", err)
 	}
 
-	if wrapped.Flags().Lookup("insecure") == nil {
-		t.Fatal("wrapped meta must carry --insecure across from the upstream command")
+	// Long form on the subcommand, which is where operators put it.
+	if err := writeCmd.ParseFlags([]string{"--insecure"}); err != nil {
+		t.Fatalf("ParseFlags --insecure on wrapped meta write: %v", err)
+	}
+
+	if writeCmd.Flags().Lookup("insecure") == nil {
+		t.Fatal("wrapped meta write must inherit --insecure from the wrapper")
 	}
 
 	// Short form. Re-parse to exercise the -i alias path.
-	if err := wrapped.ParseFlags([]string{"-i"}); err != nil {
-		t.Errorf("ParseFlags -i on wrapped meta: %v — shorthand attribute lost during copy?", err)
+	if err := writeCmd.ParseFlags([]string{"-i"}); err != nil {
+		t.Errorf("ParseFlags -i on wrapped meta write: %v — shorthand attribute lost during copy?", err)
 	}
 
-	// The subcommands still exist and still do not see the parent's local flag,
-	// exactly as upstream leaves them.
-	if _, _, err := wrapped.Find([]string{"write"}); err != nil {
-		t.Fatalf("Find write under wrapped meta: %v", err)
+	// The fingerprint flag travels with it; --insecure alone would drop the
+	// pinning that makes the unauthenticated connection safe to use.
+	if writeCmd.Flags().Lookup("cert-fingerprint") == nil {
+		t.Error("wrapped meta write must inherit --cert-fingerprint alongside --insecure")
+	}
+}
+
+// TestRepublishContainerFlags_SkipsShadowedFlags pins that a container
+// command's local flag is dropped when talm's root already owns that name.
+// Re-publishing it as persistent would shadow the root flag for the whole
+// subtree, which is the collision rootShadowedPersistentFlags exists to avoid.
+func TestRepublishContainerFlags_SkipsShadowedFlags(t *testing.T) {
+	upstream := &cobra.Command{Use: "upstream"}
+	upstream.Flags().String(talosconfigName, "", "collides with talm's root flag")
+	upstream.AddCommand(&cobra.Command{Use: "child"})
+
+	wrapped := &cobra.Command{Use: "wrapped"}
+
+	republishContainerFlags(upstream, wrapped)
+
+	if got := wrapped.PersistentFlags().Lookup(talosconfigName); got != nil {
+		t.Errorf("--%s was re-published despite being owned by talm's root command", talosconfigName)
+	}
+}
+
+// TestRepublishContainerFlags_LeavesPersistentFlagsAlone pins the branch the
+// removal plan rests on: a flag upstream already registered as persistent is
+// left untouched. When siderolabs/talos#14347 lands, --insecure arrives
+// persistent and this pass has to become a no-op instead of a second
+// registration.
+func TestRepublishContainerFlags_LeavesPersistentFlagsAlone(t *testing.T) {
+	upstream := &cobra.Command{Use: "upstream"}
+	upstream.PersistentFlags().Bool("insecure", false, "already persistent upstream")
+	upstream.AddCommand(&cobra.Command{Use: "child"})
+
+	wrapped := &cobra.Command{Use: "wrapped"}
+
+	propagatePersistentFlags(upstream, wrapped)
+
+	before := wrapped.PersistentFlags().Lookup("insecure")
+	if before == nil {
+		t.Fatal("the persistent pass must carry --insecure across")
+	}
+
+	republishContainerFlags(upstream, wrapped)
+
+	if after := wrapped.PersistentFlags().Lookup("insecure"); after != before {
+		t.Error("--insecure was re-registered; the pass must leave an already-persistent flag as it is")
+	}
+}
+
+// TestRepublishContainerFlags_RenamesShorthandF pins the same defensive rename
+// propagatePersistentFlags does: shorthand `f` belongs to talm's own --file, so
+// a container command's local `-f` must arrive as `-F`.
+func TestRepublishContainerFlags_RenamesShorthandF(t *testing.T) {
+	upstream := &cobra.Command{Use: "upstream"}
+	upstream.Flags().StringP("foo", "f", "default", "shadow shorthand f")
+	upstream.AddCommand(&cobra.Command{Use: "child"})
+
+	wrapped := &cobra.Command{Use: "wrapped"}
+
+	republishContainerFlags(upstream, wrapped)
+
+	got := wrapped.PersistentFlags().Lookup("foo")
+	if got == nil {
+		t.Fatal("re-publishing must register --foo on wrappedCmd.PersistentFlags(); got nil")
+	}
+
+	if got.Shorthand != "F" {
+		t.Errorf("shorthand must be renamed from 'f' to 'F' to avoid colliding with talm's --file; got %q", got.Shorthand)
+	}
+}
+
+// A command without subcommands keeps its local flags local: re-publishing them
+// would widen their scope for no reason, since nothing inherits from it.
+func TestRepublishContainerFlags_IgnoresLeafCommands(t *testing.T) {
+	upstream := &cobra.Command{Use: "upstream"}
+	upstream.Flags().Bool("insecure", false, "local to a leaf")
+
+	wrapped := &cobra.Command{Use: "wrapped"}
+
+	republishContainerFlags(upstream, wrapped)
+
+	if wrapped.PersistentFlags().Lookup("insecure") != nil {
+		t.Error("a leaf command's local flag must not become persistent on the wrapper")
 	}
 }
