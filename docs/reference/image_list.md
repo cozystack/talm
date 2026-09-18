@@ -19,7 +19,7 @@ talm image list [flags]
       --cluster string       Cluster to connect to if a proxy endpoint is used.
       --context string       Context to be used in command
   -e, --endpoints strings    override default endpoints in Talos configuration
-      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "cri")
+      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance, "taloscontainers" for containers declared via ContainerConfig (default "cri")
       --nodes strings        target the specified nodes
       --root string          root directory of the project (default ".")
       --skip-verify          skip TLS certificate verification (keeps client authentication)

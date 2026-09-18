@@ -362,19 +362,43 @@ func TestWalkNetAddrFindings_RealSchema_NetworkRuleConfig(t *testing.T) {
 	}
 }
 
-// TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers pins the
-// dispatch-map disjointness contract: net-addr handlers run in a
-// parallel walker, so a kind that appears in BOTH maps would get
-// double-walked (one finding from each pipeline) — silent
-// duplication. None of the three net-addr kinds (StaticHostConfig,
-// NetworkRuleConfig, WireguardConfig) are in multidocHandlers today;
-// pin that contract so a future entry doesn't create overlap.
-func TestMultidocNetAddrHandlers_NoOverlapWithRefHandlers(t *testing.T) {
+// TestMultidocNetAddrHandlers_OverlapIsDeclared pins what the two dispatch maps
+// must not do together: report the same thing twice.
+//
+// A kind may appear in both — WireguardConfig does, because the net-addr walker
+// checks its peer endpoints while the ref walker records the link it creates.
+// That is safe only while the ref side emits nothing that gets validated, which
+// is a property of the handler, not of any one document. So the overlap is
+// declared here by name rather than probed: a probe only exercises the fields it
+// happens to carry, and a future handler reading a different key would slip past
+// it while duplicating findings for real.
+func TestMultidocNetAddrHandlers_OverlapIsDeclared(t *testing.T) {
 	t.Parallel()
 
+	// Kinds allowed in both maps, each because its ref-side handler only records
+	// a created link.
+	declared := map[string]struct{}{
+		wireguardConfigKind: {},
+	}
+
 	for kind := range multidocNetAddrHandlers {
-		if _, exists := multidocHandlers[kind]; exists {
-			t.Errorf("kind %q registered in BOTH multidocHandlers (ref-based) and multidocNetAddrHandlers (syntactic) — duplicate findings; pick one pipeline", kind)
+		if _, overlaps := multidocHandlers[kind]; !overlaps {
+			continue
+		}
+
+		if _, allowed := declared[kind]; !allowed {
+			t.Errorf("kind %q is in both dispatch maps without being declared here; confirm its ref handler emits only created-link refs, then add it", kind)
+		}
+	}
+
+	// The declaration has to stay honest: every kind listed must still be in both
+	// maps, or it is stale cover for an overlap that no longer exists.
+	for kind := range declared {
+		_, inRefs := multidocHandlers[kind]
+		_, inNetAddr := multidocNetAddrHandlers[kind]
+
+		if !inRefs || !inNetAddr {
+			t.Errorf("kind %q is declared as an allowed overlap but is no longer in both maps", kind)
 		}
 	}
 }

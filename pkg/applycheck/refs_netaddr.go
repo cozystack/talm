@@ -34,7 +34,7 @@ type netAddrHandler func(doc map[string]any, basePath string) []Finding
 var multidocNetAddrHandlers = map[string]netAddrHandler{
 	"StaticHostConfig":  handleStaticHostConfigName,
 	"NetworkRuleConfig": handleNetworkRuleConfigIngress,
-	"WireguardConfig":   handleWireguardEndpoints,
+	wireguardConfigKind: handleWireguardEndpoints,
 }
 
 // WalkNetAddrFindings parses the rendered MachineConfig bytes and

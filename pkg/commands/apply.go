@@ -458,7 +458,7 @@ func applyOneFileTemplateMode(configFile string, sidePatches, modelineTemplates 
 // template-rendering mode. ctx is shaped for ApplyConfiguration on
 // every apply path: the auth branch sets `nodes` (plural, one
 // element) via openClientPerNodeAuth so apid resolves a single
-// backend and helpers.ForEachResource can read the plural key from
+// backend and pkg/engine's forEachResource can read the plural key from
 // inside template lookups; the insecure branch carries no node
 // metadata at all and the maintenance client dials a single endpoint
 // per call.
@@ -521,7 +521,7 @@ func buildApplyClosure() applyFunc {
 // client.WithNode (singular) here is intentional and unrelated to
 // the auth template-rendering apply path's switch from WithNode to
 // WithNodes (openClientPerNodeAuth) — preflight performs a direct
-// COSI Get against one resource, not a helpers.ForEachResource walk
+// COSI Get against one resource, not a pkg/engine forEachResource walk
 // that reads the plural "nodes" metadata key. apid's COSI router
 // accepts the singular "node" key for single-target addressing (and
 // rejects the plural "nodes" key for any COSI method, regardless of
@@ -567,12 +567,12 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 		)
 	}
 
-	result, err := engine.SerializeConfiguration(configBundle, machineType)
+	result, err := engine.SerializeConfiguration(configBundle, machineType, opts.TalosVersion, opts.KubernetesVersion)
 	if err != nil {
 		//nolint:wrapcheck // already wrapped via errors.Wrap, WithHint adds operator-facing guidance
 		return errors.WithHint(
 			errors.Wrap(err, "serializing configuration"),
-			"the merged config bundle could not be encoded back to YAML; this is internal — file an issue if reproducible",
+			"if the message above names a templateOptions key or a v1alpha1 conflict, it is the project's Chart.yaml to fix; anything else is internal — file an issue if reproducible",
 		)
 	}
 
@@ -710,8 +710,8 @@ func shouldRunDriftPreview(skip bool) bool {
 }
 
 // runPostApplyGate wires Phase 2B (post-apply state verification).
-// Skipped on dry-run (no real apply) and on the staged/try/reboot
-// apply modes:
+// Skipped on dry-run (no real apply) and on the staged, try and
+// reboot apply modes:
 //
 //   - --mode=staged stores the new config as staged; the active
 //     MachineConfig resource is unchanged until reboot, so a verify
@@ -719,11 +719,13 @@ func shouldRunDriftPreview(skip bool) bool {
 //   - --mode=try applies the config but auto-rolls back after the
 //     configured timeout; verify would race against the rollback
 //     timer and produce false positives.
-//   - --mode=reboot reboots the node after ApplyConfiguration
+//   - the REBOOT mode reboots the node after ApplyConfiguration
 //     returns success; the COSI connection dies mid-verify and the
 //     reader returns a transient error, which the gate would
 //     surface as a blocker — a false positive for a successful
-//     reboot apply.
+//     reboot apply. No --mode spelling produces it since Talos
+//     v1.14 (see modeReboot below); the branch stays for the value
+//     itself, which the server still serves.
 //
 // All three modes have explicit contracts that diverge from "what
 // was sent is what is on the node now after success was reported"
@@ -742,6 +744,15 @@ func runPostApplyGate(ctx context.Context, c *client.Client, sent []byte, nodeID
 	return verifyAppliedState(ctx, cosiMachineConfigReader(c, applyCmdFlags.insecure), sent, nodeID, w, redactor)
 }
 
+// modeReboot is the apply mode that reboots the node after ApplyConfiguration.
+// Talos v1.14 deprecated the enum value and dropped "reboot" from the mode flag
+// it registers, so no --mode spelling produces it anymore; the server still
+// serves the value. The predicate below stays exhaustive over the enum so the
+// mode keeps its skip-the-verify behaviour if upstream brings the spelling back.
+//
+//nolint:staticcheck // SA1019: deprecated upstream, still served; named once instead of suppressed per use.
+const modeReboot = machineapi.ApplyConfigurationRequest_REBOOT
+
 // shouldRunPostApplyVerify is the testable predicate for runPostApplyGate.
 // Returns false when the verify must be skipped for any reason listed in
 // runPostApplyGate's doc.
@@ -753,7 +764,7 @@ func shouldRunPostApplyVerify(mode machineapi.ApplyConfigurationRequest_Mode, dr
 	switch mode {
 	case machineapi.ApplyConfigurationRequest_STAGED,
 		machineapi.ApplyConfigurationRequest_TRY,
-		machineapi.ApplyConfigurationRequest_REBOOT,
+		modeReboot,
 		// AUTO is skipped because Talos's apply-server promotes AUTO
 		// to REBOOT internally when the change requires it (the
 		// CanApplyImmediate check inside v1alpha1_server.go's AUTO
@@ -815,7 +826,7 @@ type (
 // openClientFunc opens a Talos client suitable for a single node and runs
 // action with it. Authenticated mode reuses one parent client and rotates
 // the node via single-element-slice gRPC metadata (client.WithNodes with
-// one entry — the plural key is what helpers.ForEachResource and apid both
+// one entry — the plural key is what pkg/engine's forEachResource and apid both
 // read, while FailIfMultiNodes still treats len("nodes") == 1 as
 // single-target). Insecure (maintenance) mode opens a fresh
 // single-endpoint client per node because Talos's maintenance client
@@ -919,18 +930,18 @@ func openClientPerNodeMaintenance(fingerprints []string, mkClient maintenanceCli
 
 // openClientPerNodeAuth returns an openClientFunc that reuses one
 // authenticated client (the one withApplyClientBare opened above this
-// callback) and rotates the addressed node via client.WithNodes on the
+// callback) and rotates the addressed node via withNodesMetadata on the
 // per-iteration context, passing a single-element slice. The plural key
-// is what Talos's helpers.ForEachResource reads inside template lookups
-// (cmd/talosctl/pkg/talos/helpers/resources.go) — a singular "node" key
+// is what forEachResource reads inside template lookups
+// (pkg/engine/talos_helpers.go) — a singular "node" key
 // is invisible to it and the helper falls back to []string{""}, which
 // surfaces as `rpc error: code = Internal desc = invalid target ""`
-// from inside template `lookup` calls. helpers.FailIfMultiNodes accepts
+// from inside template `lookup` calls. failIfMultiNodes accepts
 // len("nodes") <= 1, so a single-element slice still satisfies the
 // multi-node guard while making lookups work.
 func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClientFunc {
 	return func(node string, action func(ctx context.Context, c *client.Client) error) error {
-		return action(client.WithNodes(parentCtx, node), c)
+		return action(withNodesMetadata(parentCtx, node), c)
 	}
 }
 
@@ -946,7 +957,7 @@ func openClientPerNodeAuth(parentCtx context.Context, c *client.Client) openClie
 // helper.
 //
 // The auth template-rendering apply path uses client.WithNodes
-// (plural, single-element slice) so that helpers.ForEachResource and
+// (plural, single-element slice) so that pkg/engine's forEachResource and
 // the apid backend resolver can both read the plural key from template
 // lookups; that ctx is therefore unsuitable for COSI reads as is.
 //
@@ -1143,7 +1154,7 @@ func wrapWithNodeContext(action func(ctx context.Context, c *client.Client) erro
 			nodes = configContext.Nodes
 		}
 
-		ctx = client.WithNodes(ctx, nodes...)
+		ctx = withNodesMetadata(ctx, nodes...)
 
 		return action(ctx, c)
 	}
@@ -1229,11 +1240,11 @@ func init() {
 	applyCmd.Flags().StringArrayVar(&applyCmdFlags.literalValues, "set-literal", []string{}, "set a literal STRING value on the command line")
 	applyCmd.Flags().StringVar(&applyCmdFlags.talosVersion, "talos-version", "", "the desired Talos version to generate config for (backwards compatibility, e.g. v0.8)")
 	applyCmd.Flags().StringVar(&applyCmdFlags.withSecrets, "with-secrets", "", "use a secrets file generated using 'gen secrets'")
-	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
+	applyCmd.Flags().StringVar(&applyCmdFlags.kubernetesVersion, "kubernetes-version", "", "desired kubernetes version to run; defaults to templateOptions.kubernetesVersion from Chart.yaml")
 	applyCmd.Flags().BoolVarP(&applyCmdFlags.debug, "debug", "", false, "show only rendered patches")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.dryRun, "dry-run", false, "check how the config change will be applied in dry-run mode")
 	applyCmd.Flags().DurationVar(&applyCmdFlags.configTryTimeout, "timeout", constants.ConfigTryTimeout, "the config will be rolled back after specified timeout (if try mode is selected)")
-	applyCmd.Flags().StringSliceVar(&applyCmdFlags.certFingerprints, "cert-fingerprint", nil, "list of server certificate fingeprints to accept (defaults to no check)")
+	applyCmd.Flags().StringSliceVar(&applyCmdFlags.certFingerprints, "cert-fingerprint", nil, "list of server certificate fingerprints to accept (defaults to no check)")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.force, "force", false, "will overwrite existing files")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")

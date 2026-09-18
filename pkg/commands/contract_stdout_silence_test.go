@@ -188,6 +188,7 @@ func TestContract_TemplateProgress_GoesToStderr(t *testing.T) {
 	Config.RootDir = root
 	templateCmdFlags.configFiles = []string{nodeFile}
 	templateCmdFlags.offline = true
+	templateCmdFlags.talosVersion = "v1.13"
 	templateCmdFlags.templatesFromArgs = false
 	templateCmdFlags.nodesFromArgs = false
 	templateCmdFlags.endpointsFromArgs = false

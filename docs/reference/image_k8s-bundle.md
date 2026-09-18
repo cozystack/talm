@@ -9,13 +9,13 @@ talm image k8s-bundle [flags]
 ## Options
 
 ```
-      --coredns-version semver                 CoreDNS semantic version (default v1.14.4)
-      --etcd-version semver                    ETCD semantic version (default v3.6.12)
+      --coredns-version semver                 CoreDNS semantic version (default v1.14.7)
+      --etcd-version semver                    ETCD semantic version (default 3.7.1)
   -f, --file strings                           specify config files or patches in a YAML file (can specify multiple)
-      --flannel-version semver                 Flannel CNI semantic version (default 0.28.7)
+      --flannel-version semver                 Flannel CNI semantic version (default 0.28.9)
   -h, --help                                   help for k8s-bundle
-      --k8s-version semver                     Kubernetes semantic version (default v1.36.2)
-      --kube-network-policies-version semver   kube-network-policies semantic version (default v1.1.0)
+      --k8s-version semver                     Kubernetes semantic version (default v1.37.0)
+      --kube-network-policies-version semver   kube-network-policies semantic version (default v1.1.1)
 ```
 
 ## Options inherited from parent commands
@@ -24,7 +24,7 @@ talm image k8s-bundle [flags]
       --cluster string       Cluster to connect to if a proxy endpoint is used.
       --context string       Context to be used in command
   -e, --endpoints strings    override default endpoints in Talos configuration
-      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "cri")
+      --namespace string     namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance, "taloscontainers" for containers declared via ContainerConfig (default "cri")
       --nodes strings        target the specified nodes
       --root string          root directory of the project (default ".")
       --skip-verify          skip TLS certificate verification (keeps client authentication)

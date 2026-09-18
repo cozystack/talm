@@ -196,12 +196,11 @@ Post-upgrade sync (when the upgrade succeeds):
 		// can overwrite the --image flag with the node's
 		// currently-running install.image (the no-op-upgrade path),
 		// which would mask the version mismatch Phase 2C exists to
-		// catch. --insecure and --stage are captured here too so
+		// catch. --stage is captured here too so
 		// the post-upgrade gate's mode predicate sees what the
 		// operator actually asked for, not whatever state talosctl
 		// left in the flags afterwards.
 		targetImage, _ := cmd.Flags().GetString("image")
-		insecure, _ := cmd.Flags().GetBool("insecure")
 		staged, _ := cmd.Flags().GetBool("stage")
 
 		// Execute original command
@@ -225,8 +224,8 @@ Post-upgrade sync (when the upgrade succeeds):
 		// and the operator's "successful" upgrade silently no-ops.
 		// Skip predicate documents the cases where this gate cannot
 		// produce a meaningful result.
-		if !shouldRunPostUpgradeVerify(insecure, staged, upgradeCmdFlags.skipPostUpgradeVerify) {
-			// Verify skipped (operator opt-out / insecure / staged).
+		if !shouldRunPostUpgradeVerify(staged, upgradeCmdFlags.skipPostUpgradeVerify) {
+			// Verify skipped (operator opt-out / staged).
 			// Still sync node bodies: the RPC was acked, and skipping
 			// the verify is an explicit operator choice — the body
 			// must track what talosctl was asked to install so the
@@ -266,13 +265,6 @@ Post-upgrade sync (when the upgrade succeeds):
 // scheduling. The gate cannot produce a meaningful result when:
 //
 //   - --skip-post-upgrade-verify is set (operator opt-out).
-//   - --insecure was passed to upgrade: the maintenance / pre-auth
-//     connection cannot reach the auth-only COSI ctx WithClient
-//     builds. Pre-fix, the gate fell through to WithClient and
-//     either silently surrendered on "version unreadable" or
-//     connected to an unrelated node from talosconfig context.
-//     Mirrors cosiMachineConfigReader's insecure-path branch in
-//     pkg/commands/preflight_apply_safety.go.
 //   - --stage was passed to upgrade: talosctl --stage writes the
 //     new image to the inactive partition without activating it;
 //     activation happens on the next reboot. runtime.Version still
@@ -280,12 +272,12 @@ Post-upgrade sync (when the upgrade succeeds):
 //     booted — a guaranteed false-positive blocker without this
 //     skip. Mirrors shouldRunPostApplyVerify's STAGED case in
 //     pkg/commands/apply.go.
-func shouldRunPostUpgradeVerify(insecure, staged, skip bool) bool {
+//
+// Talos v1.14 dropped upgrade's --insecure, so there is no longer a
+// maintenance-connection case to skip for; it was the third condition here
+// until the flag stopped being registered upstream.
+func shouldRunPostUpgradeVerify(staged, skip bool) bool {
 	if skip {
-		return false
-	}
-
-	if insecure {
 		return false
 	}
 

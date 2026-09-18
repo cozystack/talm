@@ -9,11 +9,13 @@ talm logs <service name> [flags]
 ## Options
 
 ```
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -F, --follow         specify if the logs should be streamed
-  -h, --help           help for logs
-  -k, --kubernetes     use the k8s.io containerd namespace
-      --tail int32     lines of log file to display (default is to show from the beginning) (default -1)
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -F, --follow                     specify if the logs should be streamed
+  -h, --help                       help for logs
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
+      --namespace string           namespace to use: "system" (default, Talos service containers), "cri" for Kubernetes workloads, "taloscontainers" for containers declared via ContainerConfig (default "system")
+      --tail int32                 lines of log file to display (default is to show from the beginning) (default -1)
 ```
 
 ## Options inherited from parent commands

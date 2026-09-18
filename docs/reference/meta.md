@@ -5,9 +5,10 @@ Write and delete keys in the META partition
 ## Options
 
 ```
-  -f, --file strings   specify config files or patches in a YAML file (can specify multiple)
-  -h, --help           help for meta
-  -i, --insecure       write|delete meta using the insecure (encrypted with no auth) maintenance service
+      --cert-fingerprint strings   list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+  -f, --file strings               specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                       help for meta
+  -i, --insecure                   use the insecure (encrypted with no auth) maintenance service
 ```
 
 ## Options inherited from parent commands

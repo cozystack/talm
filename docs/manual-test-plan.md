@@ -48,6 +48,21 @@ Watch for:
 - `talm.key` written without the security-information banner.
 - `.gitignore` not updated.
 
+### A1a. Version pins on a project created before them
+
+Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.12"`).
+
+```bash
+sed -i'' -e 's|talosVersion: .*|talosVersion: ""|' -e 's|kubernetesVersion: .*|kubernetesVersion: ""|' Chart.yaml
+talm template --offline --full -t templates/controlplane.yaml
+```
+
+Expected: the render stops with `templateOptions.kubernetesVersion is not set` and a hint naming the key.
+
+Restore `talosVersion: "v1.12"` alone and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore the preset's `kubernetesVersion: "v1.34.3"` too and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on that version.
+
+`--full` matters here. A default render is a diff against the same bundle, so the images cancel out on both sides and never appear in a node file either way.
+
 ### A2. `talm init` second run without `--force`
 
 ```bash
@@ -926,6 +941,10 @@ The Section C entries above smoke the apply pipe end-to-end. This section is the
 | Typoed VLAN parent | Add `VLANConfig{name: ens5.99, parent: ghost0, vlanID: 99}` (YAML key is `parent`, NOT `link` — `vlan.go ParentLinkConfig`) | Blocker on `parent: ghost0`; `name: ens5.99` not flagged (new VLAN) |
 | Typoed bridge slave | Add `BridgeConfig{name: br99, links: [ghost0]}` (YAML key is `links`, NOT `ports` — `bridge.go BridgeLinks`) | Blocker on `ghost0` only; `br99` not flagged |
 | Typoed Layer2VIP link | Set `vipLink: ghost0` in values | Blocker on `link: ghost0` |
+| VIP on a veth end | Add `VethConfig{name: veth0, peer: {name: veth1}}` plus `Layer2VIPConfig{link: veth1}` | No finding — both ends are links the apply creates (Talos v1.14 kind) |
+| Typoed BGP neighbor link | Add `BGPInstanceConfig{name: bgp0, neighbors: [{link: ghost0}]}` | Blocker on `neighbors[0].link`; `bgp0` not flagged (names the instance, not a link) |
+| BGP advertising a link the apply creates | Add `WireguardConfig{name: wg0}` plus `BGPInstanceConfig{advertise: [wg0]}` | No finding — wireguard, VRF, veth, bond, bridge and VLAN documents all create links the rest of the config may reference |
+| Link named by its alias | On a node whose `talosctl get links` shows an alias or altname for a NIC, reference that alias from `BondConfig.links[]`, `VRFConfig.links[]`, `BGPInstanceConfig.advertise[]` or `neighbors[].link` | No finding — machinery accepts an alias wherever it accepts a link name, so the snapshot carries aliases and altnames alongside IDs |
 | Legacy v1.11 interface | `machine.network.interfaces[].interface: eth9999` | Blocker; same hint shape |
 
 #### Disk references
@@ -1002,7 +1021,7 @@ The Phase 1 walker validates the syntactic shape of net-addr fields in three v1a
 | Dry-run shows preview | `talm apply --dry-run -f node.yaml` | Phase 2A runs; this is the "show me what would change" contract |
 | `--mode=no-reboot` | `talm apply --mode=no-reboot -f node.yaml` | Phase 2A runs |
 | `--mode=auto` | `talm apply --mode=auto -f node.yaml` | Phase 2A runs |
-| `--mode=reboot` | `talm apply --mode=reboot -f node.yaml` | Phase 2A runs (preview is read-only and shows what the reboot will activate) |
+| `--mode=reboot` | `talm apply --mode=reboot -f node.yaml` | Rejected since Talos v1.14: `invalid argument "reboot" for "-m, --mode" flag`. Upstream dropped the spelling; use `--mode=auto`, which the node promotes to a reboot when the change needs one |
 | `--mode=staged` | `talm apply --mode=staged -f node.yaml` | Phase 2A runs (operator still wants to see what got staged) |
 | `--mode=try` | `talm apply --mode=try -f node.yaml` | Phase 2A runs (mirrors --mode=auto from the preview's perspective) |
 | Insecure path | `talm apply -i -f node.yaml` (where chart can render offline) | `talm: drift verification unavailable on maintenance connection`; no block |
@@ -1049,7 +1068,6 @@ Default off until the Talos-mutated-field allowlist lands. Enable explicitly wit
 | Clean apply | Apply config matching on-node, `--skip-post-apply-verify=false` | Silent success (no output, no error) |
 | Mode=staged | `--mode=staged --skip-post-apply-verify=false` | Phase 2B skipped (staged store doesn't change ActiveID) |
 | Mode=try | `--mode=try --skip-post-apply-verify=false` | Phase 2B skipped (rollback timer races verify) |
-| Mode=reboot | `--mode=reboot --skip-post-apply-verify=false` | Phase 2B skipped (reboot kills the COSI connection mid-verify) |
 | Mode=auto | `--mode=auto --skip-post-apply-verify=false` | Phase 2B skipped — Talos promotes AUTO to REBOOT internally when the change requires it, so the verify would race the reboot (same shape as the explicit REBOOT skip). Acceptable cost: AUTO applies that don't reboot also lose their verify; pass `--mode=no-reboot` to opt back in |
 | Mode=no-reboot | Real apply with verify enabled | Phase 2B runs (the only mode where the verify is guaranteed to reach a stable post-apply ActiveID) |
 | Dry-run | `--dry-run --skip-post-apply-verify=false` | Phase 2B skipped (no real apply) |
@@ -1065,7 +1083,7 @@ On by default for `talm upgrade`. The gate fires after talosctl upgrade returns 
 | Same-minor upgrade | `talm upgrade -f node.yaml` to a same-minor image (e.g. v1.12.6 -> v1.12.7) | Silent success; contracts match at minor level |
 | Cross-minor mismatch | upgrade to `siderolabs/installer:v1.13.0` on a node that rolls back to v1.12 | Hint-bearing blocker citing both versions + two-hypothesis hint (rollback OR slow boot) |
 | `--skip-post-upgrade-verify` | Pass with any image | Phase 2C suppressed entirely |
-| `--insecure` upgrade | Maintenance path — auth-only COSI unreachable | Phase 2C skipped entirely (hard early-return in `shouldRunPostUpgradeVerify(insecure=true, …)`). Distinct from the Phase 2A/2B insecure path, which still calls the COSI reader and degrades gracefully with a "drift verification unavailable on maintenance connection" line — Phase 2C drops the call site itself because there is no graceful degradation path for "verify the version after upgrade" without auth |
+| `--insecure` upgrade | Talos v1.14 removed the flag from `upgrade` | `talm upgrade --insecure` fails with `unknown flag: --insecure`. Phase 2C has no maintenance case left to skip |
 | `--stage` upgrade | New partition not yet activated until reboot — `runtime.Version` would always be the OLD value | Phase 2C skipped via `shouldRunPostUpgradeVerify(staged=true, …)`; guaranteed false positive without skip |
 | Digest-pinned image | `--image foo/bar@sha256:abc...` | Phase 2C surrenders silently (no tag to parse the target version from) |
 | Image with no tag | `--image foo/bar` | Phase 2C surrenders silently |
@@ -1338,6 +1356,18 @@ talm get metakey --nodes $NODE --endpoints $NODE
 
 Expected: table of META keys with their values.
 
+### G1a. `--insecure` reaches `meta` subcommands
+
+```bash
+talm meta write --insecure 0x0a "test-value" --nodes $NODE --endpoints $NODE
+talm meta write -i 0x0a "test-value" --nodes $NODE --endpoints $NODE
+talm meta --insecure write 0x0a "test-value" --nodes $NODE --endpoints $NODE
+```
+
+Expected: all three reach the node over the maintenance service. Run this against a node in maintenance mode, before it has a machine config, which is the case the flag exists for.
+
+Talos v1.14 registers the flag on `metaCmd.Flags()` rather than `PersistentFlags()`, where it reaches neither the subcommands nor the parent, so plain `talosctl` rejects all three spellings. talm re-publishes container-command flags as persistent to keep this path working ([siderolabs/talos#14346](https://github.com/siderolabs/talos/issues/14346), fixed by [#14347](https://github.com/siderolabs/talos/pull/14347), merged to `main` and not yet in a v1.14 release). Re-run after every Talos bump: once the fix ships in the release talm tracks, the wrapper step is redundant and should be removed.
+
 ### G2. Write a test key
 
 ```bash
@@ -1365,6 +1395,14 @@ talm bootstrap --nodes $NODE --endpoints $NODE
 ```
 
 Expected: refuses with `etcd data directory is not empty`.
+
+### H1a. `reset --insecure` is rejected on Talos v1.14
+
+```bash
+talm reset --insecure --nodes $NODE --endpoints $NODE
+```
+
+Expected: `unknown flag: --insecure`. Upstream removed the flag from `reset` in v1.14; talm wraps the upstream command and follows it. A node with no usable config is recovered by booting a maintenance image and applying a fresh one.
 
 ### H2. Reset a control-plane node (talm safe default — preserves META)
 
@@ -1488,6 +1526,16 @@ Expected: both invocations exit non-zero with `talm dmesg has been removed` and 
 
 Regression anchor: a regression that re-enables the upstream `dmesg` wrap (removing it from `excludedCommands` in `pkg/commands/talosctl_wrapper.go`) would either collide with the talm-owned stub at cobra registration, or — if the stub is also dropped — leave operators with the original cryptic `strconv.ParseBool` failure on `--tail=N`. Both shapes are documented elsewhere; this anchor pins the proactive removal + migration-hint contract.
 
+### I0-1b. `template` refuses more than one node
+
+```bash
+talm template -f nodes/node0.yaml --nodes $NODE0,$NODE1 --endpoints $NODE0
+```
+
+Expected: `checking node selector: command is not supported with multiple nodes: "talm template"`. A render resolves `lookup` against one node, so the guard rejects the ambiguity rather than picking a node silently. `talm apply` is the command that walks several nodes, one render each.
+
+The resource walker talm carries in `pkg/engine/talos_helpers.go` (it replaced a talosctl helper dropped in v1.14) is exercised by any single-node render that calls `lookup`, for example the cozystack preset's `lookup "links"` in C1.
+
 ### I0-2. Concurrent dry-run apply
 
 ```bash
@@ -1541,7 +1589,7 @@ source /tmp/talm-completion.bash
 Then exercise each target. Each expectation below is a forward-looking check the operator runs interactively (or via `__complete <subcommand> <flag-value-or-positional> ""` for scripted assertions).
 
 - `talm init --preset <TAB>` → curated list including `cozystack`. Sourced from `pkg/generated/presets.go::AvailablePresets()`; no generic file completion.
-- `talm apply --mode <TAB>` → `auto`, `no-reboot`, `reboot`, `staged`, `try` (the apply-mode enum).
+- `talm apply --mode <TAB>` → exactly the values the flag accepts, read from upstream at completion time. On Talos v1.14 that is `auto`, `no-reboot`, `staged`, `try`; a suggestion the flag then rejects is a bug.
 - `talm apply --file <TAB>` → only `nodes/*.yaml` files that carry a valid `# talm: …` modeline. Non-modelined yaml files in the project tree do NOT surface. Same for `talm template --file <TAB>` and `talm upgrade --file <TAB>`.
 - `talm template --values <TAB>` / `--with-secrets <TAB>` → file completion narrowed to `.yaml` / `.yml` extensions (`ShellCompDirectiveFilterFileExt`).
 - `talm --nodes <TAB>` / `talm --endpoints <TAB>` → union of nodes / endpoints declared across every context in the active talosconfig.
@@ -1680,12 +1728,11 @@ rollback case is real. Pass --skip-post-upgrade-verify to bypass.
 Phase 2C is **skipped** for the following upgrade flows (each documented in the code):
 
 - `--skip-post-upgrade-verify` (operator opt-out)
-- `--insecure` (auth-only COSI path is unreachable)
 - `--stage` (new partition not yet booted; runtime.Version would always report the old version — guaranteed false positive)
 
 ### K2-pre. Manual fallback for `--skip-post-upgrade-verify`
 
-K1-pre exercises the automated Phase 2C gate. If the operator disables it (`--skip-post-upgrade-verify`) — or in flows that the gate doesn't cover (`--insecure`, `--stage`, no target image) — the equivalent manual check is:
+K1-pre exercises the automated Phase 2C gate. If the operator disables it (`--skip-post-upgrade-verify`) — or in flows that the gate doesn't cover (`--stage`, no target image) — the equivalent manual check is:
 
 ```bash
 target="v1.13.0"
@@ -1695,7 +1742,7 @@ running=$(talm get version --nodes $NODE --endpoints $NODE \
 test "$running" = "$target" || echo "SILENT ROLLBACK / SLOW BOOT — running $running, expected $target"
 ```
 
-This is the post-merge equivalent of what Phase 2C does automatically. Keep the script around — it's still relevant for the `--insecure` flow which the gate skips by design.
+This is the post-merge equivalent of what Phase 2C does automatically. Keep the script around — it's still relevant when the gate is disabled or has no target image to compare against.
 
 ### K2. Stage-upgrade to a new minor
 
@@ -2056,7 +2103,7 @@ talm template -f nodes/node0.yaml || true
 
 ## Sanity-check block
 
-Run after every destructive section (E, F, H, and anything that touches `--mode=reboot` / `--mode=staged` / `apply -I`):
+Run after every destructive section (E, F, H, and anything that touches `--mode=auto` on a rebooting change / `--mode=staged` / `apply -i`):
 
 ```bash
 cd $PROJECT
@@ -2107,8 +2154,8 @@ talm apply --dry-run -f /tmp/bom.yaml
 
 Walk every `--mode` value with `--skip-post-apply-verify=false`:
 
-- `auto`, `no-reboot` → Phase 2B runs.
-- `reboot`, `staged`, `try` → Phase 2B auto-skipped (each for a different documented reason).
+- `no-reboot` → Phase 2B runs. This is the only mode it runs on.
+- `staged`, `try`, `auto` → Phase 2B auto-skipped (each for a different documented reason; `auto` is skipped unconditionally, because Talos promotes it to a reboot whenever the change needs one).
 - `--dry-run` always skips Phase 2B.
 
 ## Cleanup at end of session

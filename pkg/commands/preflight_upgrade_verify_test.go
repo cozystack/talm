@@ -24,37 +24,35 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// TestShouldRunPostUpgradeVerify_SkipMatrix pins the predicate that
-// gates Phase 2C scheduling. The gate cannot produce a meaningful
-// result on --insecure (no auth COSI path) or --stage (new partition
-// not yet booted); both must be skipped to avoid false-positive
-// blockers. The skip flag overrides everything (operator opt-out).
+// TestShouldRunPostUpgradeVerify_SkipMatrix pins Phase 2C scheduling. The verify
+// cannot produce a meaningful result after --stage (the new partition is not yet
+// booted, so runtime.Version still reports the old version), and the skip flag
+// overrides everything as an operator opt-out.
+//
+// Talos v1.14 removed upgrade's --insecure, which used to be the other skip.
 func TestShouldRunPostUpgradeVerify_SkipMatrix(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		insecure bool
-		staged   bool
-		skip     bool
-		want     bool
+		name   string
+		staged bool
+		skip   bool
+		want   bool
 	}{
-		{"default runs", false, false, false, true},
-		{"--skip-post-upgrade-verify suppresses everything", false, false, true, false},
-		{"--insecure skipped (no auth COSI)", true, false, false, false},
-		{"--stage skipped (new partition not booted)", false, true, false, false},
-		{"--insecure + --stage skipped", true, true, false, false},
-		{"all-on skipped", true, true, true, false},
+		{"default runs", false, false, true},
+		{"--skip-post-upgrade-verify suppresses everything", false, true, false},
+		{"--stage skipped (new partition not booted)", true, false, false},
+		{"both skipped", true, true, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := shouldRunPostUpgradeVerify(tc.insecure, tc.staged, tc.skip)
+			got := shouldRunPostUpgradeVerify(tc.staged, tc.skip)
 			if got != tc.want {
-				t.Errorf("shouldRunPostUpgradeVerify(insecure=%v, staged=%v, skip=%v) = %v, want %v",
-					tc.insecure, tc.staged, tc.skip, got, tc.want)
+				t.Errorf("shouldRunPostUpgradeVerify(staged=%v, skip=%v) = %v, want %v",
+					tc.staged, tc.skip, got, tc.want)
 			}
 		})
 	}

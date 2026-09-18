@@ -50,7 +50,7 @@ Full documentation lives at **[talm.cozystack.io](https://talm.cozystack.io/)**.
 - [Initializing a project](https://talm.cozystack.io/getting-started/init/) — `--image`, `--cluster-endpoint`, `--root`.
 - [Node files](https://talm.cozystack.io/configuration/node-files/) — the modeline, discovery comments, per-node overrides.
 - [Endpoints and VIPs](https://talm.cozystack.io/configuration/endpoints-and-vips/) — `endpoint`, `floatingIP`, `vipLink`.
-- [Talos versions and output format](https://talm.cozystack.io/configuration/talos-versions/) — the v1.12 multi-document split.
+- [Talos versions and output format](https://talm.cozystack.io/configuration/talos-versions/) — which schema a render targets, and the version keys to pin.
 - [Templates and values](https://talm.cozystack.io/configuration/templates/) — `lookup`, `--set` vs `--set-string`.
 - [Encryption](https://talm.cozystack.io/configuration/encryption/) — age-encrypted secrets and user values.
 - [Applying with side-patches](https://talm.cozystack.io/operations/side-patches/) — the `-f` chain.
@@ -60,3 +60,7 @@ Full documentation lives at **[talm.cozystack.io](https://talm.cozystack.io/)**.
 - [CLI reference](https://talm.cozystack.io/reference/) — commands and flags.
 
 The site is built from `docs/` in this repository; the CLI reference under `docs/reference/` is generated from the command tree.
+
+## License
+
+Apache-2.0, except for two files ported from [siderolabs/talos](https://github.com/siderolabs/talos), which is MPL-2.0: `pkg/engine/talos_helpers.go` and `pkg/commands/talos_client.go` carry Talos code that v1.14 stopped exporting, so they stay under MPL-2.0 and say so in their headers. MPL-2.0 section 3.3 covers distributing the combined work under Apache-2.0.

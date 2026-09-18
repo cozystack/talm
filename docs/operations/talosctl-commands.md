@@ -25,6 +25,40 @@ Every talosctl command is re-exported except these, which talm either replaces o
 | `upgrade-k8s` | out of scope; talm configures machines, not the Kubernetes control plane |
 | `dmesg` | retired upstream — use `talm logs kernel --tail=N` |
 
+## `talm meta` — `--insecure` kept reachable
+
+Talos v1.14 registers `meta`'s `--insecure` on that command's local flag set instead of its persistent one. A local flag on a command that only hosts subcommands reaches nothing: not the subcommands, and not the command itself, which takes no arguments. So `talosctl meta write --insecure` stopped parsing on v1.14, and so did `talosctl meta --insecure write`.
+
+That is the only way to write a META key over the maintenance service, which is what you do before a node has a machine config, so talm re-publishes such flags as persistent on its wrapper. `talm meta write --insecure` and the `-i` shorthand keep working, and `--cert-fingerprint` travels with them.
+
+Reported upstream as [siderolabs/talos#14346](https://github.com/siderolabs/talos/issues/14346) and fixed by [siderolabs/talos#14347](https://github.com/siderolabs/talos/pull/14347), which is merged to `main` but not backported to the v1.14 branch. Once the fix ships in a Talos release talm depends on, the wrapper step becomes redundant and is dropped.
+
+## `talm apply` — `--mode=reboot` is gone on Talos v1.14
+
+Upstream stopped registering `reboot` among the values of the apply mode flag in v1.14, so `talm apply --mode=reboot` fails with `invalid argument "reboot" for "-m, --mode" flag`. Use `--mode=auto`, which the node promotes to a reboot when the change requires one. Shell completion reads the accepted values back from the flag, so it no longer suggests `reboot` either.
+
+## `talm upgrade` — `--insecure` is gone on Talos v1.14
+
+Upstream stopped registering `--insecure` on `upgrade` in v1.14 (it had been deprecated before that), so `talm upgrade --insecure` fails with `unknown flag: --insecure`. Upgrading a node that has no valid configuration is done by booting a maintenance image and applying a fresh config. The post-upgrade version verify consequently has no maintenance case left to skip.
+
+## `talm reset` — `--insecure` is gone on Talos v1.14
+
+Upstream dropped `--insecure` from `reset` in v1.14, so `talm reset --insecure` fails with `unknown flag: --insecure`. Resetting a node that has no valid configuration is done from the maintenance side instead: boot the node into a maintenance image and apply a fresh config, rather than resetting over an unauthenticated connection.
+
+## `talm support` — the bundle is encrypted by default on Talos v1.14
+
+Upstream changed the default: `talm support` now encrypts the generated bundle with age, to a built-in list of Sidero Labs recipients. `--no-encryption` turns that off, `--encryption-recipients` sends it to recipients you choose, and `--encryption-no-default-recipients` keeps yours while dropping theirs. Worth knowing before collecting a bundle from a cluster whose contents you would rather not hand to a third party, encrypted or otherwise.
+
+## `talm upgrade` — the default installer image moved to the image factory on Talos v1.14
+
+Upstream builds the `--image` default from the image factory now: `factory.talos.dev/metal-installer/376567988ad…:v1.14.0`, where the digest is the factory's empty schematic. It used to be `ghcr.io/siderolabs/installer:<version>`. Two things follow. The registry is different, so a mirror that only carries `ghcr.io` will not serve it. And the default now pins a schematic, so it ships the stock extension set rather than whatever a `ghcr.io` tag happened to hold.
+
+This only bites a bare `talm upgrade` with neither `-f` nor `--image`. With `-f`, talm resolves the target from `values.yaml::image` at the project root and never consults the upstream default, which is the flow the presets are built around.
+
+## `talm containers`, `logs`, `restart`, `stats` — `-k` / `--kubernetes` is deprecated
+
+Upstream replaced the flag with `--namespace`, which takes `system`, `cri` or `taloscontainers`. The old spelling still works and prints `Flag --kubernetes has been deprecated, use --namespace cri instead`, so scripts keep running for now; move them over before the flag goes the way of the others on this page.
+
 ## `talm reset` — META-preserving default
 
 `talm reset` diverges from upstream `talosctl reset` on one default. Upstream defaults to `--wipe-mode=all`, which wipes the Talos META partition along with STATE and EPHEMERAL — the node cannot self-recover and comes up in maintenance mode requiring a full re-apply. Talm instead populates `--system-labels-to-wipe=STATE,EPHEMERAL` when neither `--wipe-mode` nor `--system-labels-to-wipe` was passed, which preserves META so the node rejoins the cluster from its META-stored bootstrap config on the next boot.

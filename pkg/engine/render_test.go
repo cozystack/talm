@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	helmEngine "github.com/cozystack/talm/pkg/engine/helm"
-	"github.com/siderolabs/talos/pkg/machinery/client"
 	"helm.sh/helm/v4/pkg/chart/common"
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 )
@@ -4103,7 +4102,7 @@ func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+			ctx := withNodesMetadata(context.Background(), "10.0.0.1", "10.0.0.2")
 			opts := Options{
 				Offline:     false,
 				CommandName: tt.commandName,
@@ -4122,7 +4121,7 @@ func TestRenderFailIfMultiNodes_UsesCommandName(t *testing.T) {
 		// If a caller passes "talm apply", the error must not carry any
 		// other subcommand name — historically the call site here emitted
 		// "talm template" unconditionally.
-		ctx := client.WithNodes(context.Background(), "10.0.0.1", "10.0.0.2")
+		ctx := withNodesMetadata(context.Background(), "10.0.0.1", "10.0.0.2")
 		opts := Options{Offline: false, CommandName: "talm apply"}
 		_, err := Render(ctx, nil, opts)
 		if err == nil {

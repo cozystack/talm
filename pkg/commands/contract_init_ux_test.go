@@ -516,3 +516,43 @@ func TestContract_InitRun_ForceBypassesPreCheck(t *testing.T) {
 		t.Errorf("--force should bypass the pre-check, got: %v", err)
 	}
 }
+
+// TestContract_InitRun_ProducesTalosconfig pins that a fresh init runs to
+// completion and writes a usable talosconfig.
+//
+// The whole init path is covered by tests, but none of them reached the config
+// bundle before this one: Talos v1.14 made generate reject an empty Kubernetes
+// version, and `talm init` — the first command an operator runs — started
+// failing with "kubernetes version must be specified" while the suite stayed
+// green.
+func TestContract_InitRun_ProducesTalosconfig(t *testing.T) {
+	withInitFlagsSnapshot(t)
+	withConfigSnapshot(t)
+
+	dirAbs, _ := filepath.Abs(t.TempDir())
+	t.Chdir(dirAbs)
+	Config.RootDir = dirAbs
+	Config.RootDirExplicit = true
+	Config.InitOptions.Version = "v0.0.0-test"
+
+	initCmdFlags.preset = presetGeneric
+	initCmdFlags.name = "test-cluster"
+	initCmdFlags.force = false
+	initCmdFlags.encrypt = false
+	initCmdFlags.decrypt = false
+	initCmdFlags.update = false
+	initCmdFlags.image = ""
+
+	if err := initCmd.RunE(initCmd, nil); err != nil {
+		t.Fatalf("init on an empty directory must succeed: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dirAbs, "talosconfig"))
+	if err != nil {
+		t.Fatalf("init did not write a talosconfig: %v", err)
+	}
+
+	if !strings.Contains(string(raw), "test-cluster") {
+		t.Errorf("talosconfig does not carry the cluster name:\n%s", raw)
+	}
+}

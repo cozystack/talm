@@ -28,7 +28,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/siderolabs/talos/pkg/machinery/client"
-	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 //nolint:gochecknoglobals // cobra command flag struct, idiomatic for cobra-based CLIs
@@ -290,6 +289,7 @@ func runTemplate(ctx context.Context, tmpl func(ctx context.Context, c *client.C
 	case templateCmdFlags.offline:
 		return tmpl(ctx, nil)
 	case templateCmdFlags.insecure:
+		//nolint:contextcheck // WithClientMaintenance owns its signal-rooted context, as the talosctl wrappers did
 		return WithClientMaintenance(nil, tmpl)
 	default:
 		// WithClient handles --skip-verify (via WithClientNoNodes routing) and
@@ -501,7 +501,7 @@ func init() {
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.debug, "debug", "", false, "show only rendered patches")
 	templateCmd.Flags().BoolVarP(&templateCmdFlags.offline, "offline", "", false, "disable gathering information and lookup functions")
 	templateCmd.Flags().BoolVar(&templateCmdFlags.showSecrets, "show-secrets", false, "print values from encrypted value files (*.encrypted.yaml) verbatim in stdout output (default: redacted to ***; never affects -I, which always omits them). Counterpart on apply is --show-secrets-in-drift, which governs the same values in apply's drift preview.")
-	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", constants.DefaultKubernetesVersion, "desired kubernetes version to run")
+	templateCmd.Flags().StringVar(&templateCmdFlags.kubernetesVersion, "kubernetes-version", "", "desired kubernetes version to run; defaults to templateOptions.kubernetesVersion from Chart.yaml")
 
 	// Shell completion for `talm template` flags. `--file` uses the
 	// modelined-yaml lister (same as apply); other yaml-shaped flags

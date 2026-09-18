@@ -45,7 +45,7 @@ talm upgrade [flags]
       --drain-timeout duration                   timeout for draining the Kubernetes node (default 5m0s)
   -f, --file strings                             specify config files or patches in a YAML file (can specify multiple)
   -h, --help                                     help for upgrade
-  -i, --image string                             the container image to use for performing the install (default "ghcr.io/siderolabs/installer:v1.13.7")
+  -i, --image string                             the container image to use for performing the install (default "factory.talos.dev/metal-installer/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba:v1.14.0")
       --legacy                                   force use of legacy upgrade method
       --namespace string                         namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "system")
       --no-reboot                                do not reboot the node after upgrade (skip reboot and drain)

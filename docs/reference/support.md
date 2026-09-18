@@ -23,6 +23,12 @@ Generated bundle contains the following debug information:
 
 	- Kubernetes nodes and kube-system pods manifests.
 
+By default, the generated bundle is encrypted using age encryption to the list of recipients
+set by the members of the 'siderolabs' GitHub organization. The encrypted bundle by default will
+only be decryptable by the Sidero Labs team, but you can also specify additional recipients using the
+--encryption-recipients flag, or disable encryption completely using the --no-encryption flag.
+Default encryption recipients can be removed by setting --encryption-no-default-recipients flag.
+
 
 ```
 talm support [flags]
@@ -31,11 +37,16 @@ talm support [flags]
 ## Options
 
 ```
-  -f, --file strings      specify config files or patches in a YAML file (can specify multiple)
-  -h, --help              help for support
-  -w, --num-workers int   number of workers per node (default 1)
-  -O, --output string     output file to write support archive to
-  -v, --verbose           verbose output
+      --cert-fingerprint strings            list of server certificate fingerprints to accept (defaults to no check, only used with --insecure flag)
+      --encryption-no-default-recipients    do not encrypt to the default recipients, only to the ones provided via --encryption-recipients
+      --encryption-recipients stringArray   additional age recipients (SSH or age public keys) to encrypt the support bundle to (can be specified multiple times)
+  -f, --file strings                        specify config files or patches in a YAML file (can specify multiple)
+  -h, --help                                help for support
+  -i, --insecure                            use the insecure (encrypted with no auth) maintenance service
+      --no-encryption                       do not encrypt the support bundle (output is written as-is)
+  -w, --num-workers int                     number of workers per node (default 1)
+  -O, --output string                       output file to write support archive to
+  -v, --verbose                             verbose output
 ```
 
 ## Options inherited from parent commands
