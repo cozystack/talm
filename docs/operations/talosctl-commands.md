@@ -49,6 +49,12 @@ Upstream dropped `--insecure` from `reset` in v1.14, so `talm reset --insecure` 
 
 Upstream changed the default: `talm support` now encrypts the generated bundle with age, to a built-in list of Sidero Labs recipients. `--no-encryption` turns that off, `--encryption-recipients` sends it to recipients you choose, and `--encryption-no-default-recipients` keeps yours while dropping theirs. Worth knowing before collecting a bundle from a cluster whose contents you would rather not hand to a third party, encrypted or otherwise.
 
+## `talm upgrade` — the default installer image moved to the image factory on Talos v1.14
+
+Upstream builds the `--image` default from the image factory now: `factory.talos.dev/metal-installer/376567988ad…:v1.14.0`, where the digest is the factory's empty schematic. It used to be `ghcr.io/siderolabs/installer:<version>`. Two things follow. The registry is different, so a mirror that only carries `ghcr.io` will not serve it. And the default now pins a schematic, so it ships the stock extension set rather than whatever a `ghcr.io` tag happened to hold.
+
+This only bites a bare `talm upgrade` with neither `-f` nor `--image`. With `-f`, talm resolves the target from `values.yaml::image` at the project root and never consults the upstream default, which is the flow the presets are built around.
+
 ## `talm containers`, `logs`, `restart`, `stats` — `-k` / `--kubernetes` is deprecated
 
 Upstream replaced the flag with `--namespace`, which takes `system`, `cri` or `taloscontainers`. The old spelling still works and prints `Flag --kubernetes has been deprecated, use --namespace cri instead`, so scripts keep running for now; move them over before the flag goes the way of the others on this page.
