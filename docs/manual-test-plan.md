@@ -2103,7 +2103,7 @@ talm template -f nodes/node0.yaml || true
 
 ## Sanity-check block
 
-Run after every destructive section (E, F, H, and anything that touches `--mode=auto` on a rebooting change / `--mode=staged` / `apply -I`):
+Run after every destructive section (E, F, H, and anything that touches `--mode=auto` on a rebooting change / `--mode=staged` / `apply -i`):
 
 ```bash
 cd $PROJECT
