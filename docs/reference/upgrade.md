@@ -40,6 +40,19 @@ Post-upgrade sync (when the upgrade succeeds):
     intentionally leaves the body untouched, so it still reflects
     what the node actually runs.
 
+Pre-upgrade guard:
+
+  - Before the RPC, every target node's running version is checked
+    against the target through Talos's own compatibility matrix, the
+    same one the installer runs as its pre-flight. An unsupported
+    move is refused: too far forward fails inside the installer after
+    the image is pulled, and a downgrade past what Talos allows is
+    invisible to the post-upgrade verify, which sees running ==
+    target once it took. --skip-upgrade-path-check opts out.
+  - A node whose version cannot be read is reported and skipped
+    rather than blocked, and so is a target newer than any minor this
+    binary's matrix knows.
+
 ```
 talm upgrade [flags]
 ```
@@ -60,6 +73,7 @@ talm upgrade [flags]
       --progress string                          output mode for upgrade progress. Values: [auto plain] (default "auto")
   -m, --reboot-mode string                       select the reboot mode during upgrade. Mode "powercycle" bypasses kexec. Values: [default force powercycle] (default "default")
       --skip-post-upgrade-verify                 skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)
+      --skip-upgrade-path-check                  skip the pre-upgrade check that refuses a target the node cannot be moved to
       --timeout duration                         time to wait for the operation is complete if --debug or --wait is set (default 30m0s)
       --wait                                     wait for the operation to complete, tracking its progress. always set to true when --debug is set (default true)
 ```

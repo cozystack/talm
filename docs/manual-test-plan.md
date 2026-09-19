@@ -1166,7 +1166,7 @@ go vet ./...
 ### Known limitations / follow-ups
 
 - **Talos-mutated-field allowlist**: Phase 2B reports cert hashes / timestamps as divergence today; the verify is off by default until an allowlist lands.
-- **`talm upgrade` has no pre-upgrade gates** (Phase 2C runs *after*, not before): the upgrade flow wraps `talosctl upgrade` and doesn't route through `buildApplyClosure` / `applyOneFileDirectPatchMode`, so Phase 1 / Phase 2A do not run. Phase 2C (post-upgrade version verify) was added precisely to catch the silent-rollback class without that refactor. Full pre-upgrade gates would require reproducing the gate calls in `upgrade_handler.go` or refactoring the apply flow.
+- **`talm upgrade` does not run the apply-path gates**: the upgrade flow wraps `talosctl upgrade` and doesn't route through `buildApplyClosure` / `applyOneFileDirectPatchMode`, so Phase 1 / Phase 2A do not run. Two gates of its own cover the classes that matter most: the pre-upgrade path check refuses a move Talos will not make, and Phase 2C catches the silent rollback afterwards. Bringing the apply gates over would still require reproducing the gate calls in `upgrade_handler.go` or refactoring the apply flow.
 - **Phase 1/2 on `--insecure`**: the safety gates can't run before the chart renders, and the chart's `lookup` calls need an authenticated COSI connection. Insecure path = effectively no gates today.
 
 ## D. Apply (insecure / maintenance path)
@@ -1320,13 +1320,14 @@ Expected: stderr emits the "Synced machine.install.image" line immediately after
 
 Regression anchor: contract tests `TestContract_WriteBackInstallImage_*` pin the on-disk shape of the patch (scalar swap, idempotency, silent-skip on orphan files, structural errors, file-list fan-out). A regression that fires the write-back BEFORE verify (or instead of verify) would silently pin the body to an image the node never actually ran — the failure-path scenario above would catch it. Cross-reference: `pkg/commands/upgrade_image_writeback.go`.
 
+
 ### E5. Node body image divergence is reported
 
 The upgrade target comes from `values.yaml`, so a node body naming something else is ignored and then rewritten. Both directions are reported, but only one of them is a problem.
 
 ```bash
 # Point a node body at a NEWER Talos than values.yaml names.
-sed -i.bak 's|image: ghcr.io/cozystack/cozystack/talos:.*|image: ghcr.io/cozystack/cozystack/talos:<A_NEWER_MINOR>|' nodes/node0.yaml
+sed -i.bak 's|image: ghcr.io/cozystack/cozystack/talos:.*|image: ghcr.io/cozystack/cozystack/talos:<A_NEWER_TAG>|' nodes/node0.yaml
 talm upgrade -f nodes/node0.yaml 2>upgrade.log; head -5 upgrade.log
 ```
 
@@ -1334,13 +1335,14 @@ Do not pipe this into `head`. With `2>&1 |` talm's stderr is the pipe, `head` cl
 
 Expected: `Using image from values.yaml: <ref>` followed by a `warning:` line naming `nodes/node0.yaml`, the body's image, and the resolved target, telling you to put that image in values.yaml if the file is the one you meant. The warning fires because the body names a newer Talos than the target: the upgrade is going somewhere the file does not.
 
-`<A_NEWER_MINOR>` has to be a newer **minor**, not a newer patch. The comparison is at major.minor, so `v1.13.1` against a `v1.13.0` target counts as trailing and prints the plain line instead.
+`<A_NEWER_TAG>` only has to be newer than what `values.yaml` names — the comparison is ordered down to the patch, so `v1.13.1` against a `v1.13.0` target warns just like a newer minor does. A node moving backwards by a patch is the same incident one granularity down, and the pre-upgrade path check lets it through because Talos allows patch moves inside a minor.
 
 Now the ordinary direction. Restore the body, then bump `values.yaml` forward a minor and leave the bodies as rendered, which is what an operator raising the cluster's version actually does:
 
 ```bash
 mv nodes/node0.yaml.bak nodes/node0.yaml
-sed -i.bak 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:<A_NEWER_MINOR>"|' values.yaml
+cp values.yaml values.yaml.orig
+sed -i '' 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:<A_NEWER_TAG>"|' values.yaml
 talm upgrade -f nodes/node0.yaml 2>upgrade.log; head -5 upgrade.log
 ```
 
@@ -1351,6 +1353,35 @@ Watch for:
 - A `warning:` label on the trailing-body case, which is every node after a values.yaml bump.
 - Silence on a body that names another registry at the same version: that one cannot be shown to trail, so it is a divergence.
 - The report firing when the body already matches the target, or on a side-patch that declares no `install.image`.
+
+### E6. Pre-upgrade path check
+
+The refusal itself stops before the RPC, so that half needs no node that reboots. The escape-hatch flag is a different matter — see the warning below it.
+
+Pick a target Talos actually refuses: two minors back, or several minors forward. One minor back is a supported rollback and must NOT be blocked.
+
+```bash
+sed -i '' 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:v1.10.5"|' values.yaml
+talm upgrade -f nodes/node0.yaml
+```
+
+Expected: the upgrade is refused with `refusing this upgrade: host version <running> is too new to downgrade to Talos 1.10.5`, and a hint offering the two ways out. Nothing is sent to the node.
+
+Do not run `--skip-upgrade-path-check` on this fixture to see the escape hatch work. It does work, and that is the problem: the RPC goes out and the node attempts a cross-minor downgrade, which is what the hint two lines above says ends in an A/B rollback or a node that will not boot. Exercise the flag only against a target the node can actually take, or on a stand you are willing to rebuild.
+
+Watch for:
+
+- A refusal on one minor back, which Talos supports: the guard must follow the matrix, not a version comparison.
+- A node that is unreachable blocking the upgrade: that case prints `warning: upgrade-path check skipped for <node>` and carries on.
+- A missing hint on the refusal: `errors.Join` drops the hints of the errors it joins, so the way out has to be attached to the joined error.
+
+Restore `values.yaml` afterwards, from the copy E5 took before it edited anything:
+
+```bash
+mv values.yaml.orig values.yaml
+```
+
+E5 and E6 both edit `values.yaml`, so they must not share one backup: a second `sed -i.bak` overwrites the first backup with already-edited content, and the restore then puts back E5's value rather than the original. The sections that follow read `values.yaml::image`.
 
 ## F. CA rotation
 

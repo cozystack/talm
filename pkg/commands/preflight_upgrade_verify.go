@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/siderolabs/talos/pkg/machinery/api/machine"
+	"github.com/siderolabs/talos/pkg/machinery/compatibility"
 	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"
 )
 
@@ -160,4 +162,60 @@ func parseTargetVersion(image string) string {
 	}
 
 	return tail[idx+1:]
+}
+
+// upgradePathHint is attached to a refused upgrade path. Both ways out are
+// real: the usual cause is a values.yaml nobody bumped, and the rare
+// deliberate case needs the flag.
+const upgradePathHint = "Talos supports upgrading from a limited range of versions and downgrading at most one minor. " +
+	"Point the upgrade at a version the node can take: bump values.yaml::image in the project, or pass --image. " +
+	"If you mean to try it anyway, re-run with --skip-upgrade-path-check."
+
+// checkUpgradePathSupported refuses a target the node cannot be moved to.
+//
+// The matrix is Talos's own (pkg/machinery/compatibility), the same one the
+// installer runs as its pre-flight, so this asks the authority rather than
+// guessing. Guessing gets it wrong in both directions: a downgrade of one
+// minor IS supported, and an upgrade from too far back is not, which a plain
+// version comparison has backwards.
+//
+// The post-upgrade verify cannot cover either case. A downgrade that took
+// leaves running equal to target, so the gate passes and the write-back then
+// pins the node file to the older image; an upgrade the installer rejects
+// fails only after the image has been pulled.
+//
+// Anything unreadable on either side surrenders silently, and so does a target
+// newer than any minor this talm build's matrix knows: that means the binary
+// is too old to have an opinion, not that the path is wrong.
+func checkUpgradePathSupported(running, targetImage string) error {
+	targetTag := parseTargetVersion(targetImage)
+	if targetTag == "" || running == "" {
+		return nil
+	}
+
+	target, err := compatibility.ParseTalosVersion(&machine.VersionInfo{Tag: targetTag})
+	if err != nil {
+		return nil //nolint:nilerr // surrender on an unparseable tag; see the post-upgrade verify.
+	}
+
+	host, err := compatibility.ParseTalosVersion(&machine.VersionInfo{Tag: running})
+	if err != nil {
+		return nil //nolint:nilerr // same surrender for an unreadable running version.
+	}
+
+	// Probing the target against itself separates "this minor is absent from
+	// the matrix" from a real verdict: the matrix's default arm is the only
+	// thing that can fail a same-version pair. The error is the answer here,
+	// not a failure — a matrix that cannot place the target has no opinion to
+	// act on.
+	if knownToMatrix := target.UpgradeableFrom(target) == nil; !knownToMatrix {
+		return nil
+	}
+
+	if err := target.UpgradeableFrom(host); err != nil {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHint(errors.Wrap(err, "refusing this upgrade"), upgradePathHint)
+	}
+
+	return nil
 }

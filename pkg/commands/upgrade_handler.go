@@ -47,6 +47,7 @@ const (
 //nolint:gochecknoglobals // command-scoped flag struct, mirrors applyCmdFlags pattern.
 var upgradeCmdFlags struct {
 	skipPostUpgradeVerify      bool
+	skipUpgradePathCheck       bool
 	postUpgradeReconcileWindow time.Duration
 }
 
@@ -112,7 +113,20 @@ Post-upgrade sync (when the upgrade succeeds):
   - The patch fires after post-upgrade verify confirms the running
     version matches the target. A failed verify (auto-rollback)
     intentionally leaves the body untouched, so it still reflects
-    what the node actually runs.`
+    what the node actually runs.
+
+Pre-upgrade guard:
+
+  - Before the RPC, every target node's running version is checked
+    against the target through Talos's own compatibility matrix, the
+    same one the installer runs as its pre-flight. An unsupported
+    move is refused: too far forward fails inside the installer after
+    the image is pulled, and a downgrade past what Talos allows is
+    invisible to the post-upgrade verify, which sees running ==
+    target once it took. --skip-upgrade-path-check opts out.
+  - A node whose version cannot be read is reported and skipped
+    rather than blocked, and so is a target newer than any minor this
+    binary's matrix knows.`
 
 	// Upstream's --image help advertises a factory image as the default, which
 	// only applies to a bare `talm upgrade`. With -f and no explicit --image the
@@ -127,6 +141,9 @@ Post-upgrade sync (when the upgrade succeeds):
 
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
 		"skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)")
+
+	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipUpgradePathCheck, "skip-upgrade-path-check", false,
+		"skip the pre-upgrade check that refuses a target the node cannot be moved to")
 
 	wrappedCmd.Flags().DurationVar(&upgradeCmdFlags.postUpgradeReconcileWindow, "post-upgrade-reconcile-window", defaultPostUpgradeReconcileWindow,
 		"how long to wait after upgrade returns before re-reading the running version; widen for slow hardware / large image pulls")
@@ -221,6 +238,12 @@ Post-upgrade sync (when the upgrade succeeds):
 		// left in the flags afterwards.
 		targetImage, _ := cmd.Flags().GetString("image")
 		staged, _ := cmd.Flags().GetBool("stage")
+
+		if !upgradeCmdFlags.skipUpgradePathCheck {
+			if err := runPreUpgradePathCheck(targetImage); err != nil {
+				return err
+			}
+		}
 
 		// Execute original command
 		var execErr error
@@ -336,6 +359,75 @@ func runPostUpgradeVersionVerify(parentCtx context.Context, image string) error 
 
 		return runPostUpgradeVersionVerifyInner(parentCtx, ctx, nodes, image, cosiVersionReader(c), upgradeCmdFlags.postUpgradeReconcileWindow, os.Stderr)
 	})
+}
+
+// runPreUpgradePathCheck reads the running version off every target node and
+// refuses moves Talos's compatibility matrix rejects, in either direction.
+//
+// Read failures are not fatal here, unlike in the post-upgrade verify. There a
+// node that will not answer IS the signal the gate exists to catch; here it
+// only means the guard cannot form an opinion, and blocking an upgrade because
+// one node was briefly unreachable would be worse than the downgrade this is
+// meant to prevent.
+func runPreUpgradePathCheck(image string) error {
+	if parseTargetVersion(image) == "" {
+		return nil
+	}
+
+	return WithClient(func(ctx context.Context, c *client.Client) error {
+		ctxNodes := []string(nil)
+		if cfg := c.GetConfigContext(); cfg != nil {
+			ctxNodes = cfg.Nodes
+		}
+
+		return checkNodesUpgradePath(ctx, resolveUpgradeTargetNodes(GlobalArgs.Nodes, ctxNodes), image, cosiVersionReader(c), os.Stderr)
+	})
+}
+
+// checkNodesUpgradePath is the testable body: every node is consulted and the
+// verdicts are joined, so an operator upgrading a set sees each refusal at
+// once instead of one per re-run.
+func checkNodesUpgradePath(ctx context.Context, nodes []string, image string, read versionReader, w io.Writer) error {
+	if len(nodes) == 0 {
+		_, _ = fmt.Fprintln(w, "upgrade-path check: skipped, no target nodes resolved from --nodes or talosconfig context")
+
+		return nil
+	}
+
+	var refusals []error
+
+	for _, node := range nodes {
+		running, ok, err := read(client.WithNode(ctx, node))
+		if !ok {
+			// Split the two surrender shapes the way verifyPostUpgradeVersion
+			// does: a reader that signals "not applicable" without an error
+			// would otherwise be reported as "could not read: <nil>".
+			if err != nil {
+				_, _ = fmt.Fprintf(w, "warning: upgrade-path check skipped for %s, could not read its running version: %v\n", node, err)
+			} else {
+				_, _ = fmt.Fprintf(w, "warning: upgrade-path check skipped for %s, its running version is unavailable\n", node)
+			}
+
+			continue
+		}
+
+		if err := checkUpgradePathSupported(running, image); err != nil {
+			refusals = append(refusals, errors.Wrapf(err, "node %s", node))
+		}
+	}
+
+	joined := errors.Join(refusals...)
+	if joined == nil {
+		return nil
+	}
+
+	// errors.Join drops the hints of the errors it joins, a single one
+	// included, so the way out has to be attached to the joined error. Without
+	// this the operator gets a refusal naming no escape and the skip flag is
+	// discoverable only from --help.
+	//
+	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+	return errors.WithHint(joined, upgradePathHint)
 }
 
 // resolveUpgradeTargetNodes picks the per-node target list for the
