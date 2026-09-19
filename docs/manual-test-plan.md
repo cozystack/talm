@@ -1320,6 +1320,38 @@ Expected: stderr emits the "Synced machine.install.image" line immediately after
 
 Regression anchor: contract tests `TestContract_WriteBackInstallImage_*` pin the on-disk shape of the patch (scalar swap, idempotency, silent-skip on orphan files, structural errors, file-list fan-out). A regression that fires the write-back BEFORE verify (or instead of verify) would silently pin the body to an image the node never actually ran — the failure-path scenario above would catch it. Cross-reference: `pkg/commands/upgrade_image_writeback.go`.
 
+### E5. Node body image divergence is reported
+
+The upgrade target comes from `values.yaml`, so a node body naming something else is ignored and then rewritten. Both directions are reported, but only one of them is a problem.
+
+```bash
+# Point a node body at a NEWER Talos than values.yaml names.
+sed -i.bak 's|image: ghcr.io/cozystack/cozystack/talos:.*|image: ghcr.io/cozystack/cozystack/talos:<A_NEWER_MINOR>|' nodes/node0.yaml
+talm upgrade -f nodes/node0.yaml 2>upgrade.log; head -5 upgrade.log
+```
+
+Do not pipe this into `head`. With `2>&1 |` talm's stderr is the pipe, `head` closes it after five lines, and a Go process takes SIGPIPE on fd 2 rather than an error — talm dies after the RPC has already fired, skipping the post-upgrade verify and the `install.image` write-back that E4 covers. The pipeline still exits 0, so nothing says it happened.
+
+Expected: `Using image from values.yaml: <ref>` followed by a `warning:` line naming `nodes/node0.yaml`, the body's image, and the resolved target, telling you to put that image in values.yaml if the file is the one you meant. The warning fires because the body names a newer Talos than the target: the upgrade is going somewhere the file does not.
+
+`<A_NEWER_MINOR>` has to be a newer **minor**, not a newer patch. The comparison is at major.minor, so `v1.13.1` against a `v1.13.0` target counts as trailing and prints the plain line instead.
+
+Now the ordinary direction. Restore the body, then bump `values.yaml` forward a minor and leave the bodies as rendered, which is what an operator raising the cluster's version actually does:
+
+```bash
+mv nodes/node0.yaml.bak nodes/node0.yaml
+sed -i.bak 's|^image: .*|image: "ghcr.io/cozystack/cozystack/talos:<A_NEWER_MINOR>"|' values.yaml
+talm upgrade -f nodes/node0.yaml 2>upgrade.log; head -5 upgrade.log
+```
+
+Expected: the divergence reports as a plain line with no `warning:` label and no advice. That is the canonical flow, where every body trails the target until the write-back resyncs it, so advice to bump values.yaml would be advice to repeat what you just did.
+
+Watch for:
+
+- A `warning:` label on the trailing-body case, which is every node after a values.yaml bump.
+- Silence on a body that names another registry at the same version: that one cannot be shown to trail, so it is a divergence.
+- The report firing when the body already matches the target, or on a side-patch that declares no `install.image`.
+
 ## F. CA rotation
 
 ### F1. Rotate CA dry-run

@@ -16,8 +16,15 @@ Image resolution (when -f is provided):
 
 The first -f file anchors the project root (Chart.yaml +
 secrets.yaml); its modeline supplies the nodes / endpoints. The
-node body's machine.install.image is no longer consulted by the
-upgrade flow.
+node body's machine.install.image no longer selects the target:
+it is read only to report it back, and rewritten afterwards.
+
+  - A body naming an older Talos than the target is the normal
+    shape after a values.yaml bump, since refreshing node files
+    first is not required. It is reported as a plain line.
+  - A body naming a newer Talos, or an image from somewhere else,
+    means the upgrade is not going where that file says. That one
+    is a warning, and it names the way out.
 
 Post-upgrade sync (when the upgrade succeeds):
   - talm point-patches machine.install.image in every -f node body
