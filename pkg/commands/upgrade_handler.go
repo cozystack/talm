@@ -107,6 +107,17 @@ Post-upgrade sync (when the upgrade succeeds):
     intentionally leaves the body untouched, so it still reflects
     what the node actually runs.`
 
+	// Upstream's --image help advertises a factory image as the default, which
+	// only applies to a bare `talm upgrade`. With -f and no explicit --image the
+	// target comes from values.yaml, so the inherited text describes a default
+	// the documented flow never reaches. Rewrite it rather than let the flag
+	// list contradict the synopsis above.
+	if imageFlag := wrappedCmd.Flags().Lookup("image"); imageFlag != nil {
+		imageFlag.Usage = "the container image to use for performing the install; " +
+			"with -f and no explicit --image the target is values.yaml::image at the project root, " +
+			"and the default shown here does not apply"
+	}
+
 	wrappedCmd.Flags().BoolVar(&upgradeCmdFlags.skipPostUpgradeVerify, "skip-post-upgrade-verify", false,
 		"skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)")
 
