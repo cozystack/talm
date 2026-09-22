@@ -53,7 +53,7 @@ machine:
          global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]
       }
   install:
-    image: ghcr.io/cozystack/cozystack/talos:v1.12.6
+    image: ghcr.io/cozystack/cozystack/talos:v1.13.6
     
     # -- Discovered disks:
     disk: "/dev/sda"
