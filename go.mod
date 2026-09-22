@@ -6,6 +6,7 @@ require (
 	filippo.io/age v1.3.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/sprig/v3 v3.3.0
+	github.com/blang/semver/v4 v4.0.0
 	github.com/cockroachdb/errors v1.14.0
 	github.com/cosi-project/runtime v1.16.3
 	github.com/dustin/go-humanize v1.0.1
@@ -70,7 +71,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.4 // indirect
 	github.com/aws/smithy-go v1.27.7 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/brianvoe/gofakeit/v7 v7.14.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

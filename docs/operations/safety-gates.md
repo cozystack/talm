@@ -8,6 +8,7 @@
 | Pre-apply drift preview | `--skip-drift-preview` | on |
 | Post-apply state verification | `--skip-post-apply-verify` | **off** |
 | Post-upgrade version verify | `--skip-post-upgrade-verify` | on |
+| Pre-upgrade path check | `--skip-upgrade-path-check` | on |
 
 ## 1. Declared-resource existence
 
@@ -48,6 +49,14 @@ After `ApplyConfiguration` returns success, re-reads the on-node MachineConfig a
 ## 4. Post-upgrade version verify
 
 After `talm upgrade` reports success, waits the configured reconcile window (default 90s; tune via `--post-upgrade-reconcile-window` for slow hardware / large image pulls) for the node to finish booting, then reads `runtime.Version` COSI and compares the running version's `(Major, Minor)` contract against the contract parsed from the target image tag. Point releases share a minor contract; cross-minor mismatch surfaces as a hint-bearing blocker. Catches the silent A/B rollback case where the upgrade RPC acks success but Talos rolled back to the previous partition (cross-vendor image, missing extensions, failed boot readiness check, slow boot exceeding the configured window). Best-effort surrender on digest-pinned images and unparseable tags.
+
+## 5. Pre-upgrade path check
+
+Before `talm upgrade` fires the RPC, reads `runtime.Version` COSI from every target node and asks Talos's own compatibility matrix (`pkg/machinery/compatibility`) whether the node can be moved to the target. That is the same matrix the Talos installer runs as its own pre-flight, so this gate answers with the authority rather than a version comparison of its own.
+
+Two shapes are refused. A target too far forward — Talos accepts upgrades only from a bounded range of older versions — would otherwise fail inside the installer after the image has been pulled. A downgrade past what Talos allows (it supports at most one minor back) is invisible to gate 4, because once the downgrade takes, running equals target and the verify passes; the post-upgrade write-back then pins the node body to the older image.
+
+The usual way in is a `values.yaml` nobody bumped, so the refusal carries Talos's own verdict and offers bumping it or passing `--image`. To try anyway, `--skip-upgrade-path-check`. Best-effort surrender on digest-pinned images, unparseable tags, and a target newer than any minor this talm build's matrix knows — that last one means the binary is too old to have an opinion, not that the path is wrong. A node whose version cannot be read is reported and skipped rather than blocked: an unreachable node is a worse reason to stop an upgrade than the move this prevents.
 
 ## Skip flags and the maintenance path
 

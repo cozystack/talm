@@ -16,8 +16,15 @@ Image resolution (when -f is provided):
 
 The first -f file anchors the project root (Chart.yaml +
 secrets.yaml); its modeline supplies the nodes / endpoints. The
-node body's machine.install.image is no longer consulted by the
-upgrade flow.
+node body's machine.install.image no longer selects the target:
+it is read only to report it back, and rewritten afterwards.
+
+  - A body naming an older Talos than the target is the normal
+    shape after a values.yaml bump, since refreshing node files
+    first is not required. It is reported as a plain line.
+  - A body naming a newer Talos, or an image from somewhere else,
+    means the upgrade is not going where that file says. That one
+    is a warning, and it names the way out.
 
 Post-upgrade sync (when the upgrade succeeds):
   - talm point-patches machine.install.image in every -f node body
@@ -33,6 +40,19 @@ Post-upgrade sync (when the upgrade succeeds):
     intentionally leaves the body untouched, so it still reflects
     what the node actually runs.
 
+Pre-upgrade guard:
+
+  - Before the RPC, every target node's running version is checked
+    against the target through Talos's own compatibility matrix, the
+    same one the installer runs as its pre-flight. An unsupported
+    move is refused: too far forward fails inside the installer after
+    the image is pulled, and a downgrade past what Talos allows is
+    invisible to the post-upgrade verify, which sees running ==
+    target once it took. --skip-upgrade-path-check opts out.
+  - A node whose version cannot be read is reported and skipped
+    rather than blocked, and so is a target newer than any minor this
+    binary's matrix knows.
+
 ```
 talm upgrade [flags]
 ```
@@ -45,7 +65,7 @@ talm upgrade [flags]
       --drain-timeout duration                   timeout for draining the Kubernetes node (default 5m0s)
   -f, --file strings                             specify config files or patches in a YAML file (can specify multiple)
   -h, --help                                     help for upgrade
-  -i, --image string                             the container image to use for performing the install (default "factory.talos.dev/metal-installer/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba:v1.14.0")
+  -i, --image string                             the container image to use for performing the install; with -f and no explicit --image the target is values.yaml::image at the project root, and the default shown here does not apply (default "factory.talos.dev/metal-installer/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba:v1.14.0")
       --legacy                                   force use of legacy upgrade method
       --namespace string                         namespace to use: "system" (etcd and kubelet images), "cri" for all Kubernetes workloads, "inmem" for in-memory containerd instance (default "system")
       --no-reboot                                do not reboot the node after upgrade (skip reboot and drain)
@@ -53,6 +73,7 @@ talm upgrade [flags]
       --progress string                          output mode for upgrade progress. Values: [auto plain] (default "auto")
   -m, --reboot-mode string                       select the reboot mode during upgrade. Mode "powercycle" bypasses kexec. Values: [default force powercycle] (default "default")
       --skip-post-upgrade-verify                 skip the post-upgrade check that compares running Talos version against the target image's tag (detects silent A/B rollback after the RPC acks success)
+      --skip-upgrade-path-check                  skip the pre-upgrade check that refuses a target the node cannot be moved to
       --timeout duration                         time to wait for the operation is complete if --debug or --wait is set (default 30m0s)
       --wait                                     wait for the operation to complete, tracking its progress. always set to true when --debug is set (default true)
 ```
