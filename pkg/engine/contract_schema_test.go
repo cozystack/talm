@@ -133,23 +133,37 @@ func TestContract_Schema_Version112PreReleasesRenderMultidoc(t *testing.T) {
 	}
 }
 
-// Contract: legacy schema produces a single YAML document — no `---`
-// separators in the body. Talos's legacy parser expects exactly one
-// document. (Helm always prepends one leading newline; we check that
-// no internal separator appears.)
-func TestContract_Schema_LegacyIsSingleDocument(t *testing.T) {
+// Contract: the legacy schema keeps the machine config in one v1alpha1
+// document. The only documents allowed after it are standalone kinds
+// that pre-v1.12 Talos already loads next to v1alpha1.
+func TestContract_Schema_LegacyKeepsSingleV1alpha1Document(t *testing.T) {
+	legacyStandaloneKinds := map[string]bool{"ExtensionServiceConfig": true}
+
 	for _, chartPath := range []string{cozystackChartPath, genericChartPath} {
 		t.Run(chartPath, func(t *testing.T) {
 			out := renderChartTemplate(t, chartPath, controlplaneTpl)
-			// Match a `---` token surrounded by ANY newline form
-			// (\n or \r\n) — Windows-rendered output uses CRLF and
-			// pinning `\n---\n` would falsely pass on Windows.
-			// Scan line-by-line: a single line that is exactly `---`
-			// means an internal document separator.
+
+			// Split line by line on an exact `---`: CRLF output from a
+			// Windows render would slip past a `\n---\n` match.
+			docs := [][]string{nil}
 			for line := range strings.SplitSeq(out, "\n") {
-				if strings.TrimRight(line, "\r") == "---" {
-					t.Errorf("legacy render must not contain `---` separator:\n%s", out)
-					break
+				line = strings.TrimRight(line, "\r")
+				if line == "---" {
+					docs = append(docs, nil)
+					continue
+				}
+				docs[len(docs)-1] = append(docs[len(docs)-1], line)
+			}
+
+			for i, doc := range docs[1:] {
+				kind := ""
+				for _, line := range doc {
+					if k, ok := strings.CutPrefix(line, "kind: "); ok {
+						kind = k
+					}
+				}
+				if !legacyStandaloneKinds[kind] {
+					t.Errorf("legacy render document %d has kind %q; only the v1alpha1 document and %v may appear:\n%s", i+2, kind, legacyStandaloneKinds, out)
 				}
 			}
 		})

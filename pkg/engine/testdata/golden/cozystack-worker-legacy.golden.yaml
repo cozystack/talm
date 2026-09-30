@@ -88,3 +88,9 @@ cluster:
   clusterName: "cozystack"
   controlPlane:
     endpoint: "https://talm-test.invalid:6443"
+---
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: zfs-service
+environment:
+  - ZFS_EXPORT_TIMEOUT=0

@@ -443,12 +443,24 @@ cluster:
     {{- end }}
 {{- end }}
 
+{{- define "talos.config.zfs" }}
+{{- if not (dig "zfs" "exportOnShutdown" false .Values) }}
+---
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: zfs-service
+environment:
+  - ZFS_EXPORT_TIMEOUT=0
+{{- end }}
+{{- end }}
+
 {{- define "talos.config.legacy" }}
 {{- include "talos.config.machine.common" . }}
 {{- include "talm.config.registries.legacy" . }}
 {{- include "talos.config.network.legacy" . }}
 
 {{- include "talos.config.cluster" . }}
+{{- include "talos.config.zfs" . }}
 {{- end }}
 
 {{- define "talos.config.multidoc" }}
@@ -457,4 +469,5 @@ cluster:
 {{- include "talos.config.cluster" . }}
 {{- include "talm.config.registries.multidoc" . }}
 {{- include "talos.config.network.multidoc" . }}
+{{- include "talos.config.zfs" . }}
 {{- end }}
