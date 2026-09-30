@@ -196,13 +196,17 @@ func TestContract_Machine_Sysctls_NrHugepages_PresentWhenSet_Cozystack(t *testin
 	assertContains(t, out, `vm.nr_hugepages: "1024"`)
 }
 
-// Contract: cozystack pins six kernel modules (openvswitch, drbd, zfs,
-// spl, vfio_pci, vfio_iommu_type1). Each is required by a specific
-// cozystack feature: openvswitch for Cilium netkit-style routing, drbd
-// for DRBD storage, zfs+spl for ZFS, vfio_* for PCI passthrough.
+// Contract: cozystack pins seven kernel modules (openvswitch, drbd,
+// drbd_transport_tcp, zfs, spl, vfio_pci, vfio_iommu_type1). Each is
+// required by a specific cozystack feature: openvswitch for Cilium
+// netkit-style routing, drbd for DRBD storage, zfs+spl for ZFS, vfio_*
+// for PCI passthrough.
 // drbd carries `parameters: [usermode_helper=disabled]` — required so
 // drbd does not invoke /sbin/drbdadm at every state change (the
-// cozystack image does not ship drbdadm). Removing any of these
+// cozystack image does not ship drbdadm). drbd_transport_tcp is listed
+// explicitly because the Talos v1.14 kernel has an empty modprobe path,
+// so DRBD's request_module() for its transport no longer loads it and
+// every DRBD resource stays in Connecting. Removing any of these
 // modules silently breaks the matching feature.
 func TestContract_Machine_KernelModules_Cozystack(t *testing.T) {
 	for _, cell := range cozystackCells() {
@@ -213,6 +217,7 @@ func TestContract_Machine_KernelModules_Cozystack(t *testing.T) {
 			assertContains(t, out, "- name: openvswitch")
 			assertContains(t, out, "- name: drbd")
 			assertContains(t, out, "- usermode_helper=disabled")
+			assertContains(t, out, "- name: drbd_transport_tcp")
 			assertContains(t, out, "- name: zfs")
 			assertContains(t, out, "- name: spl")
 			assertContains(t, out, "- name: vfio_pci")
@@ -254,11 +259,11 @@ func TestContract_Machine_KernelModules_Cozystack(t *testing.T) {
 // failure mode for every built-in key.
 
 // Contract: values.extraKernelModules APPENDS to the cozystack preset's
-// built-in module list — it never overrides. The built-in six
-// (openvswitch, drbd, zfs, spl, vfio_pci, vfio_iommu_type1) are
-// load-bearing for cozystack's storage/networking stack, so an
-// operator who supplies extra modules must NOT silently drop any of
-// the built-ins.
+// built-in module list — it never overrides. The built-in seven
+// (openvswitch, drbd, drbd_transport_tcp, zfs, spl, vfio_pci,
+// vfio_iommu_type1) are load-bearing for cozystack's storage/networking
+// stack, so an operator who supplies extra modules must NOT silently
+// drop any of the built-ins.
 func TestContract_Machine_ExtraKernelModules_Cozystack_AppendValues(t *testing.T) {
 	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
 		"advertisedSubnets": []any{testAdvertisedSubnet},
@@ -267,10 +272,11 @@ func TestContract_Machine_ExtraKernelModules_Cozystack_AppendValues(t *testing.T
 			map[string]any{"name": "br_netfilter"},
 		},
 	})
-	// Built-in six still present.
+	// Built-in seven still present.
 	assertContains(t, out, "- name: openvswitch")
 	assertContains(t, out, "- name: drbd")
 	assertContains(t, out, "- usermode_helper=disabled")
+	assertContains(t, out, "- name: drbd_transport_tcp")
 	assertContains(t, out, "- name: zfs")
 	assertContains(t, out, "- name: spl")
 	assertContains(t, out, "- name: vfio_pci")
@@ -281,7 +287,7 @@ func TestContract_Machine_ExtraKernelModules_Cozystack_AppendValues(t *testing.T
 }
 
 // Contract: an empty values.extraKernelModules (or its default `[]`)
-// leaves the cozystack module list IDENTICAL to the built-in six — no
+// leaves the cozystack module list IDENTICAL to the built-in seven — no
 // `[]` suffix, no empty-list artifact, no trailing module lines. The
 // `{{- with .Values.extraKernelModules }}` guard relies on Helm's
 // emptiness check; a regression that swaps `with` for a bare
@@ -295,12 +301,12 @@ func TestContract_Machine_ExtraKernelModules_Cozystack_EmptyOmitsAppend(t *testi
 		"advertisedSubnets":  []any{testAdvertisedSubnet},
 		"extraKernelModules": []any{},
 	})
-	// Built-in six present.
+	// Built-in seven present.
 	assertContains(t, out, "- name: vfio_iommu_type1")
 	// No empty-list artifact after the built-in tail.
 	assertNotContains(t, out, "vfio_iommu_type1\n    []")
 	assertNotContains(t, out, "vfio_iommu_type1\n[]")
-	// Exactly six `- name:` lines inside the modules block: parse the
+	// Exactly seven `- name:` lines inside the modules block: parse the
 	// block bounds and count. Anchors `kernel:` / `certSANs:` are the
 	// adjacent siblings under machine.* in the cozystack chart.
 	kernelIdx := strings.Index(out, "  kernel:")
@@ -314,8 +320,8 @@ func TestContract_Machine_ExtraKernelModules_Cozystack_EmptyOmitsAppend(t *testi
 	}
 	block := tail[:endIdx]
 	gotCount := strings.Count(block, "- name:")
-	if gotCount != 6 {
-		t.Errorf("expected 6 modules in kernel.modules block with empty extraKernelModules, got %d\nblock:\n%s", gotCount, block)
+	if gotCount != 7 {
+		t.Errorf("expected 7 modules in kernel.modules block with empty extraKernelModules, got %d\nblock:\n%s", gotCount, block)
 	}
 }
 

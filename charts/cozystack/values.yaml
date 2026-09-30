@@ -140,7 +140,8 @@ etcd:
 # need different defaults fork the preset.
 
 # Extra kernel modules to load on every node, appended to the preset's
-# built-in list (openvswitch, drbd, zfs, spl, vfio_pci, vfio_iommu_type1).
+# built-in list (openvswitch, drbd, drbd_transport_tcp, zfs, spl, vfio_pci,
+# vfio_iommu_type1).
 # Lists append unconditionally — duplicates by `name` are tolerated by
 # Talos at load time. Each entry is a Talos kernel module spec; see
 # Talos docs for the full shape. Examples:

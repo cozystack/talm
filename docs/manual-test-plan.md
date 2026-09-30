@@ -420,7 +420,7 @@ yq '.machine.files[].path' /tmp/render.yaml
 
 Expected:
 
-- `.machine.kernel.modules` lists the built-in six (`openvswitch`, `drbd` with `usermode_helper=disabled`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
+- `.machine.kernel.modules` lists the built-in seven (`openvswitch`, `drbd` with `usermode_helper=disabled`, `drbd_transport_tcp`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
 - `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
 - `.machine.sysctls` carries the built-in `gc_thresh1/2/3`, the always-on DRBD tuning (`net.ipv4.tcp_orphan_retries`, `net.ipv4.tcp_fin_timeout`, `net.core.netdev_max_backlog`, `net.core.netdev_budget`, `net.core.netdev_budget_usecs`), `vm.nr_hugepages` (when set), AND `net.core.somaxconn`. Same rejection-on-collision rule (the DRBD keys are preset-owned too). See B9 for the keepalive triplet and etcd quota.
 - `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
