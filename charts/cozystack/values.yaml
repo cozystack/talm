@@ -115,6 +115,32 @@ allocateNodeCIDRs: true
 # detection is worth the shorter idle timeout.
 tcpKeepaliveTuning: false
 
+zfs:
+  # Whether zfs-service runs `zpool export -a` on shutdown. Off by default:
+  # while DRBD holds the zvols the export blocks in the kernel where SIGKILL
+  # cannot end it, the service never stops, and the node hangs in `rebooting`
+  # on every reboot, upgrade and reset. With the export off the chart emits an
+  # ExtensionServiceConfig setting ZFS_EXPORT_TIMEOUT=0, and pools are
+  # re-imported with `zpool import -f` on the next boot. Set true only when
+  # the pool sits on dm-crypt/LUKS devices (the mapping cannot close while
+  # the pool holds it) or when several hosts can import the pool. LUKS on top
+  # of zvols and native ZFS encryption keep raw disks under the pool, so they
+  # work with the default.
+  #
+  # Talos v1.13.0 added the export and v1.13.4 the variable, so on
+  # v1.13.0-v1.13.3 the document has no effect and the hang remains.
+  #
+  # A running zfs-service keeps the environment it started with: the first
+  # reboot after the document is applied, including the one inside
+  # `talm upgrade`, still exports. For that one reboot take DRBD down by hand
+  # (drain, `drbdadm down all` in the node's linstor-satellite, check
+  # /sys/block/zd*/holders is empty, reboot); later reboots need nothing.
+  #
+  # To pick a non-zero timeout, set this to true and ship your own
+  # zfs-service document: a ZFS_EXPORT_TIMEOUT in the node body is appended
+  # next to the chart's entry instead of replacing it.
+  exportOnShutdown: false
+
 # Control-plane etcd tuning. Emitted only on controlplane nodes.
 etcd:
   # Max etcd backend DB size before etcd raises a NOSPACE alarm and

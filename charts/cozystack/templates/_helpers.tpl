@@ -444,12 +444,35 @@ cluster:
     {{- end }}
 {{- end }}
 
+{{- define "talos.config.zfs" }}
+{{- $zfs := .Values.zfs }}
+{{- if kindIs "invalid" $zfs }}
+{{- $zfs = dict }}
+{{- end }}
+{{- if not (kindIs "map" $zfs) }}
+{{- fail (printf "talm: zfs must be a mapping (got %s). Example: zfs: { exportOnShutdown: false }." (kindOf $zfs)) }}
+{{- end }}
+{{- $export := $zfs.exportOnShutdown }}
+{{- if and (not (kindIs "invalid" $export)) (not (kindIs "bool" $export)) }}
+{{- fail (printf "talm: zfs.exportOnShutdown must be true or false (got %s %q). This field decides whether a reboot can hang on the pool export, so an ambiguous YAML scalar such as a quoted \"false\" is refused." (kindOf $export) (printf "%v" $export)) }}
+{{- end }}
+{{- if not $export }}
+---
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: zfs-service
+environment:
+  - ZFS_EXPORT_TIMEOUT=0
+{{- end }}
+{{- end }}
+
 {{- define "talos.config.legacy" }}
 {{- include "talos.config.machine.common" . }}
 {{- include "talm.config.registries.legacy" . }}
 {{- include "talos.config.network.legacy" . }}
 
 {{- include "talos.config.cluster" . }}
+{{- include "talos.config.zfs" . }}
 {{- end }}
 
 {{- define "talos.config.multidoc" }}
@@ -458,4 +481,5 @@ cluster:
 {{- include "talos.config.cluster" . }}
 {{- include "talm.config.registries.multidoc" . }}
 {{- include "talos.config.network.multidoc" . }}
+{{- include "talos.config.zfs" . }}
 {{- end }}

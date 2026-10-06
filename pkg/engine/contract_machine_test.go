@@ -29,9 +29,12 @@ package engine
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1345,4 +1348,151 @@ func TestContract_Machine_RegistryTLS_PlainHostStaysBare_Multidoc_Cozystack(t *t
 		},
 	})
 	assertContains(t, out, "name: mirror.example.invalid:5000")
+}
+
+// Contract: cozystack turns off the zfs-service shutdown export by
+// default. `zpool export` blocks in D-state while DRBD holds the zvols;
+// SIGKILL cannot end it, the process keeps the service's PID namespace
+// alive, and the node hangs in `rebooting` on every reboot, upgrade and
+// reset.
+func TestContract_Machine_ZFSExport_DisabledByDefault_Cozystack(t *testing.T) {
+	for _, cell := range cozystackCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertContains(t, out, "kind: ExtensionServiceConfig")
+			assertContains(t, out, "name: zfs-service")
+			assertContains(t, out, "ZFS_EXPORT_TIMEOUT=0")
+		})
+	}
+}
+
+// Contract: zfs.exportOnShutdown: true drops the document, restoring the
+// extension's own export for pools that sit on dm-crypt devices.
+func TestContract_Machine_ZFSExport_DocumentAbsentWhenEnabled_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"zfs":               map[string]any{"exportOnShutdown": true},
+	})
+	assertNotContains(t, out, "ExtensionServiceConfig")
+	assertNotContains(t, out, "ZFS_EXPORT_TIMEOUT")
+}
+
+func TestContract_Machine_ZFSExport_AbsentOnGeneric(t *testing.T) {
+	for _, cell := range genericCells() {
+		t.Run(cell.name, func(t *testing.T) {
+			out := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+			assertNotContains(t, out, "ExtensionServiceConfig")
+		})
+	}
+}
+
+// Contract: the document survives the apply pipeline on both schemas and
+// the result loads in machinery. A node body that restates the document,
+// as one written by `talm template -I` does, must not produce a second
+// one: Talos rejects duplicate identities.
+func TestContract_Machine_ZFSExport_LoadsThroughApplyPath_Cozystack(t *testing.T) {
+	const nodeBody = `apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: zfs-service
+environment:
+  - ZFS_EXPORT_TIMEOUT=0
+`
+
+	for _, cell := range cozystackControlplaneCells() {
+		contract := cell.talosVersion
+		if contract == "" {
+			contract = "v1.11"
+		}
+
+		t.Run(cell.name, func(t *testing.T) {
+			chart := renderChartTemplate(t, cell.chartPath, cell.templateFile, cell.talosVersion)
+
+			rendered, err := applyPatchesAndRenderConfig(
+				Options{KubernetesVersion: "v1.34.3", TalosVersion: contract, Full: true},
+				[]string{chart})
+			if err != nil {
+				t.Fatalf("applyPatchesAndRenderConfig: %v", err)
+			}
+
+			nonFull, err := applyPatchesAndRenderConfig(
+				Options{KubernetesVersion: "v1.34.3", TalosVersion: contract},
+				[]string{chart})
+			if err != nil {
+				t.Fatalf("applyPatchesAndRenderConfig (non-full): %v", err)
+			}
+
+			bodyFile := filepath.Join(t.TempDir(), "node.yaml")
+			if err := os.WriteFile(bodyFile, []byte(nodeBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			merged, err := MergeFileAsPatch(rendered, bodyFile)
+			if err != nil {
+				t.Fatalf("MergeFileAsPatch: %v", err)
+			}
+
+			for name, out := range map[string][]byte{"rendered": rendered, "non-full": nonFull, "merged": merged} {
+				if got := strings.Count(string(out), "kind: ExtensionServiceConfig"); got != 1 {
+					t.Errorf("%s config carries %d ExtensionServiceConfig documents, want 1\n%s", name, got, out)
+				}
+			}
+
+			for name, out := range map[string][]byte{"rendered": rendered, "merged": merged} {
+				if _, err := configloader.NewFromBytes(out); err != nil {
+					t.Errorf("Talos refuses the %s config: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+// Contract: the chart has no values schema, so a non-boolean
+// exportOnShutdown is refused instead of read by template truthiness,
+// where a quoted "false" is truthy and would drop the document.
+func TestContract_Machine_ZFSExport_NonBoolFails_Cozystack(t *testing.T) {
+	for name, v := range map[string]any{"quoted false": "false", "quoted true": "true", "number": 0} {
+		t.Run(name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"zfs":               map[string]any{"exportOnShutdown": v},
+			})
+			if err == nil {
+				t.Fatalf("expected a fail-fast for exportOnShutdown %#v", v)
+			}
+			if !strings.Contains(err.Error(), "zfs.exportOnShutdown must be true or false") {
+				t.Errorf("error should name the field and the accepted values, got %v", err)
+			}
+		})
+	}
+}
+
+func TestContract_Machine_ZFSExport_NonMapZFSFails_Cozystack(t *testing.T) {
+	for name, v := range map[string]any{"string": "foo", "false": false, "list": []any{}} {
+		t.Run(name, func(t *testing.T) {
+			err := renderCozystackExpectError(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"zfs":               v,
+			})
+			if err == nil {
+				t.Fatalf("expected a fail-fast for zfs %#v", v)
+			}
+			if !strings.Contains(err.Error(), "zfs must be a mapping") {
+				t.Errorf("error should explain zfs must be a mapping, got %v", err)
+			}
+		})
+	}
+}
+
+// Contract: an unset knob keeps the default, whether zfs is absent,
+// empty, or left as `zfs:` with nothing after it.
+func TestContract_Machine_ZFSExport_UnsetKeepsDefault_Cozystack(t *testing.T) {
+	for name, v := range map[string]any{"nil": nil, "empty map": map[string]any{}, "nil knob": map[string]any{"exportOnShutdown": nil}} {
+		t.Run(name, func(t *testing.T) {
+			out := renderCozystackWith(t, helmEngineEmptyLookup, map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"zfs":               v,
+			})
+			assertContains(t, out, "ZFS_EXPORT_TIMEOUT=0")
+		})
+	}
 }

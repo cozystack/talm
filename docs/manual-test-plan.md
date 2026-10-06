@@ -506,6 +506,22 @@ Collision check: with `tcpKeepaliveTuning: true`, set `extraSysctls: { "net.ipv4
 
 Regression anchor: `TestContract_Machine_Sysctls_DRBDTuning_Cozystack`, `TestContract_Machine_Sysctls_TCPKeepalive_*`, and `TestContract_Cluster_Etcd_QuotaBackendBytes_*` pin every branch above; `TestContract_Machine_Sysctls_DRBDTuning_AbsentOnGeneric` / `TestContract_Cluster_Etcd_QuotaBackendBytes_AbsentOnGeneric` pin that the generic preset stays free of these opinions.
 
+### B9a. ZFS pool export on shutdown (cozystack)
+
+Render the cozystack preset at defaults, once with a `talosVersion` below v1.12 and once at v1.12 or later:
+
+```bash
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "ExtensionServiceConfig")'
+```
+
+Expected on both schemas: one document with `name: zfs-service` and `environment: [ZFS_EXPORT_TIMEOUT=0]`.
+
+Set `zfs: { exportOnShutdown: true }` in `values.yaml` and re-render. Expected: the same query prints nothing.
+
+On a live node with the document applied, run one reboot first: a running `ext-zfs-service` keeps the environment it started with, so this reboot still exports and hangs while DRBD holds the zvols. Before it, take DRBD down as the `zfs` comment in `charts/cozystack/values.yaml` describes: drain the node, run `drbdadm down all` in the node's linstor-satellite, and check that `/sys/block/zd*/holders` is empty. After that reboot, `talosctl read /proc/<ext-zfs-service pid>/environ` contains `ZFS_EXPORT_TIMEOUT=0`. With DRBD holding the zvols (`/sys/block/zd*/holders` lists `drbd*`), drain the node and run `talosctl reboot`. Expected: the node comes back within minutes instead of staying in `rebooting`, the pool is imported, and `linstor resource list` shows the node's resources `UpToDate`.
+
+Regression anchor: `TestContract_Machine_ZFSExport_*` pins the default, the opt-out, the refusal of a non-boolean `exportOnShutdown` or a non-mapping `zfs`, the generic preset staying free of the document, and a render that loads in machinery after a node body restates the document.
+
 ### B10. Values knobs for richer instance description
 
 These knobs let a node's specifics live in values instead of a forked or hand-edited template. All default empty, so a stock render is unchanged — the golden snapshots (`TestGoldenRender`) stay byte-identical and act as the backward-compat guard.

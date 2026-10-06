@@ -113,3 +113,9 @@ cluster:
       - 192.168.1.0/24
     extraArgs:
       quota-backend-bytes: "8589934592"
+---
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: zfs-service
+environment:
+  - ZFS_EXPORT_TIMEOUT=0

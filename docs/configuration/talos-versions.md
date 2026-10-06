@@ -39,7 +39,7 @@ A project created before those pins existed carries empty values for this key an
 
 Selected via `Chart.yaml` (`templateOptions.talosVersion`) or `--talos-version`:
 
-- **Talos < v1.12** — single YAML document with `machine.network` and `machine.registries` sections (the shape shown in [Node files](node-files.md)).
+- **Talos < v1.12** — the machine config is a single v1alpha1 document with `machine.network` and `machine.registries` sections (the shape shown in [Node files](node-files.md)). Standalone documents that older Talos already accepts, such as the cozystack preset's `ExtensionServiceConfig`, follow it.
 - **Talos >= v1.12** — multi-document format with separate typed documents instead of the deprecated monolithic network and registry fields.
 - **Talos >= v1.14** — a second round of the same move, this time for the Kubernetes settings: `machine.kubelet`, `machine.nodeLabels` and the control-plane components each get a document of their own, and a config carrying both shapes is rejected. The shipped charts still write the v1alpha1 fields, which is why the presets pin below this.
 
@@ -54,6 +54,7 @@ For v1.12+ multi-doc output, one document is emitted per configurable link on th
 - `BridgeConfig` — bridges, symmetric to `BondConfig` for bonds. Ports discovered via `spec.slaveKind == "bridge"` + `spec.masterIndex`; STP / VLAN-filtering settings reach the output when the bridge controller reports them on `spec.bridgeMaster`.
 - `Layer2VIPConfig` — one per VIP. The `floatingIP` shorthand emits it on controlplane nodes; each `vips` entry emits one on any node, so a storage VIP works on a worker.
 - `RegistryMirrorConfig` and `RegistryTLSConfig` — from the `registryMirrors` and `registryTLS` values, available on both charts.
+- `ExtensionServiceConfig` for `zfs-service` — cozystack chart only, emitted on the legacy format too. It sets `ZFS_EXPORT_TIMEOUT=0` so the ZFS extension skips the pool export on shutdown, and is dropped by `zfs.exportOnShutdown: true`.
 
 ### Per-link emission rules
 
