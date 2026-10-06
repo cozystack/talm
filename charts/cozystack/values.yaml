@@ -77,7 +77,7 @@ floatingIP: ""
 # non-existent link and the cluster endpoint will be unreachable.
 # Example: vipLink: eth0.4000
 vipLink: ""
-image: "ghcr.io/cozystack/cozystack/talos:v1.12.6"
+image: "ghcr.io/cozystack/cozystack/talos:v1.13.6"
 podSubnets:
 - 10.244.0.0/16
 serviceSubnets:
