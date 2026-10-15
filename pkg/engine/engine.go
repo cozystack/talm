@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -823,8 +824,8 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 
 	k, v := n.Content[0], n.Content[1]
 
-	return k.Kind == yaml.ScalarNode && k.Value == "$patch" &&
-		v.Kind == yaml.ScalarNode && v.Value == "delete"
+	return k.Kind == yaml.ScalarNode && k.Value == patchDirectiveKey &&
+		v.Kind == yaml.ScalarNode && v.Value == patchDirectiveDelete
 }
 
 // pruneBodyIdentitiesAgainstRendered removes from body every key whose value
@@ -1469,6 +1470,10 @@ const (
 	// k8sKeyKind is the standard Kubernetes/COSI document key
 	// used as part of the (apiVersion, kind, name) identity tuple.
 	k8sKeyKind = "kind"
+	// patchDirectiveKey and patchDirectiveDelete spell a strategic-merge
+	// delete directive, `$patch: delete`.
+	patchDirectiveKey    = "$patch"
+	patchDirectiveDelete = "delete"
 	// k8sAPIVersionV1 is the value of apiVersion for the synthetic
 	// List envelope newLookupFunction emits when wrapping multi-item
 	// COSI lookup results.
@@ -1899,6 +1904,39 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 	return talosPatches, extraDocs, nil
 }
 
+// splitMergedDocuments picks out the chart documents that patch the bundle
+// instead of replacing a document of the same identity: every Kube* kind and
+// delete selectors. From contract v1.14 the bundle generates the Kubernetes
+// documents with values only the generator knows (component images, the
+// control-plane label and taint), so a chart writes just what it sets. The
+// KubeSpan kinds match the prefix too; the generator emits none of them, so
+// for those a merge is the same as a replace. A delete selector is
+// meaningless anywhere but in the patcher. Every other kind keeps
+// replace semantics: the bundle's HostnameConfig carries `auto: stable`, which
+// Talos refuses next to the chart's hostname.
+func splitMergedDocuments(extraDocs []string) ([]string, []string, error) {
+	var merged, replacing []string
+
+	for _, doc := range extraDocs {
+		var parsed map[string]any
+
+		if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
+			return nil, nil, errors.Wrap(err, "unmarshaling extra document")
+		}
+
+		kind, _ := parsed[k8sKeyKind].(string)
+		selector, _ := parsed[patchDirectiveKey].(string)
+
+		if strings.HasPrefix(kind, "Kube") || selector == patchDirectiveDelete {
+			merged = append(merged, doc)
+		} else {
+			replacing = append(replacing, doc)
+		}
+	}
+
+	return merged, replacing, nil
+}
+
 // applyPatchesAndRenderConfig assembles the final Talos config bytes
 // for the non-Full template path: split out extra documents, run two
 // bundle-rebuild passes (TypeUnknown then resolved machine type),
@@ -1908,6 +1946,11 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
+	if err != nil {
+		return nil, err
+	}
+
+	mergedDocs, replacingDocs, err := splitMergedDocuments(extraDocs)
 	if err != nil {
 		return nil, err
 	}
@@ -1949,7 +1992,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, errors.Wrap(err, "creating initial config bundle")
 	}
 
-	patches, err := configpatcher.LoadPatches(talosPatches)
+	patches, err := configpatcher.LoadPatches(append(slices.Clone(talosPatches), mergedDocs...))
 	if err != nil {
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
@@ -2061,7 +2104,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	//
 	// A non-full render returns a patch rather than a config, so what it returns
 	// is deliberately not what gets checked here.
-	assembled, err := assembleTargetDocuments(configFull, nil, extraDocs)
+	assembled, err := assembleTargetDocuments(configFull, nil, replacingDocs)
 	if err != nil {
 		return nil, err
 	}
@@ -2070,9 +2113,12 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, err
 	}
 
+	// The merged documents are already inside configFull. The node file keeps
+	// them as the chart wrote them, and apply merges them again.
 	var target []byte
 	if opts.Full {
 		target = configFull
+		extraDocs = replacingDocs
 	} else {
 		target, err = yamltools.DiffYAMLs(configOrigin, configFull)
 		if err != nil {
@@ -2166,9 +2212,12 @@ func checkSupersededFields(rendered []byte, talosVersion string) error {
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHintf(
 		conflict,
-		"templateOptions.talosVersion is %s. Pin it to %s or lower in Chart.yaml; above that "+
-			"contract Talos keeps these settings in documents of their own, which the charts do not emit.",
+		"templateOptions.talosVersion is %s; above %s Talos keeps these settings in documents of their own. "+
+			"Re-render the node files with `talm template` (the charts emit those documents when talosVersion is pinned) "+
+			"and move the reported fields out of v1alpha1 in your own patches. Pin it to %s or lower in Chart.yaml "+
+			"to keep the v1alpha1 shape.",
 		pinned,
+		config.TalosVersion1_13,
 		config.TalosVersion1_13,
 	)
 }
