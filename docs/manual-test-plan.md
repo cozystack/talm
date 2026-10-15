@@ -824,6 +824,8 @@ Expected: the drift preview line for `machine.token` reads `machine.token: ***re
 
 Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,aescbcEncryptionSecret,secretboxEncryptionSecret}`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `cluster.acceptedCAs[].key`, `machine.{token,ca.key}`, `machine.acceptedCAs[].key`) MUST redact. A regression that silently leaks a secret value into stderr is a security-class bug — verify the substring with `grep -F` against the captured output.
 
+On a project pinned at `talosVersion: "v1.14"` the same material lives in typed documents. Regenerate `secrets.yaml` (keep a copy of the original) and run `talm apply --dry-run -f nodes/node0.yaml`. Expected: the `~ KubeAPIServerCAConfig`, `~ KubeAggregatorCAConfig`, `~ KubeServiceAccountConfig`, `~ KubeEtcdEncryptionConfig` and `~ DiscoveryIdentityConfig` entries show `issuingCA.key`, `issuer.privateKey`, `config.resources` and `clusterSecret` as `***redacted (len=N)***`, and no key from either `secrets.yaml` appears anywhere in stderr, the `Config diff:` block included. Restore the original `secrets.yaml` before applying anything.
+
 ### C5a. Drift preview redacts user secret values (encrypted value files)
 
 With an encrypted value file in scope (B2a) injecting a secret into a NON-allowlisted field (e.g. a `machine.pods[]` env, or `machine.registries.config.<reg>.auth.password`):
@@ -1079,7 +1081,7 @@ The Phase 1 walker validates the syntactic shape of net-addr fields in three v1a
 
 #### Secret-bearing field redaction
 
-The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`).
+The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` and, per typed document kind, `secretTypedFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`); `TestDriftPreview_MasksEverySecretTalosRedacts` and `TestModeDetails_CollectsEverySecretTalosRedacts` check both against what Talos itself redacts.
 
 | Case | Trigger | Expected |
 | --- | --- | --- |

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // secretFieldPaths is the operator-visible allowlist of paths the
@@ -81,6 +82,58 @@ var secretFieldPaths = []string{
 	"peers",
 }
 
+// secretTypedFieldPaths lists, per typed document kind, the fields its
+// Talos Redact method masks. A field name alone cannot carry this:
+// `config` is the encryption keys on KubeEtcdEncryptionConfig and plain
+// kubelet settings on KubeletConfig. An entry covers the field and
+// everything under it, because the differ reports a changed slice by its
+// parent path and the dry-run diff walk descends into it.
+//
+// From contract v1.14 the generator puts the Kubernetes CA keys, the
+// service-account key, the etcd encryption keys and the discovery secret
+// in these documents instead of v1alpha1. TestDriftPreview_MasksEverySecretTalosRedacts
+// checks the table against what Talos redacts in a generated config.
+//
+//nolint:gochecknoglobals // static allowlist of secret fields per typed document.
+var secretTypedFieldPaths = map[string][]string{
+	"DiscoveryIdentityConfig":  {"clusterSecret"},
+	"KubeAPIServerCAConfig":    {secretFieldIssuingCAKey},
+	"KubeAggregatorCAConfig":   {secretFieldIssuingCAKey},
+	"KubeServiceAccountConfig": {"issuer.privateKey"},
+	"KubeEtcdEncryptionConfig": {secretFieldEtcdEncryptionConfig},
+	"RegistryAuthConfig":       {"password", "auth", "identityToken"},
+	"RegistryTLSConfig":        {"clientIdentity.key"},
+	"HCloudVIPConfig":          {"apiToken"},
+	"SideroLinkConfig":         {"apiUrl", "uniqueToken"},
+	"VolumeConfig":             {secretFieldVolumeEncryptionKeys},
+	"UserVolumeConfig":         {secretFieldVolumeEncryptionKeys},
+	"RawVolumeConfig":          {secretFieldVolumeEncryptionKeys},
+	"SwapVolumeConfig":         {secretFieldVolumeEncryptionKeys},
+}
+
+const (
+	secretFieldIssuingCAKey         = "issuingCA.key"
+	secretFieldVolumeEncryptionKeys = "encryption.keys"
+	secretFieldEtcdEncryptionConfig = "config"
+)
+
+// isSecretFieldOf reports whether path is secret in a document of the
+// given kind: on the kind-independent allowlist, or at or under one of
+// the kind's own secret fields.
+func isSecretFieldOf(kind, path string) bool {
+	if isSecretPath(path) {
+		return true
+	}
+
+	for _, field := range secretTypedFieldPaths[kind] {
+		if path == field || strings.HasPrefix(path, field+".") || strings.HasPrefix(path, field+"[") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // arrayIndexPattern matches `[N]` segments (one or more digits) so
 // isSecretPath can normalise paths like `cluster.acceptedCAs[2].key`
 // down to `cluster.acceptedCAs[].key` before comparing against the
@@ -119,12 +172,22 @@ func isSecretPath(path string) bool {
 type secretRedactor struct {
 	show        bool
 	userSecrets map[string]struct{}
+	// kind is the document the paths belong to, for the secret fields
+	// that are secret only on a particular typed document.
+	kind string
+}
+
+// forKind returns the redactor for the fields of one document kind.
+func (r secretRedactor) forKind(kind string) secretRedactor {
+	r.kind = kind
+
+	return r
 }
 
 // redactPath reports whether the whole field line must be masked because its
 // path is an allowlisted Talos bootstrap secret.
 func (r secretRedactor) redactPath(path string) bool {
-	return !r.show && isSecretPath(path)
+	return !r.show && isSecretFieldOf(r.kind, path)
 }
 
 // redactSide reports whether one side of a field change must be masked because

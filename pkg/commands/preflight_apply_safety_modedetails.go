@@ -55,7 +55,8 @@ var secretLeafNames = map[string]struct{}{
 
 // collectConfigSecretValues walks the rendered (multi-doc) MachineConfig and
 // returns the set of secret string VALUES it carries: every leaf whose dotted
-// path is on the Talos bootstrap allowlist (isSecretPath) plus every Wireguard
+// path is on the Talos bootstrap allowlist or a typed document's secret field
+// (isSecretFieldOf) plus every Wireguard
 // key leaf (secretLeafNames). It exists to redact the server-computed dry-run
 // diff (ModeDetails), which talm prints verbatim and which would otherwise leak
 // ca.key / token / encryption-secret material by value — the structured drift
@@ -87,7 +88,8 @@ func collectConfigSecretValues(rendered []byte) (map[string]struct{}, error) {
 			return nil, errors.Wrap(err, "decoding rendered config for dry-run diff redaction")
 		}
 
-		walkConfigSecretValues(doc, "", out)
+		kind, _ := doc["kind"].(string)
+		walkConfigSecretValues(doc, kind, "", out)
 	}
 
 	return out, nil
@@ -98,7 +100,7 @@ func collectConfigSecretValues(rendered []byte) (map[string]struct{}, error) {
 // name. When a node matches, the whole subtree's string leaves are taken
 // (collectStringLeaves) so a slice-valued secret path like cluster.acceptedCAs
 // is covered without descending further.
-func walkConfigSecretValues(node any, path string, out map[string]struct{}) {
+func walkConfigSecretValues(node any, kind, path string, out map[string]struct{}) {
 	switch typed := node.(type) {
 	case map[string]any:
 		for key, val := range typed {
@@ -113,17 +115,17 @@ func walkConfigSecretValues(node any, path string, out map[string]struct{}) {
 				continue
 			}
 
-			if isSecretPath(child) {
+			if isSecretFieldOf(kind, child) {
 				collectStringLeaves(val, out)
 
 				continue
 			}
 
-			walkConfigSecretValues(val, child, out)
+			walkConfigSecretValues(val, kind, child, out)
 		}
 	case []any:
 		for i, item := range typed {
-			walkConfigSecretValues(item, fmt.Sprintf("%s[%d]", path, i), out)
+			walkConfigSecretValues(item, kind, fmt.Sprintf("%s[%d]", path, i), out)
 		}
 	}
 }
