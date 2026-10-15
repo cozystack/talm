@@ -304,6 +304,14 @@ func TestCheckPresetDrift_StaleBaseline_Drift(t *testing.T) {
 	if !strings.Contains(msg, "talm init --update --preset cozystack") {
 		t.Errorf("drift message must point at `talm init --update --preset cozystack`; got %q", msg)
 	}
+	// init --update asks to overwrite each preset file whole and shows no
+	// diff, so the message must not promise that edits survive a merge.
+	if strings.Contains(msg, "interactive diff") || strings.Contains(msg, "preserved") {
+		t.Errorf("drift message promises a merge init --update does not do; got %q", msg)
+	}
+	if !strings.Contains(msg, "overwrite") {
+		t.Errorf("drift message must say init --update offers to overwrite files; got %q", msg)
+	}
 }
 
 // TestCheckPresetDrift_NoLock_NoBaselineSentinel pins the missing-baseline
