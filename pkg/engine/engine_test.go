@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1205,15 +1206,25 @@ func TestObjectArrayMergeKeysMatchesUpstreamMergerSurface(t *testing.T) {
 //   - cluster/network/podSubnets — v1alpha1 PodSubnet
 //   - cluster/network/serviceSubnets — v1alpha1 ServiceSubnet
 //   - cluster/apiServer/auditPolicy — v1alpha1 AuditPolicyConfig
-//   - ingress — typed NetworkRuleConfig Ingress
-//   - portSelector/ports — typed NetworkRuleConfig Ports
+//   - NetworkRuleConfig/ingress, NetworkRuleConfig/portSelector/ports
+//   - the replace-tagged fields of the typed Kubernetes documents
 func TestReplaceSemanticPathsMatchesUpstreamReplaceTags(t *testing.T) {
 	expected := map[string]struct{}{
-		"cluster/network/podSubnets":     {},
-		"cluster/network/serviceSubnets": {},
-		"cluster/apiServer/auditPolicy":  {},
-		"ingress":                        {},
-		"portSelector/ports":             {},
+		"cluster/network/podSubnets":                 {},
+		"cluster/network/serviceSubnets":             {},
+		"cluster/apiServer/auditPolicy":              {},
+		"NetworkRuleConfig/ingress":                  {},
+		"NetworkRuleConfig/portSelector/ports":       {},
+		"BGPInstanceConfig/advertise":                {},
+		"BGPInstanceConfig/importRoutes":             {},
+		"BGPInstanceConfig/neighbors":                {},
+		"CRIBaseRuntimeSpecConfig/overrides":         {},
+		"KubeNetworkConfig/podSubnets":               {},
+		"KubeNetworkConfig/serviceSubnets":           {},
+		"KubeAuthenticationConfig/configuration":     {},
+		"KubeAuditPolicyConfig/configuration":        {},
+		"KubeCredentialProviderConfig/configuration": {},
+		"KubeStaticPodConfig/pod":                    {},
 	}
 	if len(replaceSemanticPaths) != len(expected) {
 		t.Fatalf("table size drift: have %d entries, want %d (re-grep upstream for `merge:\"replace\"` and reconcile)\nhave: %#v\nwant: %#v",
@@ -1223,6 +1234,59 @@ func TestReplaceSemanticPathsMatchesUpstreamReplaceTags(t *testing.T) {
 		if _, ok := replaceSemanticPaths[path]; !ok {
 			t.Errorf("missing entry for %q", path)
 		}
+	}
+}
+
+// The same field is replace-tagged on one kind and merged on another, so
+// the prune has to tell them apart by kind: KubeAuthenticationConfig's
+// configuration reaches the patcher whole, KubeAdmissionControlConfig's is
+// reduced to the operator's delta.
+func TestPruneIdenticalKeys_ReplacePathsAreKeyedByKind(t *testing.T) {
+	doc := func(kind string, keys ...string) map[string]any {
+		configuration := map[string]any{}
+		for _, k := range keys {
+			configuration[k] = k
+		}
+
+		return map[string]any{k8sKeyAPIVersion: "v1alpha1", k8sKeyKind: kind, "configuration": configuration}
+	}
+
+	for kind, wantKept := range map[string]int{"KubeAuthenticationConfig": 2, "KubeAdmissionControlConfig": 1} {
+		body := doc(kind, "rendered", "added")
+		pruneIdenticalKeys(body, doc(kind, "rendered"))
+
+		configuration, _ := body["configuration"].(map[string]any)
+		if len(configuration) != wantKept {
+			t.Errorf("%s: configuration keeps %d keys after the prune, want %d: %v", kind, len(configuration), wantKept, configuration)
+		}
+	}
+}
+
+// A partial edit of a replace-tagged list or map in the BGP and CRI
+// documents has to reach the patcher whole: pruned to the operator's delta,
+// the replace would drop what the render carries.
+func TestPruneIdenticalKeys_KeepsReplaceTaggedNetworkAndCRIFields(t *testing.T) {
+	for _, tc := range []struct {
+		kind, field  string
+		rendered, ok any
+	}{
+		{"BGPInstanceConfig", "advertise", []any{"dummy0"}, []any{"dummy0", "dummy1"}},
+		{"BGPInstanceConfig", "importRoutes", []any{map[string]any{"instance": "a"}}, []any{map[string]any{"instance": "a"}, map[string]any{"instance": "b"}}},
+		{"BGPInstanceConfig", "neighbors", []any{map[string]any{"address": "192.0.2.1"}}, []any{map[string]any{"address": "192.0.2.1"}, map[string]any{"address": "192.0.2.2"}}},
+		{"CRIBaseRuntimeSpecConfig", "overrides", map[string]any{"process": "a"}, map[string]any{"process": "a", "hooks": "b"}},
+	} {
+		t.Run(tc.kind+"/"+tc.field, func(t *testing.T) {
+			doc := func(v any) map[string]any {
+				return map[string]any{k8sKeyAPIVersion: "v1alpha1", k8sKeyKind: tc.kind, "name": "fabric", tc.field: v}
+			}
+
+			body := doc(deepClone(tc.ok))
+			pruneIdenticalKeys(body, doc(tc.rendered))
+
+			if !reflect.DeepEqual(body[tc.field], tc.ok) {
+				t.Errorf("%s was pruned to %v, want it whole: %v", tc.field, body[tc.field], tc.ok)
+			}
+		})
 	}
 }
 
