@@ -310,7 +310,8 @@ func CheckPresetDrift(rootDir, binaryVersion string) (bool, string, error) {
 
 	return true, fmt.Sprintf(
 		"project's %s preset differs from the copy built into talm %s; "+
-			"run `talm init --update --preset %s` to pull the new preset defaults (your templates/ edits are preserved via the interactive diff)",
+			"run `talm init --update --preset %s` to pull the new preset defaults; it asks before it overwrites each "+
+			"preset file whole, so decline the files you have edited and merge their changes by hand",
 		lock.Preset, binaryVersion, lock.Preset,
 	), nil
 }
