@@ -63,8 +63,8 @@ func TestGoldenRender(t *testing.T) {
 		{"generic-worker-multidoc", genericChartPath, "templates/worker.yaml", "v1.12"},
 		{"generic-controlplane-legacy", genericChartPath, "templates/controlplane.yaml", "v1.11"},
 		{"generic-worker-legacy", genericChartPath, "templates/worker.yaml", "v1.11"},
-		// v1.13 is what charts/generic pins, so it is the contract that actually
-		// reaches users of that preset.
+		// v1.13 is the last contract that keeps the Kubernetes settings in
+		// v1alpha1.
 		{"generic-controlplane-v113", genericChartPath, "templates/controlplane.yaml", "v1.13"},
 		{"generic-worker-v113", genericChartPath, "templates/worker.yaml", "v1.13"},
 		// v1.14 moved the Kubernetes settings out of v1alpha1 into typed

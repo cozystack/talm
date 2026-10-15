@@ -31,7 +31,7 @@ From v1.14 the contract takes that choice away. The Kubernetes settings live in 
 
 Pin it in `Chart.yaml` when you want to choose the version yourself, which is what both shipped presets do. A pinned version reaches every component, kubelet included, so they never split across releases.
 
-The presets do not agree on a value. Generic pins `v1.36.2`, the default of the Talos line it targets, so a fresh project lands on what that line ships and a re-sync does not move the control plane. Cozystack pins `v1.34.3` against an older Talos line. Either way the pin is a starting point: set the key to the version your own cluster runs rather than inheriting the preset's.
+The presets do not agree on a value. Generic pins `v1.37.0`, the default of the Talos v1.14 line it targets, so a fresh project lands on what that line ships. Cozystack pins `v1.36.5`. Either way the pin is a starting point: set the key to the version your own cluster runs rather than inheriting the preset's.
 
 A project created before those pins existed carries empty values for this key and for `talosVersion`. On the first render after upgrading talm it stops with an error naming the key to set; add both pins to its `Chart.yaml` and it renders again.
 
