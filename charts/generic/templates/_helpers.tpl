@@ -10,6 +10,7 @@
 {{- define "talos.config.machine.common" }}
 machine:
   type: {{ .MachineType }}
+  {{- if not (include "talm.contract.kubedocs" .) }}
   kubelet:
     nodeIP:
       validSubnets:
@@ -18,6 +19,7 @@ machine:
     extraConfig:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+  {{- end }}
   {{- with .Values.certSANs }}
   certSANs:
   {{- toYaml . | nindent 2 }}
@@ -65,6 +67,82 @@ machine:
   {{- end }}
 {{- end }}
 
+{{- define "talos.config.cluster_name" -}}
+{{ include "talm.validate.dns1123subdomain" (dict "value" (.Values.clusterName | default .Chart.Name) "field" "clusterName") | quote }}
+{{- end }}
+
+{{- define "talos.config.endpoint" -}}
+{{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
+{{- end }}
+
+{{- /* Cluster settings on contract v1.14+. Only etcd stays in v1alpha1;
+       the rest are typed documents the engine merges into the ones the
+       generator emits, so they carry only what this chart sets. */ -}}
+{{- define "talos.config.cluster.kubedocs" }}
+{{- if eq .MachineType "controlplane" }}
+
+cluster:
+  etcd:
+    advertisedSubnets:
+      {{- include "talm.advertised_subnets" (dict "root" . "indent" 6) }}
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: KubeClusterConfig
+clusterName: {{ include "talos.config.cluster_name" . }}
+endpoint: {{ include "talos.config.endpoint" . }}
+---
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    {{- include "talm.advertised_subnets" (dict "root" . "indent" 4) }}
+{{- with .Values.extraKubeletExtraArgs }}
+---
+apiVersion: v1alpha1
+kind: KubeletConfig
+config:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  {{- toYaml .Values.podSubnets | nindent 2 }}
+serviceSubnets:
+  {{- toYaml .Values.serviceSubnets | nindent 2 }}
+{{- if eq .MachineType "controlplane" }}
+{{- with .Values.extraControllerManagerArgs }}
+---
+apiVersion: v1alpha1
+kind: KubeControllerManagerConfig
+extraArgs:
+  {{- include "talm.render.component_args" (dict "args" . "field" "extraControllerManagerArgs" "indent" 2) }}
+{{- end }}
+{{- with .Values.extraSchedulerArgs }}
+---
+apiVersion: v1alpha1
+kind: KubeSchedulerConfig
+extraArgs:
+  {{- include "talm.render.component_args" (dict "args" . "field" "extraSchedulerArgs" "indent" 2) }}
+{{- end }}
+{{- include "talm.guard.apiserver_args_kubedocs" . }}
+{{- if or .Values.extraApiServerArgs .Values.certSANs }}
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+{{- with .Values.extraApiServerArgs }}
+extraArgs:
+  {{- include "talm.render.component_args" (dict "args" . "field" "extraApiServerArgs" "indent" 2) }}
+{{- end }}
+{{- with .Values.certSANs }}
+certExtraSANs:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- /* Shared cluster section */ -}}
 {{- define "talos.config.cluster" }}
 
@@ -74,9 +152,9 @@ cluster:
       {{- toYaml .Values.podSubnets | nindent 6 }}
     serviceSubnets:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
-  clusterName: {{ include "talm.validate.dns1123subdomain" (dict "value" (.Values.clusterName | default .Chart.Name) "field" "clusterName") | quote }}
+  clusterName: {{ include "talos.config.cluster_name" . }}
   controlPlane:
-    endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
+    endpoint: {{ include "talos.config.endpoint" . }}
   {{- if eq .MachineType "controlplane" }}
   {{- with .Values.extraControllerManagerArgs }}
   controllerManager:
@@ -255,7 +333,11 @@ cluster:
 {{- define "talos.config.multidoc" }}
 {{- include "talos.config.machine.common" . }}
 
+{{- if include "talm.contract.kubedocs" . }}
+{{- include "talos.config.cluster.kubedocs" . }}
+{{- else }}
 {{- include "talos.config.cluster" . }}
+{{- end }}
 {{- include "talm.config.registries.multidoc" . }}
 {{- include "talos.config.network.multidoc" . }}
 {{- end }}
