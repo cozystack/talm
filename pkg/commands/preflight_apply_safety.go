@@ -313,7 +313,7 @@ func printDriftPreview(w io.Writer, header string, changes []applycheck.Change, 
 
 		for j := range change.Fields {
 			f := &change.Fields[j]
-			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f, redactor))
+			_, _ = fmt.Fprintf(w, "      %s\n", formatFieldChangeLine(f, redactor.forKind(change.ID.Kind)))
 		}
 	}
 
