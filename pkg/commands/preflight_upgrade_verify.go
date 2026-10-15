@@ -149,11 +149,9 @@ func parseTargetVersion(image string) string {
 	// suffix after `:`. Splitting on `/` first isolates that
 	// component, so a registry port (`registry.local:5000`) in an
 	// earlier path component cannot be mistaken for a tag separator.
-	lastSlash := strings.LastIndex(image, "/")
-
 	tail := image
-	if lastSlash >= 0 {
-		tail = image[lastSlash+1:]
+	if _, after, found := strings.CutLast(image, "/"); found {
+		tail = after
 	}
 
 	idx := strings.LastIndex(tail, ":")
