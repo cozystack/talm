@@ -17,7 +17,7 @@ The apply-time safety gate matrix (Phase 1 / 2A / 2B / 2C, per-case triggers + e
 
    The commands in this plan assume `talm` is invokable by bare name. Adjust paths accordingly if you keep the binary elsewhere.
 
-2. Have a reachable Talos cluster (3 controlplane nodes recommended so you can exercise reset / etcd-member-removal without losing quorum). A small OCI / cloud / bare-metal v1.12.x stand is enough.
+2. Have a reachable Talos cluster (3 controlplane nodes recommended so you can exercise reset / etcd-member-removal without losing quorum). A small OCI / cloud / bare-metal stand is enough. Both presets pin `talosVersion: "v1.14"`, whose config a node on an older Talos cannot load: run the plan on a v1.14.x stand, or set `talosVersion` (and `kubernetesVersion`) in the project's `Chart.yaml` to what the stand runs right after A1.
 
 3. Work through the sections below in order. Each section lists a command, the expected outcome, and the failure modes to watch for. **Regression anchors** at the bottom of some sections call out specific behaviours to assert against — formulated as forward-looking checks the operator runs, not as a retrospective of past findings.
 
@@ -50,7 +50,7 @@ Watch for:
 
 ### A1a. Version pins on a project created before them
 
-Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.12"`).
+Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.14"` and `kubernetesVersion: "v1.36.5"`).
 
 ```bash
 sed -i'' -e 's|talosVersion: .*|talosVersion: ""|' -e 's|kubernetesVersion: .*|kubernetesVersion: ""|' Chart.yaml
@@ -59,7 +59,7 @@ talm template --offline --full -t templates/controlplane.yaml
 
 Expected: the render stops with `templateOptions.kubernetesVersion is not set` and a hint naming the key.
 
-Restore `talosVersion: "v1.12"` alone and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore the preset's `kubernetesVersion: "v1.34.3"` too and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on that version.
+Restore `talosVersion: "v1.14"` alone and re-run: the render still stops with `templateOptions.kubernetesVersion is not set`, because from v1.14 the Kubernetes documents require an image. Set `talosVersion: "v1.13"` with `kubernetesVersion` still empty and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore both preset pins and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on `v1.36.5`.
 
 `--full` matters here. A default render is a diff against the same bundle, so the images cancel out on both sides and never appear in a node file either way.
 
@@ -379,11 +379,11 @@ Pin both schema renders dropping kernel-managed scopes (`host` / `link` / `nowhe
 
 ```bash
 # Render the legacy v1.11 path first — explicit talosVersion pin:
-sed -i.bak 's/^talosVersion: "v1.12"/talosVersion: "v1.11"/' Chart.yaml
+sed -i.bak 's/talosVersion: .*/talosVersion: "v1.11"/' Chart.yaml
 talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.11" || echo "OK v1.11"
 mv Chart.yaml.bak Chart.yaml
 
-# Then render the v1.12 path (default):
+# Then render the preset's own pin (v1.12 or later):
 talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.12" || echo "OK v1.12"
 ```
 
@@ -1800,8 +1800,9 @@ Each command should return promptly (sub-second) for read-only paths.
 ### K1. Preflight version-mismatch warning
 
 ```bash
-# Bump talosVersion in Chart.yaml to one minor ahead of running.
-sed -i 's|talosVersion: "v1.12"|talosVersion: "v1.13"|' Chart.yaml
+# Section K needs a stand one minor behind the version it upgrades to; this step assumes v1.12.x.
+# Pin talosVersion one minor ahead of the node's running Talos.
+sed -i 's|talosVersion: .*|talosVersion: "v1.13"|' Chart.yaml
 talm apply --dry-run -f nodes/node0.yaml | head -5
 ```
 
@@ -1814,7 +1815,7 @@ Expected: `warning: pre-flight: configured talosVersion=v1.13 is newer than the 
 Run an intentionally-bad cross-vendor upgrade and expect a hint-bearing blocker:
 
 ```bash
-sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' values.yaml
+sed -i 's|^image: .*|image: "ghcr.io/siderolabs/installer:v1.13.0"|' values.yaml
 talm upgrade -f nodes/node0.yaml
 ```
 
