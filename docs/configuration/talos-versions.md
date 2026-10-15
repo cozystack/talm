@@ -12,12 +12,14 @@ Rather than emit that config, the render stops. With both keys empty the Kuberne
 
 ```text
 rendered config mixes v1alpha1 fields with the documents that superseded them: ...
-hint: templateOptions.talosVersion is unset, so the render targets the Talos version talm was built from.
-      Pin it to v1.13 or lower in Chart.yaml; above that contract Talos keeps these settings in documents of their own,
-      which the charts do not emit.
+hint: templateOptions.talosVersion is unset, so the render targets the Talos version talm was built from; above v1.13
+      Talos keeps these settings in documents of their own, and the charts emit them only for a pinned version. Pin it
+      in Chart.yaml to the Talos version the nodes run, or to v1.13 or lower to keep the v1alpha1 shape.
 ```
 
-A chart can also fail earlier than either guard: the cozystack preset deletes a default node label with `$patch: delete`, and on a contract where `machine.nodeLabels` has moved into `KubeNodeConfig` that path no longer exists, so patching stops with `failed to delete path ...: lookup failed` before any version check runs. The preset happens to pin `v1.12`, which predates that move and sidesteps it.
+A project pinned at v1.14 or newer can hit the same error from its own templates: templates vendored by an earlier talm still write the v1alpha1 fields. The hint then points at `talm init --update --preset <preset>`, which re-syncs them; it also offers `Chart.yaml` and `values.yaml`, so review those changes before accepting them (see [Keeping charts in sync](../operations/upgrading.md)).
+
+`talm apply` reports the conflict for a node file rendered before the project moved to v1.14, with a hint of its own: the file still carries `machine.kubelet`, `cluster.clusterName` and the rest, and laid over the v1.14 render they would reach the node as the mix it refuses. `talm template` alone does not catch it, because it renders from the templates and does not read the node file's body. `talm template -I` rewrites the file from the templates and keeps only its leading comments, so save any hand-written body first (per-node `LinkConfig` overlays, pinned settings), re-render, then put the saved settings back, moving v1alpha1 Kubernetes fields into the matching document.
 
 Pin `templateOptions.talosVersion` in `Chart.yaml`, and keep it no newer than the Talos running on the node (see [Version compatibility](#version-compatibility)). Projects created from the shipped presets already carry a pin.
 

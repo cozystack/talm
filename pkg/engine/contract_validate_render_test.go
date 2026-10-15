@@ -480,26 +480,42 @@ kind: HostnameConfig
 hostname: node0
 `
 
+	// The way out depends on why the render mixed the shapes. Unpinned, the
+	// charts render v1alpha1 whatever the contract, so only a pin helps.
+	// Pinned above the boundary, the project's templates predate the typed
+	// documents and need a re-sync. Re-rendering a node file fixes neither: the
+	// render never reads its body.
 	for _, tc := range []struct {
 		name         string
 		talosVersion string
 		wantPinLower bool
+		wantInHint   string
 	}{
-		{name: "above the boundary", talosVersion: "v1.14", wantPinLower: true},
+		{name: "unpinned", talosVersion: "", wantPinLower: true, wantInHint: "Pin it in Chart.yaml"},
+		{name: "above the boundary", talosVersion: "v1.14", wantPinLower: true, wantInHint: "talm init --update"},
 		{name: "at the boundary", talosVersion: "v1.13", wantPinLower: false},
 		{name: "below the boundary", talosVersion: "v1.12", wantPinLower: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkSupersededFields([]byte(rendered), tc.talosVersion)
+			err := CheckSupersededFields([]byte(rendered), tc.talosVersion)
 			if err == nil {
 				t.Fatalf("talosVersion=%s: expected a conflict", tc.talosVersion)
 			}
 
 			hints := strings.Join(errors.GetAllHints(err), "\n")
 
-			if got := strings.Contains(hints, "Pin it to"); got != tc.wantPinLower {
+			if got := strings.Contains(hints, "v1.13 or lower"); got != tc.wantPinLower {
 				t.Errorf("talosVersion=%s: hint offers a lower pin = %v, want %v:\n%s",
 					tc.talosVersion, got, tc.wantPinLower, hints)
+			}
+
+			if tc.wantInHint != "" && !strings.Contains(hints, tc.wantInHint) {
+				t.Errorf("talosVersion=%s: hint does not say %q:\n%s", tc.talosVersion, tc.wantInHint, hints)
+			}
+
+			if strings.Contains(hints, "template -I") {
+				t.Errorf("talosVersion=%s: hint sends the operator to re-render a node file the render never reads:\n%s",
+					tc.talosVersion, hints)
 			}
 		})
 	}

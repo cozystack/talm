@@ -293,7 +293,7 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 		return nil, err
 	}
 
-	if err := checkSupersededFields(serialized, talosVersion); err != nil {
+	if err := CheckSupersededFields(serialized, talosVersion); err != nil {
 		return nil, err
 	}
 
@@ -2109,7 +2109,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, err
 	}
 
-	if err := checkSupersededFields(assembled.Bytes(), opts.TalosVersion); err != nil {
+	if err := CheckSupersededFields(assembled.Bytes(), opts.TalosVersion); err != nil {
 		return nil, err
 	}
 
@@ -2134,7 +2134,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	return buf.Bytes(), nil
 }
 
-// checkSupersededFields fails the render when the config sets a v1alpha1 field
+// CheckSupersededFields fails the render when the config sets a v1alpha1 field
 // that the targeted contract has moved into a document of its own. Talos rejects
 // such a config outright, so catching it here turns an apply-time rejection into
 // a render-time error naming the way out.
@@ -2147,7 +2147,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 //
 // Only that class is reported: a render is legitimately incomplete in other ways
 // (no install disk yet, no endpoint), and those are the operator's to fill in.
-func checkSupersededFields(rendered []byte, talosVersion string) error {
+func CheckSupersededFields(rendered []byte, talosVersion string) error {
 	cfg, err := configloader.NewFromBytes(rendered)
 	if err != nil {
 		// Not this check's job to decide the config is unloadable; the render
@@ -2183,15 +2183,19 @@ func checkSupersededFields(rendered []byte, talosVersion string) error {
 		return nil
 	}
 
+	return withSupersededFieldsHint(errors.Wrap(
+		errors.Join(conflicts...),
+		"rendered config mixes v1alpha1 fields with the documents that superseded them",
+	), talosVersion)
+}
+
+// withSupersededFieldsHint attaches the way out of a v1alpha1/typed-document
+// mix, which depends on the contract and on whether the version is pinned.
+func withSupersededFieldsHint(conflict error, talosVersion string) error {
 	pinned := talosVersion
 	if pinned == "" {
 		pinned = "unset, so the render targets the Talos version talm was built from"
 	}
-
-	conflict := errors.Wrap(
-		errors.Join(conflicts...),
-		"rendered config mixes v1alpha1 fields with the documents that superseded them",
-	)
 
 	// Above the boundary the contract is what moved the settings, so lowering it
 	// resolves the conflict. At or below it the contract is innocent: something
@@ -2209,13 +2213,30 @@ func checkSupersededFields(rendered []byte, talosVersion string) error {
 		)
 	}
 
+	// The charts pick the shape from the pinned version, so unpinned they write
+	// v1alpha1 on every contract and only a pin helps.
+	if talosVersion == "" {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHintf(
+			conflict,
+			"templateOptions.talosVersion is %s; above %s Talos keeps these settings in documents of their own, "+
+				"and the charts emit them only for a pinned version. Pin it in Chart.yaml to the Talos version "+
+				"the nodes run, or to %s or lower to keep the v1alpha1 shape.",
+			pinned,
+			config.TalosVersion1_13,
+			config.TalosVersion1_13,
+		)
+	}
+
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHintf(
 		conflict,
 		"templateOptions.talosVersion is %s; above %s Talos keeps these settings in documents of their own. "+
-			"Re-render the node files with `talm template` (the charts emit those documents when talosVersion is pinned) "+
-			"and move the reported fields out of v1alpha1 in your own patches. Pin it to %s or lower in Chart.yaml "+
-			"to keep the v1alpha1 shape.",
+			"Templates vendored by an earlier talm still write them in v1alpha1: re-sync them with "+
+			"`talm init --update --preset <preset>`, accepting the templates but reviewing the Chart.yaml and "+
+			"values.yaml changes it also offers (they move the version pins and the install image), "+
+			"and move the reported fields out of v1alpha1 in your own "+
+			"templates and patches. Pin it to %s or lower in Chart.yaml to keep the v1alpha1 shape.",
 		pinned,
 		config.TalosVersion1_13,
 		config.TalosVersion1_13,
