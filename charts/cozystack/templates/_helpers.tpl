@@ -6,37 +6,44 @@
 {{- end }}
 {{- end }}
 
+{{- /* Kubelet configuration keys at .indent: the preset's built-ins plus
+       extraKubeletExtraArgs. extraKubeletExtraArgs MUST NOT collide with
+       the built-ins — yaml.v3 (used by Talos config decode and by the
+       upgrade-time body write-back) rejects duplicate map keys, so a
+       silent merge would emit a config that cannot decode. Fail at render
+       with a precise hint naming the offending key; operators wanting a
+       different default fork the preset. */ -}}
+{{- define "talos.config.kubelet_config" }}
+{{- range $k, $_ := .root.Values.extraKubeletExtraArgs }}
+{{- if or (eq $k "cpuManagerPolicy") (eq $k "maxPods") }}
+{{- fail (printf "values.yaml: extraKubeletExtraArgs.%s collides with the cozystack preset's built-in kubelet.extraConfig — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraKubeletExtraArgs, or fork the chart preset if you need a different default." $k) }}
+{{- end }}
+{{- end }}
+{{- "cpuManagerPolicy: static" | nindent .indent }}
+{{- "maxPods: 512" | nindent .indent }}
+{{- with .root.Values.extraKubeletExtraArgs }}
+{{- toYaml . | nindent $.indent }}
+{{- end }}
+{{- end }}
+
 {{- /* Shared machine section: type, nodeLabels (controlplane), kubelet, sysctls, kernel, certSANs, files, install */ -}}
 {{- define "talos.config.machine.common" }}
 machine:
-  {{- if eq .MachineType "controlplane" }}
+  {{- $kubedocs := include "talm.contract.kubedocs" . }}
+  {{- if and (eq .MachineType "controlplane") (not $kubedocs) }}
   nodeLabels:
     node.kubernetes.io/exclude-from-external-load-balancers:
       $patch: delete
   {{- end }}
   type: {{ .MachineType }}
+  {{- if not $kubedocs }}
   kubelet:
     nodeIP:
       validSubnets:
         {{- include "talm.advertised_subnets" (dict "root" . "indent" 8) }}
-    {{- /* extraKubeletExtraArgs MUST NOT collide with the preset's
-           built-in extraConfig keys — yaml.v3 (used by Talos config
-           decode and by the upgrade-time body write-back) rejects
-           duplicate map keys, so a silent merge would emit a config
-           that cannot decode. Fail at render with a precise hint
-           naming the offending key; operators wanting a different
-           default fork the preset. */ -}}
-    {{- range $k, $_ := .Values.extraKubeletExtraArgs }}
-      {{- if or (eq $k "cpuManagerPolicy") (eq $k "maxPods") }}
-        {{- fail (printf "values.yaml: extraKubeletExtraArgs.%s collides with the cozystack preset's built-in kubelet.extraConfig — keys never override (yaml.v3 rejects duplicate map keys on decode). Remove the entry from extraKubeletExtraArgs, or fork the chart preset if you need a different default." $k) }}
-      {{- end }}
-    {{- end }}
     extraConfig:
-      cpuManagerPolicy: static
-      maxPods: 512
-      {{- with .Values.extraKubeletExtraArgs }}
-      {{- toYaml . | nindent 6 }}
-      {{- end }}
+      {{- include "talos.config.kubelet_config" (dict "root" . "indent" 6) }}
+  {{- end }}
   {{- /* extraSysctls MUST NOT collide with the preset's built-in
          sysctls; same rationale as extraKubeletExtraArgs. $builtinSysctls
          is the single source of truth for the preset-owned keys — keep
@@ -176,6 +183,185 @@ machine:
   {{- end }}
 {{- end }}
 
+{{- define "talos.config.cluster_name" -}}
+{{ include "talm.validate.dns1123subdomain" (dict "value" (.Values.clusterName | default .Chart.Name) "field" "clusterName") | quote }}
+{{- end }}
+
+{{- define "talos.config.endpoint" -}}
+{{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP (cozystack floatingIP) or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
+{{- end }}
+
+{{- /* Control-plane component flags at .indent: the preset's built-ins,
+       a collision guard against them, then the operator's extra args.
+       Expects a dict with "root" (the chart context) and "indent". */ -}}
+{{- define "talos.config.controller_manager_args" }}
+{{- $v := .root.Values }}
+{{- "bind-address: 0.0.0.0" | nindent .indent }}
+{{- if $v.allocateNodeCIDRs }}
+{{- "allocate-node-cidrs: true" | nindent .indent }}
+{{- printf "cluster-cidr: %q" (join "," $v.podSubnets) | nindent .indent }}
+{{- else }}
+{{- "allocate-node-cidrs: false" | nindent .indent }}
+{{- end }}
+{{- range $k, $_ := $v.extraControllerManagerArgs }}
+{{- /* cluster-cidr is preset-owned only when allocateNodeCIDRs is on
+       (that is the only branch that emits it); with it off the
+       operator may set cluster-cidr freely. */}}
+{{- if or (eq $k "bind-address") (eq $k "allocate-node-cidrs") (and (eq $k "cluster-cidr") $v.allocateNodeCIDRs) }}
+{{- fail (printf "values.yaml: extraControllerManagerArgs.%s collides with the cozystack preset's built-in controllerManager.extraArgs; drop it from extraControllerManagerArgs" $k) }}
+{{- end }}
+{{- end }}
+{{- include "talm.render.component_args" (dict "args" $v.extraControllerManagerArgs "field" "extraControllerManagerArgs" "indent" .indent) }}
+{{- end }}
+
+{{- define "talos.config.scheduler_args" }}
+{{- $v := .root.Values }}
+{{- "bind-address: 0.0.0.0" | nindent .indent }}
+{{- range $k, $_ := $v.extraSchedulerArgs }}
+{{- if eq $k "bind-address" }}
+{{- fail (printf "values.yaml: extraSchedulerArgs.%s collides with the cozystack preset's built-in scheduler.extraArgs; drop it from extraSchedulerArgs" $k) }}
+{{- end }}
+{{- end }}
+{{- include "talm.render.component_args" (dict "args" $v.extraSchedulerArgs "field" "extraSchedulerArgs" "indent" .indent) }}
+{{- end }}
+
+{{- /* Empty when there is nothing to pass, so the caller can skip the
+       extraArgs key. "oidcFlags" puts OIDC on the command line; from
+       contract v1.14 it goes to KubeAuthenticationConfig instead. */ -}}
+{{- define "talos.config.api_server_args" }}
+{{- $v := .root.Values }}
+{{- $oidcSet := and $v.oidcIssuerUrl (ne $v.oidcIssuerUrl "") }}
+{{- if and $oidcSet .oidcFlags }}
+{{- printf "oidc-issuer-url: \"%s\"" $v.oidcIssuerUrl | nindent .indent }}
+{{- "oidc-client-id: \"kubernetes\"" | nindent .indent }}
+{{- "oidc-username-claim: \"preferred_username\"" | nindent .indent }}
+{{- "oidc-groups-claim: \"groups\"" | nindent .indent }}
+{{- end }}
+{{- range $k, $_ := $v.extraApiServerArgs }}
+{{- if and $oidcSet (has $k (list "oidc-issuer-url" "oidc-client-id" "oidc-username-claim" "oidc-groups-claim")) }}
+{{- fail (printf "values.yaml: extraApiServerArgs.%s collides with the cozystack preset's built-in apiServer OIDC args (active because oidcIssuerUrl is set); drop it from extraApiServerArgs" $k) }}
+{{- end }}
+{{- end }}
+{{- include "talm.render.component_args" (dict "args" $v.extraApiServerArgs "field" "extraApiServerArgs" "indent" .indent) }}
+{{- end }}
+
+{{- /* Cluster settings on contract v1.14+. Only etcd stays in v1alpha1;
+       the rest are typed documents the engine merges into the ones the
+       generator emits, so they carry only what this preset sets and
+       delete what it turns off. */ -}}
+{{- define "talos.config.cluster.kubedocs" }}
+{{- $controlplane := eq .MachineType "controlplane" }}
+{{- if $controlplane }}
+cluster:
+  etcd:
+    advertisedSubnets:
+      {{- include "talm.advertised_subnets" (dict "root" . "indent" 6) }}
+    {{- with (.Values.etcd | default dict).quotaBackendBytes }}
+    extraArgs:
+      quota-backend-bytes: {{ . | quote }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: KubeClusterConfig
+clusterName: {{ include "talos.config.cluster_name" . }}
+endpoint: {{ include "talos.config.endpoint" . }}
+---
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    {{- include "talm.advertised_subnets" (dict "root" . "indent" 4) }}
+{{- if $controlplane }}
+labels:
+  node.kubernetes.io/exclude-from-external-load-balancers:
+    $patch: delete
+{{- /* allowSchedulingOnControlPlanes: the generator taints control planes. */}}
+taints:
+  node-role.kubernetes.io/control-plane:
+    $patch: delete
+{{- end }}
+---
+apiVersion: v1alpha1
+kind: KubeletConfig
+config:
+  {{- include "talos.config.kubelet_config" (dict "root" . "indent" 2) }}
+---
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+dnsDomain: {{ include "talm.validate.dns1123subdomain" (dict "value" .Values.clusterDomain "field" "clusterDomain") | quote }}
+podSubnets:
+  {{- toYaml .Values.podSubnets | nindent 2 }}
+serviceSubnets:
+  {{- toYaml .Values.serviceSubnets | nindent 2 }}
+{{- if $controlplane }}
+---
+apiVersion: v1alpha1
+kind: KubeFlannelCNIConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: DiscoveryServiceConfig
+name: default
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: false
+---
+apiVersion: v1alpha1
+kind: KubeControllerManagerConfig
+extraArgs:
+  {{- include "talos.config.controller_manager_args" (dict "root" . "indent" 2) }}
+---
+apiVersion: v1alpha1
+kind: KubeSchedulerConfig
+extraArgs:
+  {{- include "talos.config.scheduler_args" (dict "root" . "indent" 2) }}
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+{{- include "talm.guard.apiserver_args_kubedocs" . }}
+{{- with include "talos.config.api_server_args" (dict "root" . "indent" 2) }}
+extraArgs:
+  {{- . }}
+{{- end }}
+certExtraSANs:
+  - 127.0.0.1
+  {{- with .Values.certSANs }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- with .Values.oidcIssuerUrl }}
+{{- /* The command-line OIDC flags as a JWT authenticator, same semantics:
+       a username claim other than email gets the "<issuer>#" prefix the
+       flags default to. configuration replaces the generator's document
+       whole, so the anonymous health-check access it grants is repeated. */}}
+---
+apiVersion: v1alpha1
+kind: KubeAuthenticationConfig
+configuration:
+  anonymous:
+    enabled: true
+    conditions:
+      - path: /livez
+      - path: /readyz
+      - path: /healthz
+  jwt:
+    - issuer:
+        url: {{ . | quote }}
+        audiences:
+          - kubernetes
+      claimMappings:
+        username:
+          claim: preferred_username
+          prefix: {{ printf "%s#" . | quote }}
+        groups:
+          claim: groups
+          prefix: ""
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- /* Shared cluster section */ -}}
 {{- define "talos.config.cluster" }}
 cluster:
@@ -187,54 +373,21 @@ cluster:
       {{- toYaml .Values.podSubnets | nindent 6 }}
     serviceSubnets:
       {{- toYaml .Values.serviceSubnets | nindent 6 }}
-  clusterName: {{ include "talm.validate.dns1123subdomain" (dict "value" (.Values.clusterName | default .Chart.Name) "field" "clusterName") | quote }}
+  clusterName: {{ include "talos.config.cluster_name" . }}
   controlPlane:
-    endpoint: {{ required "values.yaml: `endpoint` must be set to the cluster control-plane URL (e.g. https://<vip>:6443). This field is cluster-wide: every node's kubelet and kube-proxy dials it, so it cannot be auto-derived from the current node's IP -- `talm template` runs once per node and has no way to reconcile per-node IPs into a single shared endpoint. For multi-node setups use a VIP (cozystack floatingIP) or an external load balancer; for single-node clusters the node's routable IP works." .Values.endpoint | quote }}
+    endpoint: {{ include "talos.config.endpoint" . }}
   {{- if eq .MachineType "controlplane" }}
   allowSchedulingOnControlPlanes: true
   controllerManager:
     extraArgs:
-      bind-address: 0.0.0.0
-      {{- if .Values.allocateNodeCIDRs }}
-      allocate-node-cidrs: true
-      cluster-cidr: "{{ join "," .Values.podSubnets }}"
-      {{- else }}
-      allocate-node-cidrs: false
-      {{- end }}
-      {{- range $k, $_ := .Values.extraControllerManagerArgs }}
-      {{- /* cluster-cidr is preset-owned only when allocateNodeCIDRs is on
-             (that is the only branch that emits it); with it off the
-             operator may set cluster-cidr freely. */}}
-      {{- if or (eq $k "bind-address") (eq $k "allocate-node-cidrs") (and (eq $k "cluster-cidr") $.Values.allocateNodeCIDRs) }}
-      {{- fail (printf "values.yaml: extraControllerManagerArgs.%s collides with the cozystack preset's built-in controllerManager.extraArgs; drop it from extraControllerManagerArgs" $k) }}
-      {{- end }}
-      {{- end }}
-      {{- include "talm.render.component_args" (dict "args" .Values.extraControllerManagerArgs "field" "extraControllerManagerArgs") }}
+      {{- include "talos.config.controller_manager_args" (dict "root" . "indent" 6) }}
   scheduler:
     extraArgs:
-      bind-address: 0.0.0.0
-      {{- range $k, $_ := .Values.extraSchedulerArgs }}
-      {{- if eq $k "bind-address" }}
-      {{- fail (printf "values.yaml: extraSchedulerArgs.%s collides with the cozystack preset's built-in scheduler.extraArgs; drop it from extraSchedulerArgs" $k) }}
-      {{- end }}
-      {{- end }}
-      {{- include "talm.render.component_args" (dict "args" .Values.extraSchedulerArgs "field" "extraSchedulerArgs") }}
+      {{- include "talos.config.scheduler_args" (dict "root" . "indent" 6) }}
   apiServer:
-    {{- $oidcSet := and .Values.oidcIssuerUrl (ne .Values.oidcIssuerUrl "") }}
-    {{- if or $oidcSet .Values.extraApiServerArgs }}
+    {{- if include "talos.config.api_server_args" (dict "root" . "indent" 6 "oidcFlags" true) }}
     extraArgs:
-      {{- if $oidcSet }}
-      oidc-issuer-url: "{{ .Values.oidcIssuerUrl }}"
-      oidc-client-id: "kubernetes"
-      oidc-username-claim: "preferred_username"
-      oidc-groups-claim: "groups"
-      {{- end }}
-      {{- range $k, $_ := .Values.extraApiServerArgs }}
-      {{- if and $oidcSet (has $k (list "oidc-issuer-url" "oidc-client-id" "oidc-username-claim" "oidc-groups-claim")) }}
-      {{- fail (printf "values.yaml: extraApiServerArgs.%s collides with the cozystack preset's built-in apiServer OIDC args (active because oidcIssuerUrl is set); drop it from extraApiServerArgs" $k) }}
-      {{- end }}
-      {{- end }}
-      {{- include "talm.render.component_args" (dict "args" .Values.extraApiServerArgs "field" "extraApiServerArgs") }}
+      {{- include "talos.config.api_server_args" (dict "root" . "indent" 6 "oidcFlags" true) }}
     {{- end }}
     certSANs:
     - 127.0.0.1
@@ -442,7 +595,11 @@ environment:
 {{- define "talos.config.multidoc" }}
 {{- include "talos.config.machine.common" . }}
 
+{{- if include "talm.contract.kubedocs" . }}
+{{- include "talos.config.cluster.kubedocs" . }}
+{{- else }}
 {{- include "talos.config.cluster" . }}
+{{- end }}
 {{- include "talm.config.registries.multidoc" . }}
 {{- include "talos.config.network.multidoc" . }}
 {{- include "talos.config.zfs" . }}

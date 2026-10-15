@@ -83,11 +83,12 @@ podSubnets:
 serviceSubnets:
 - 10.96.0.0/16
 
-# Optional override for machine.kubelet.nodeIP.validSubnets and
-# cluster.etcd.advertisedSubnets. When left empty the chart derives
-# the value from the node's IPv4-default-gateway-bearing link at
-# render time (via talm.discovered.default_addresses_by_gateway), so
-# the generated machine config matches the node's actual network
+# Optional override for the kubelet node IP subnets
+# (machine.kubelet.nodeIP.validSubnets; KubeNodeConfig nodeIP.validSubnets
+# from Talos v1.14) and cluster.etcd.advertisedSubnets. When left empty
+# the chart derives the value from the node's IPv4-default-gateway-bearing
+# link at render time (via talm.discovered.default_addresses_by_gateway),
+# so the generated machine config matches the node's actual network
 # without any values.yaml edit. Set this only when you want to pin a
 # specific subnet — typically for multi-homed nodes where the
 # IPv4-default-gateway link is not the subnet you want kubelet/etcd
@@ -178,10 +179,11 @@ etcd:
 #         - bar=baz
 extraKernelModules: []
 
-# Extra kubelet args added to the preset's kubelet.extraConfig
-# (cpuManagerPolicy: static, maxPods: 512). Operator keys must be
-# DISJOINT from the built-in set; a collision fails the render with
-# a hint pointing at the offending key. Example:
+# Extra kubelet args added to the preset's built-in kubelet settings
+# (cpuManagerPolicy: static, maxPods: 512), which land in
+# machine.kubelet.extraConfig, or KubeletConfig config from Talos v1.14.
+# Operator keys must be DISJOINT from the built-in set; a collision
+# fails the render with a hint pointing at the offending key. Example:
 #   extraKubeletExtraArgs:
 #     feature-gates: "NodeSwap=true"
 extraKubeletExtraArgs: {}
@@ -232,7 +234,11 @@ timeServers: []
 # a key that collides with a preset built-in fails the render — for
 # controllerManager (bind-address / allocate-node-cidrs / cluster-cidr),
 # scheduler (bind-address), and apiServer (the oidc-* args, but only
-# when oidcIssuerUrl is set). Example:
+# when oidcIssuerUrl is set). From Talos v1.14 kube-apiserver takes no
+# authentication or authorization flags, so any oidc-*, anonymous-auth,
+# authentication-config or authorization-config/-mode/-webhook-* key
+# fails the render; oidcIssuerUrl becomes a KubeAuthenticationConfig
+# document instead. Example:
 #   extraApiServerArgs: { max-requests-inflight: "2000" }
 extraApiServerArgs: {}
 extraControllerManagerArgs: {}

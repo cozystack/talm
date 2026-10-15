@@ -413,7 +413,7 @@ extraMachineFiles:
 ```bash
 talm template -f nodes/node0.yaml > /tmp/render.yaml
 yq '.machine.kernel.modules' /tmp/render.yaml
-yq '.machine.kubelet.extraConfig' /tmp/render.yaml
+yq 'select(.kind == "KubeletConfig") | .config' /tmp/render.yaml
 yq '.machine.sysctls' /tmp/render.yaml
 yq '.machine.files[].path' /tmp/render.yaml
 ```
@@ -421,7 +421,7 @@ yq '.machine.files[].path' /tmp/render.yaml
 Expected:
 
 - `.machine.kernel.modules` lists the built-in seven (`openvswitch`, `drbd` with `usermode_helper=disabled`, `drbd_transport_tcp`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
-- `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
+- The `KubeletConfig` document's `config` (`.machine.kubelet.extraConfig` on a project pinned below v1.14) carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
 - `.machine.sysctls` carries the built-in `gc_thresh1/2/3`, the always-on DRBD tuning (`net.ipv4.tcp_orphan_retries`, `net.ipv4.tcp_fin_timeout`, `net.core.netdev_max_backlog`, `net.core.netdev_budget`, `net.core.netdev_budget_usecs`), `vm.nr_hugepages` (when set), AND `net.core.somaxconn`. Same rejection-on-collision rule (the DRBD keys are preset-owned too). See B9 for the keepalive triplet and etcd quota.
 - `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
 
@@ -450,14 +450,14 @@ for k in kernel sysctls files; do
     echo "FAIL: $k block leaked into default generic render"
   fi
 done
-if [ "$(yq '.machine.kubelet.extraConfig' /tmp/render.yaml)" = "null" ]; then
-  echo "OK: no extraConfig"
+if [ -z "$(yq 'select(.kind == "KubeletConfig")' /tmp/render.yaml)" ]; then
+  echo "OK: no KubeletConfig"
 else
-  echo "FAIL: extraConfig leaked"
+  echo "FAIL: KubeletConfig leaked"
 fi
 ```
 
-Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`, `extraConfig: {}`) shows up as a non-`null` value and trips the FAIL branch.
+Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`) shows up as a non-`null` value and trips the FAIL branch.
 
 Regression anchor: contract tests `TestContract_Machine_Extra*_Generic_NonEmptyEmitsBlock` pin the on-state for each block; `TestContract_Machine_NoCozystackOpinionsOnGeneric` pins the off-state at default values. A regression that emits an empty `modules: []` / `sysctls: {}` / `files: []` block in the default render would fail the latter.
 
@@ -541,10 +541,10 @@ Regression anchor: `TestContract_Machine_TimeServers_RenderWhenSet` / `TestContr
 
 ```bash
 # values.yaml: extraApiServerArgs: { max-requests-inflight: "2000" }
-talm template -f nodes/controlplane-0.yaml | yq '.cluster.apiServer.extraArgs'
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "KubeAPIServerConfig") | .extraArgs'
 ```
 
-Expected: includes `max-requests-inflight: "2000"`. On cozystack the block appears even without `oidcIssuerUrl` (it is hoisted out of the OIDC guard). A key colliding with a preset built-in — controllerManager `bind-address`/`allocate-node-cidrs`/`cluster-cidr`, scheduler `bind-address`, or an apiServer `oidc-*` arg while `oidcIssuerUrl` is set — fails the render with a hinted message. Generic exposes the same three knobs as a plain passthrough with no built-ins to collide with.
+Expected: includes `max-requests-inflight: "2000"`. On cozystack it appears whenever `extraApiServerArgs` is set, with or without `oidcIssuerUrl`; with neither, a v1.14 render carries no `extraArgs` in `KubeAPIServerConfig` (OIDC goes to `KubeAuthenticationConfig`), while a render below v1.14 still emits the `apiServer` block. A key colliding with a preset built-in — controllerManager `bind-address`/`allocate-node-cidrs`/`cluster-cidr`, scheduler `bind-address`, or an apiServer `oidc-*` arg while `oidcIssuerUrl` is set — fails the render with a hinted message. Generic exposes the same three knobs as a plain passthrough with no built-ins to collide with.
 
 Regression anchor: `TestContract_Cluster_ExtraControlPlaneArgs_Merge_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_WithoutOIDC_Cozystack`, `TestContract_Cluster_ExtraControllerManagerArgs_Collision_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_OIDCCollision_Cozystack`, `TestContract_Cluster_ExtraControlPlaneArgs_Generic`.
 
@@ -717,6 +717,37 @@ Expected: this renders. The bond carries the addresses and the default route, an
 Numeric and CIDR fields are checked before they reach the node, where the decode error would not name the document. Each of these aborts at render: an address or route destination whose prefix does not parse (`203.0.113.10/33`, `198.51.100.0/foo`), an `mtu` that is not a whole number in 68-65535 (`jumbo`, `-5`, `99999`, and a bare `0`, which would otherwise be dropped without a word), and a fractional `vlanId` (`7.5` truncates to 7 in the range check but renders as `vlanID: 7.5` on a document named `eth0.7.5`).
 
 Regression anchor: `TestContract_NetworkMultidoc_ExtraLinks_BondTuning_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_VlanMtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_RouteNoGateway_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_CollidesWithPreserved_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuOnly_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_AddressIsVIP_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveGetsNoOwnDocument`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveWithAddresses_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveAddressesMovedOntoBond`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveDefaultRouteNotMoved_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveScopedRouteIsNotDefault_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveStaticRouteNotMoved_Fails`, `TestContract_NetworkMultidoc_ExtraLinksAddressBadPrefix_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBadMTU_Fails`, `TestContract_NetworkMultidoc_ExtraLinksFractionalVlanID_Fails`.
+
+### B11. Kubernetes documents on the v1.14 contract
+
+Render both presets offline at their default pins (`talosVersion: "v1.14"`):
+
+```bash
+for p in generic cozystack; do
+  mkdir -p /tmp/talm-v114/$p && cd /tmp/talm-v114/$p
+  talm init --preset $p --name v114 --cluster-endpoint https://192.0.2.10:6443
+  sed -i'' -e 's|^advertisedSubnets: .*|advertisedSubnets: [192.0.2.0/24]|' values.yaml
+  echo '# talm: nodes=["192.0.2.10"], endpoints=["192.0.2.10"], templates=["templates/controlplane.yaml"]' > nodes/cp.yaml
+  talm template --offline --file nodes/cp.yaml > /tmp/talm-v114/$p.yaml
+  talm template --offline --full --file nodes/cp.yaml > /tmp/talm-v114/$p-full.yaml
+done
+```
+
+Expected for both:
+
+- The render succeeds. `yq '.machine.kubelet, .cluster.clusterName, .cluster.network, .cluster.apiServer' /tmp/talm-v114/$p.yaml` prints only `null`; `.cluster.etcd.advertisedSubnets` is `[192.0.2.0/24]`.
+- The node file carries `KubeClusterConfig` (`clusterName: "v114"`, the endpoint), `KubeNodeConfig` (`nodeIP.validSubnets`) and `KubeNetworkConfig`, each with only the fields the chart sets — no `image:` lines.
+- The `--full` render has exactly one document per `Kube*` kind and name (`KubeAuthorizerConfig` comes twice, as `node` and `rbac`), and the component documents carry `image:` on the pinned `kubernetesVersion`.
+
+Expected for cozystack only, on the node file: `KubeNodeConfig` deletes the `node.kubernetes.io/exclude-from-external-load-balancers` label and the `node-role.kubernetes.io/control-plane` taint, and `KubeFlannelCNIConfig` and `DiscoveryServiceConfig` (`name: default`) are delete selectors. In the `--full` render none of those four appear, `KubeProxyConfig` has `enabled: false`, and `KubeletConfig.config` holds `cpuManagerPolicy: static` and `maxPods: 512`.
+
+OIDC on cozystack: set `oidcIssuerUrl: https://issuer.example.com` and re-render. Expected: no `oidc-` key anywhere; a `KubeAuthenticationConfig` document holds a `jwt` entry with `issuer.url: "https://issuer.example.com"`, `audiences: [kubernetes]`, username claim `preferred_username` with prefix `"https://issuer.example.com#"`, groups claim `groups` with prefix `""`, and the `anonymous` block allowing `/livez`, `/readyz` and `/healthz`.
+
+Refused flags, either preset: set `extraApiServerArgs: { oidc-issuer-url: x }` and re-render. Expected: the render fails naming `extraApiServerArgs.oidc-issuer-url` and pointing at `KubeAuthenticationConfig` or a pin at v1.13 or lower. The same key renders on a project pinned at v1.13.
+
+On a node running Talos v1.14 (any preset): `talm apply --dry-run -f nodes/<node>.yaml`, then apply. Expected: the drift preview lists `Kube*` documents rather than `cluster.*` fields, the node accepts the config, and `talm get kubeletconfig` / `talm get staticpods` show the kubelet and control-plane args from values. On cozystack, `kubectl get ds --namespace kube-system` lists neither `kube-flannel` nor `kube-proxy`, and control-plane nodes carry no `node-role.kubernetes.io/control-plane:NoSchedule` taint.
+
+Regression anchor: `TestContract_ShippedChartsRenderValidConfig` loads both presets through the engine on v1.12, v1.13 and v1.14, at defaults and with every Kubernetes knob set, and validates the full render and the applied node file in machinery; `TestContract_ApiServerAuthFlagsRefusedFromV114` pins the refused flags; `TestContract_ChartKubeDocumentMergesIntoBundle`, `TestContract_ChartDeleteSelectorRemovesBundleDocument` and `TestContract_NonFullRenderKeepsChartKubeDocumentsVerbatim` pin the merge.
 
 ## C. Apply (auth path)
 
@@ -1025,7 +1056,7 @@ The Phase 1 walker validates the syntactic shape of net-addr fields in three v1a
 | Identical desired/on-node | First-run apply after the same render | `0 addition, 0 removal, 0 update, N unchanged.` |
 | Removed doc | Apply config that drops a previously-emitted doc (e.g. dropping a LinkConfig that was on-node) | `- LinkConfig{name: …}` line |
 | Added doc | Apply config that adds a fresh doc | `+ LinkConfig{name: …}` line |
-| Updated leaf | Change one nested field (e.g. `clusterDomain`) | `~ MachineConfig` plus `cluster.network.dnsDomain: cozy.local -> cozy.example` |
+| Updated leaf | Change one nested field (e.g. `clusterDomain`) | `~ KubeNetworkConfig` plus `dnsDomain: cozy.local -> cozy.example` (below v1.14: `~ MachineConfig` plus `cluster.network.dnsDomain: …`) |
 | Identical inputs include Equal entries | Verified via Diff API; OpEqual entries returned, FilterChanged drops them | — |
 | Distinguish absent vs null | YAML `extraField: null` added to one side | FieldChange.HasOld=false / HasNew=true; formatter renders `(absent) -> <nil>` |
 | Stable ordering | Re-run on same inputs | Identical output bytes |
@@ -1067,12 +1098,12 @@ The drift preview redacts allowlisted paths by default. The opt-out is operator-
 
 | Case | Trigger | Expected |
 | --- | --- | --- |
-| Scalar field change | Change `clusterDomain` in values | `cluster.network.dnsDomain: cozy.local -> cozy.example` inline |
-| Map field change | Add a key to `machine.nodeLabels` | YAML flow mapping `{role: control-plane, tier: primary}`, NOT `map[role:control-plane tier:primary]` |
-| Multi-element slice add-or-remove | Add a SAN to `cluster.apiServer.certSANs` | `cluster.apiServer.certSANs: added [192.0.2.6]` — set-diff form, NOT a full-slice dump |
-| Duplicate-cleanup on slice | Remove a duplicate entry from `certSANs` | `cluster.apiServer.certSANs: removed [127.0.0.1]` — multiset semantics surface a single removal |
-| Both add and remove | Replace one SAN with another | `cluster.apiServer.certSANs: removed [old.example], added [new.example]` |
-| Reorder-only change | Same elements in a different order | `cluster.apiServer.certSANs: reordered (3 element(s))` — explicit signal, NOT silent OpUpdate |
+| Scalar field change | Change `clusterDomain` in values | `dnsDomain: cozy.local -> cozy.example` inline under `~ KubeNetworkConfig` |
+| Map field change | Add a key to `labels` in a `KubeNodeConfig` body document | YAML flow mapping `{role: control-plane, tier: primary}`, NOT `map[role:control-plane tier:primary]` |
+| Multi-element slice add-or-remove | Add a SAN via `certSANs` in values | `certExtraSANs: added [192.0.2.6]` — set-diff form, NOT a full-slice dump |
+| Duplicate-cleanup on slice | Remove a duplicate entry from `certSANs` | `certExtraSANs: removed [127.0.0.1]` — multiset semantics surface a single removal |
+| Both add and remove | Replace one SAN with another | `certExtraSANs: removed [old.example], added [new.example]` |
+| Reorder-only change | Same elements in a different order | `certExtraSANs: reordered (3 element(s))` — explicit signal, NOT silent OpUpdate |
 | Slice appearing from absent | Field added that wasn't there before | `(absent) -> [a, b, c]` — flow-style list, NOT `[a b c]` |
 
 ### Phase 2B — post-apply state verification

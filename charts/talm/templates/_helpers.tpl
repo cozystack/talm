@@ -385,6 +385,19 @@ busPath: {{ .spec.busPath }}
 {{- if and .TalosVersion (not (semverCompare "<1.14.0-0" .TalosVersion)) }}true{{ end }}
 {{- end }}
 
+{{- /* From contract v1.14 Talos refuses these kube-apiserver flags in
+       KubeAPIServerConfig and takes them only as typed documents; fail at
+       render rather than at apply. */ -}}
+{{- define "talm.guard.apiserver_args_kubedocs" }}
+{{- range $k, $_ := .Values.extraApiServerArgs }}
+{{- range list "oidc-" "anonymous-auth" "authentication-config" "authorization-config" "authorization-mode" "authorization-webhook-" }}
+{{- if hasPrefix . $k }}
+{{- fail (printf "values.yaml: extraApiServerArgs.%s is not accepted on Talos v1.14 and later, which configures kube-apiserver authentication and authorization through the KubeAuthenticationConfig and KubeAuthorizerConfig documents. Drop it from extraApiServerArgs and add that document as a per-node patch, or pin templateOptions.talosVersion to v1.13 or lower." $k) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- /* advertisedSubnets as YAML list items at .indent, falling back to the
        subnet of the node's default-gateway-bearing link. cidrNetwork masks
        host bits so the list holds the canonical network form
