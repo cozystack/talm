@@ -245,10 +245,27 @@ extraSchedulerArgs: {}
 # (e.g. ghcr.io) or point at a private pull-through cache. To emit NO
 # registry config at all, null the key out (`registryMirrors:` with no
 # value) — a per-node override merges deeply, so `{}` keeps the default
-# docker.io mirror rather than clearing it. Example:
+# docker.io mirror rather than clearing it.
+#
+# Each mirror also accepts two optional per-mirror settings:
+#   overridePath — use the endpoint URL exactly as written, without
+#     appending /v2 to its path. REQUIRED for pull-through caches that
+#     carry the registry name in the path and already include /v2 in the
+#     URL (Harbor proxy cache, e.g.
+#     https://mirror.example.com/v2/proxy-docker.io): without
+#     overridePath containerd appends /v2 again and the cache answers
+#     with its HTML portal — pulls fail with "unexpected media type
+#     text/html". On the multidoc schema it is stamped onto every
+#     endpoint of the mirror (the typed document has no mirror-level
+#     form); on the legacy schema it is a sibling of endpoints.
+#   skipFallback — do not fall back to the upstream registry when no
+#     mirror serves the image. Requires Talos v1.9+; on an older pinned
+#     talosVersion contract the render fails fast (an UNPINNED contract
+#     is trusted as current and skips that guard).
+# Example:
 #   registryMirrors:
-#     docker.io: { endpoints: [https://registry.example.com/v2/docker.io] }
-#     ghcr.io:   { endpoints: [https://registry.example.com/v2/ghcr.io] }
+#     docker.io: { endpoints: [https://mirror.example.com/v2/proxy-docker.io], overridePath: true }
+#     ghcr.io:   { endpoints: [https://mirror.example.com/v2/proxy-ghcr.io], overridePath: true, skipFallback: true }
 registryMirrors:
   docker.io:
     endpoints:

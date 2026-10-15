@@ -1288,6 +1288,191 @@ func TestContract_Machine_RegistryMirrors_FallbackKey_Legacy_Cozystack(t *testin
 	}
 }
 
+// harborStyleMirror returns the pull-through-cache shape that needs
+// overridePath: the endpoint URL already carries /v2 and the registry
+// name in its path, so containerd must not append /v2 again.
+func harborStyleMirror() map[string]any {
+	return map[string]any{
+		"docker.io": map[string]any{
+			"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+			"overridePath": true,
+			"skipFallback": true,
+		},
+	}
+}
+
+// Contract: a per-mirror overridePath renders onto every endpoint of the
+// multidoc RegistryMirrorConfig (the typed document has no mirror-level
+// form), and skipFallback lands at mirror level. This is the Harbor
+// proxy-cache shape from the Talos pull-through-cache guide.
+func TestContract_Machine_RegistryMirrors_OverridePath_Multidoc_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   harborStyleMirror(),
+	})
+	assertContains(t, out, "kind: RegistryMirrorConfig")
+	assertContains(t, out, "- url: https://mirror.example.com/v2/proxy-docker.io\n    overridePath: true")
+	assertContains(t, out, "skipFallback: true")
+
+	// Pin decode validity, not just substrings: the rendered
+	// RegistryMirrorConfig document must load under machinery's strict
+	// decoder, or the node would reject it. (The full render is a patch
+	// stream with discovery placeholders, so only the typed document is
+	// fed to the loader.)
+	for _, doc := range strings.Split(out, "\n---\n") {
+		if !strings.Contains(doc, "kind: RegistryMirrorConfig") {
+			continue
+		}
+		if _, err := configloader.NewFromBytes([]byte(doc)); err != nil {
+			t.Fatalf("rendered RegistryMirrorConfig with overridePath must decode, got %v in:\n%s", err, doc)
+		}
+	}
+}
+
+// Contract: on the legacy schema the same values land as per-mirror
+// siblings of endpoints — machine.registries.mirrors.<name>.overridePath,
+// the only shape the legacy schema has for them.
+func TestContract_Machine_RegistryMirrors_OverridePath_Legacy_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   harborStyleMirror(),
+	})
+	assertContains(t, out, "docker.io:")
+	assertContains(t, out, "- https://mirror.example.com/v2/proxy-docker.io")
+	assertContains(t, out, "overridePath: true")
+	assertContains(t, out, "skipFallback: true")
+}
+
+// Contract: with neither key set the rendered output carries neither —
+// existing values files render byte-identical output to before the knob
+// existed.
+func TestContract_Machine_RegistryMirrors_OverridePath_Unset_Omitted_Cozystack(t *testing.T) {
+	t.Run("multidoc", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		})
+		assertNotContains(t, out, "overridePath")
+		assertNotContains(t, out, "skipFallback")
+	})
+	t.Run("legacy", func(t *testing.T) {
+		out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		})
+		assertNotContains(t, out, "overridePath")
+		assertNotContains(t, out, "skipFallback")
+	})
+}
+
+// Contract: false is a stated choice and is emitted verbatim, matching the
+// registryTLS.insecureSkipVerify behaviour — the knob can pin the default
+// explicitly against a future chart default change.
+func TestContract_Machine_RegistryMirrors_OverridePath_FalseIsEmitted_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"overridePath": false,
+			},
+		},
+	})
+	assertContains(t, out, "overridePath: false")
+}
+
+// Contract: a non-bool overridePath (e.g. the YAML-ambiguous "yes") fails
+// at render rather than emitting a scalar Talos rejects on decode.
+func TestContract_Machine_RegistryMirrors_NonBoolOverridePath_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"overridePath": "yes",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-bool overridePath")
+	}
+	if !strings.Contains(err.Error(), "overridePath") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: same fail-fast for a non-bool skipFallback — the guard is
+// structurally identical to the overridePath one.
+func TestContract_Machine_RegistryMirrors_NonBoolSkipFallback_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"skipFallback": "yes",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-bool skipFallback")
+	}
+	if !strings.Contains(err.Error(), "skipFallback") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: a mapping endpoint ({url: ..., overridePath: ...}) is the
+// shape the multidoc DOCUMENT uses, but the values knob keeps endpoints
+// as plain strings with per-mirror settings next to them — the legacy
+// schema has no per-endpoint form, so a per-endpoint values shape could
+// not render there. The guard names the right shape instead of the
+// confusing scheme message a map used to produce.
+func TestContract_Machine_RegistryMirrors_MapEndpoint_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints": []any{map[string]any{"url": "https://mirror.example.com/v2/proxy-docker.io", "overridePath": true}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a mapping endpoint")
+	}
+	if !strings.Contains(err.Error(), "plain URL strings") {
+		t.Errorf("error should point at the per-mirror shape, got %v", err)
+	}
+}
+
+// Contract: skipFallback is an unknown key to Talos older than v1.9, and
+// the strict node-side decode would reject the whole config for it, so
+// the render fails fast on a pinned pre-1.9 contract. overridePath needs
+// no such guard — it exists in the legacy schema since v1.3.
+func TestContract_Machine_RegistryMirrors_SkipFallback_Pre19Contract_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"skipFallback": true,
+			},
+		},
+	}, "v1.8")
+	if err == nil {
+		t.Fatal("expected a fail-fast for skipFallback on a pre-1.9 contract")
+	}
+	if !strings.Contains(err.Error(), "skipFallback") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "v1.9") {
+		t.Errorf("error should name the version that introduced the key, got %v", err)
+	}
+}
+
 // Contract: Talos states the fallback key cannot be used for TLS config,
 // so the chart refuses it instead of emitting a document Talos ignores.
 func TestContract_Machine_RegistryTLS_FallbackKey_Fails_Cozystack(t *testing.T) {
