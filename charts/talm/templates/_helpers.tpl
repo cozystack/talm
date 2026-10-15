@@ -360,9 +360,11 @@ busPath: {{ .spec.busPath }}
        are the only thing standing between a values typo and a component
        that either fails to start or starts with a nonsense flag, and six
        copies of them would drift. Expects a dict with "args" and "field"
-       (the values.yaml key name, used in messages). */ -}}
+       (the values.yaml key name, used in messages), and optionally "indent"
+       (default 6, the v1alpha1 cluster.<component>.extraArgs depth). */ -}}
 {{- define "talm.render.component_args" }}
 {{- $field := .field }}
+{{- $indent := .indent | default 6 | int }}
 {{- range $k, $v := .args }}
 {{- if kindIs "invalid" $v }}
 {{- fail (printf "values.yaml: %s.%s has no value. A bare `key:` renders as the literal string \"<nil>\" onto the component command line; give it a value or drop the key." $field $k) }}
@@ -372,7 +374,39 @@ busPath: {{ .spec.busPath }}
 {{- if or (kindIs "map" $v) (kindIs "slice" $v) }}
 {{- fail (printf "values.yaml: %s.%s is a %s, but a component flag takes a single scalar value. Write it as the string the component expects." $field $k (kindOf $v)) }}
 {{- end }}
-      {{ $k }}: {{ $v | toString | quote }}
+{{- printf "%s: %s" $k ($v | toString | quote) | nindent $indent }}
+{{- end }}
+{{- end }}
+
+{{- /* Non-empty from contract v1.14, where Talos keeps the Kubernetes
+       settings in typed documents (KubeClusterConfig, KubeletConfig,
+       KubeNodeConfig, ...) and refuses the v1alpha1 fields next to them. */ -}}
+{{- define "talm.contract.kubedocs" -}}
+{{- if and .TalosVersion (not (semverCompare "<1.14.0-0" .TalosVersion)) }}true{{ end }}
+{{- end }}
+
+{{- /* advertisedSubnets as YAML list items at .indent, falling back to the
+       subnet of the node's default-gateway-bearing link. cidrNetwork masks
+       host bits so the list holds the canonical network form
+       (192.168.201.0/24, not 192.168.201.10/24); uniq drops the duplicate a
+       secondary address in the same subnet would add. Expects a dict with
+       "root" (the chart context) and "indent". */ -}}
+{{- define "talm.advertised_subnets" }}
+{{- $root := .root }}
+{{- if $root.Values.advertisedSubnets }}
+{{- toYaml $root.Values.advertisedSubnets | nindent .indent }}
+{{- else }}
+{{- $addrs := fromJsonArray (include "talm.discovered.default_addresses_by_gateway" $root) }}
+{{- if not $addrs }}
+{{- fail "values.yaml: `advertisedSubnets` was left empty and talm could not derive a default from discovery. No default-gateway-bearing link was found on the node. This field is a cluster-wide subnet selector fed to kubelet and etcd; `talm template` is invoked once per node and cannot merge per-node values into one cluster value. Either set advertisedSubnets explicitly in values.yaml, or ensure the node has a default route before running `talm template`." }}
+{{- end }}
+{{- $subnets := list }}
+{{- range $addrs }}
+{{- $subnets = append $subnets (. | cidrNetwork) }}
+{{- end }}
+{{- range uniq $subnets }}
+{{- printf "- %s" . | nindent $.indent }}
+{{- end }}
 {{- end }}
 {{- end }}
 
