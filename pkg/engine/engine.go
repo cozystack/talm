@@ -956,14 +956,20 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // body is the zero value, in which case rendered survives. Each entry
 // mirrors a struct field tagged `merge:"replace"` in the upstream
 // machinery types (collected from
-// pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and
-// pkg/machinery/config/types/network/rule_config.go):
+// pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and the typed
+// documents under pkg/machinery/config/types/{network,k8s,cri}):
 //
 //   - cluster/network/podSubnets — v1alpha1 `PodSubnet []string ... merge:"replace"`
 //   - cluster/network/serviceSubnets — v1alpha1 `ServiceSubnet []string ... merge:"replace"`
 //   - cluster/apiServer/auditPolicy — v1alpha1 `AuditPolicyConfig Unstructured ... merge:"replace"`
-//   - ingress — typed NetworkRuleConfig `Ingress IngressConfig ... merge:"replace"`
-//   - portSelector/ports — typed NetworkRuleConfig `Ports PortRanges ... merge:"replace"`
+//   - NetworkRuleConfig/ingress — `Ingress IngressConfig ... merge:"replace"`
+//   - NetworkRuleConfig/portSelector/ports — `Ports PortRanges ... merge:"replace"`
+//   - BGPInstanceConfig/advertise, BGPInstanceConfig/importRoutes,
+//     BGPInstanceConfig/neighbors
+//   - CRIBaseRuntimeSpecConfig/overrides
+//   - KubeNetworkConfig/podSubnets, KubeNetworkConfig/serviceSubnets
+//   - KubeAuthenticationConfig/configuration, KubeAuditPolicyConfig/configuration,
+//     KubeCredentialProviderConfig/configuration, KubeStaticPodConfig/pod
 //
 // At these paths the prune must NOT subtract rendered-side entries from
 // body's primitive list, recurse into body's map, or descend into body's
@@ -974,13 +980,13 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // original; a partial-edit on auditPolicy that adds a rule loses the
 // rendered apiVersion/kind/other rules.
 //
-// Paths are walked relative to the document root that owns the field,
-// so the typed NetworkRuleConfig entries appear without an apiVersion/
-// kind prefix — pruneBodyIdentitiesAgainstRendered pairs body and
-// rendered docs by identity tuple before calling pruneIdenticalKeys, so
-// each walk sees only its own document's keys. The bare paths above do
-// not collide with anything in the v1alpha1 root (no `ingress` or
-// `portSelector` keys exist there), so a flat lookup is sufficient.
+// Paths are walked relative to the document that owns the field:
+// pruneBodyIdentitiesAgainstRendered pairs body and rendered docs by
+// identity tuple before calling pruneIdenticalKeys, so each walk sees
+// only its own document's keys. A typed document's paths start with its
+// kind, because the same field is replace-tagged on one kind and merged
+// on another (KubeAdmissionControlConfig's `configuration` merges); the
+// v1alpha1 document has no kind, so its paths start at the root.
 //
 // The deep-equal short-circuit at the top of pruneIdenticalKeysAt is
 // still safe for replace paths: when body byte-equals rendered, deleting
@@ -993,8 +999,88 @@ var replaceSemanticPaths = map[string]struct{}{
 	"cluster/network/podSubnets":     {},
 	"cluster/network/serviceSubnets": {},
 	"cluster/apiServer/auditPolicy":  {},
-	"ingress":                        {},
-	"portSelector/ports":             {},
+
+	"NetworkRuleConfig/ingress":            {},
+	"NetworkRuleConfig/portSelector/ports": {},
+	"BGPInstanceConfig/advertise":          {},
+	"BGPInstanceConfig/importRoutes":       {},
+	"BGPInstanceConfig/neighbors":          {},
+	"CRIBaseRuntimeSpecConfig/overrides":   {},
+
+	"KubeNetworkConfig/podSubnets":               {},
+	"KubeNetworkConfig/serviceSubnets":           {},
+	"KubeAuthenticationConfig/configuration":     {},
+	"KubeAuditPolicyConfig/configuration":        {},
+	"KubeCredentialProviderConfig/configuration": {},
+	"KubeStaticPodConfig/pod":                    {},
+}
+
+// keyReplaceMapPaths lists the maps Talos merges key by key, replacing the
+// whole value of every key the patch sets: the component extraArgs, typed
+// meta.Args, whose Merge is a maps.Copy. At these paths the prune drops a
+// key only when body restates it exactly; a key whose value differs goes
+// to the patcher whole, or a list-valued flag edited in the node file
+// would be cut to the operator's delta and replace the rendered entries.
+//
+//nolint:gochecknoglobals // immutable lookup table consulted by pruneIdenticalKeysAt.
+var keyReplaceMapPaths = map[string]struct{}{
+	"machine/kubelet/extraArgs":           {},
+	"cluster/apiServer/extraArgs":         {},
+	"cluster/controllerManager/extraArgs": {},
+	"cluster/proxy/extraArgs":             {},
+	"cluster/scheduler/extraArgs":         {},
+	"cluster/etcd/extraArgs":              {},
+
+	"KubeletConfig/extraArgs":               {},
+	"KubeAPIServerConfig/extraArgs":         {},
+	"KubeControllerManagerConfig/extraArgs": {},
+	"KubeSchedulerConfig/extraArgs":         {},
+	"KubeProxyConfig/extraArgs":             {},
+}
+
+// pruneAtReplacePath handles body[key] when Talos replaces rather than merges
+// at childPath, and reports whether it did. Under `merge:"replace"` the value
+// is left whole: any prune leaks rendered-side entries out of the final
+// config (see replaceSemanticPaths). Under a per-key replace only exactly
+// restated keys go (see keyReplaceMapPaths).
+func pruneAtReplacePath(body map[string]any, key string, bodyV, renderedV any, childPath string) bool {
+	if _, replace := replaceSemanticPaths[childPath]; replace {
+		return true
+	}
+
+	if _, perKey := keyReplaceMapPaths[childPath]; perKey {
+		pruneEqualMapKeys(body, key, bodyV, renderedV)
+
+		return true
+	}
+
+	return false
+}
+
+// pruneEqualMapKeys drops from body[key] the entries rendered carries with
+// the same value, and body[key] itself once nothing is left in it.
+func pruneEqualMapKeys(body map[string]any, key string, bodyV, renderedV any) {
+	bodySub, ok := bodyV.(map[string]any)
+	if !ok {
+		return
+	}
+
+	renderedSub, ok := renderedV.(map[string]any)
+	if !ok {
+		return
+	}
+
+	before := len(bodySub)
+
+	for k, v := range bodySub {
+		if rv, exists := renderedSub[k]; exists && reflect.DeepEqual(v, rv) {
+			delete(bodySub, k)
+		}
+	}
+
+	if before > 0 && len(bodySub) == 0 {
+		delete(body, key)
+	}
 }
 
 // objectArrayMergeKeys lists the identity fields Talos's upstream
@@ -1085,7 +1171,10 @@ var objectArrayMergeKeys = map[string][]string{
 // threads the YAML path so the object-array descent can look up the
 // identity key for the current location.
 func pruneIdenticalKeys(body, rendered map[string]any) {
-	pruneIdenticalKeysAt(body, rendered, "")
+	// A typed document's paths are rooted at its kind: the same field name
+	// can be replace-tagged on one kind and merged on another.
+	kind, _ := body[k8sKeyKind].(string)
+	pruneIdenticalKeysAt(body, rendered, kind)
 }
 
 // pruneIdenticalKeysAt is pruneIdenticalKeys's recursive workhorse.
@@ -1112,10 +1201,7 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 		}
 
 		childPath := joinYAMLPath(yamlPath, key)
-		if _, replace := replaceSemanticPaths[childPath]; replace {
-			// Upstream `merge:"replace"` overwrites rendered with body
-			// verbatim. Any prune at this path leaks rendered-side
-			// entries out of the final config — see replaceSemanticPaths.
+		if pruneAtReplacePath(body, key, bodyV, renderedV, childPath) {
 			continue
 		}
 
