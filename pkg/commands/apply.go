@@ -1061,6 +1061,23 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 		}
 	}
 
+	// The render was checked on its own; a node file written on an older
+	// contract can still bring back the v1alpha1 fields it superseded. The
+	// engine's hints are about the render, which passed, so they are dropped.
+	if err := engine.CheckSupersededFields(merged, opts.TalosVersion); err != nil {
+		files := strings.Join(append([]string{configFile}, sidePatches...), ", ")
+
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHintf(
+			errors.Newf("laying %s over the rendered config: %s", files, err.Error()),
+			"one of these files sets a v1alpha1 field next to the document that replaced it. A node file "+
+				"rendered on an earlier Talos contract does: save its hand-written body, re-render it with "+
+				"`talm template -I --file %s` and put the body back. "+
+				"Otherwise move the reported field out of v1alpha1 into that document.",
+			configFile,
+		)
+	}
+
 	return apply(ctx, c, merged)
 }
 
