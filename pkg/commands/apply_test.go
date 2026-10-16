@@ -392,6 +392,75 @@ func TestApplyTemplatesPerNode_LoopsOncePerNodeWithSingleNodeContext(t *testing.
 	}
 }
 
+// A node file rendered on a contract that kept the Kubernetes settings in
+// v1alpha1 still carries them after the project moves to v1.14. Laid over the
+// v1.14 render, it produces the mix Talos refuses; the apply has to stop with
+// talm's hint instead of sending it to the node.
+func TestApplyTemplatesPerNode_RefusesNodeFileWithSupersededFields(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+
+	body := "# talm: nodes=[\"a\"], templates=[\"templates/worker.yaml\"]\nmachine:\n  kubelet:\n    extraArgs:\n      rotate-server-certificates: \"true\"\n"
+	if err := os.WriteFile(configFile, []byte(body), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	render := func(context.Context, *client.Client, engine.Options) ([]byte, error) {
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n---\napiVersion: v1alpha1\nkind: KubeletConfig\nimage: ghcr.io/siderolabs/kubelet:v1.37.0\n"), nil
+	}
+	apply := func(context.Context, *client.Client, []byte) error {
+		t.Error("a config mixing v1alpha1 kubelet with KubeletConfig was sent to the node")
+
+		return nil
+	}
+
+	err := applyTemplatesPerNode(engine.Options{TalosVersion: "v1.14"}, configFile, nil, []string{testNodeAddrA}, fakeAuthOpenClient(context.Background()), render, apply)
+	if err == nil {
+		t.Fatal("expected the apply to stop on the superseded kubelet field")
+	}
+
+	if !strings.Contains(err.Error(), "mixes v1alpha1 fields") {
+		t.Errorf("error does not report the conflict: %v", err)
+	}
+
+	// The templates rendered cleanly; the node file is what needs re-rendering.
+	hints := strings.Join(errors.GetAllHints(err), "\n")
+	if !strings.Contains(hints, "talm template -I") || strings.Contains(hints, "init --update") {
+		t.Errorf("hint does not point at re-rendering the node file:\n%s", hints)
+	}
+}
+
+// A node file already in the v1.14 shape restates the typed documents and
+// carries no v1alpha1 Kubernetes field, so the check lets the apply through.
+func TestApplyTemplatesPerNode_AcceptsNodeFileInTypedShape(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "node.yaml")
+
+	body := "# talm: nodes=[\"a\"], templates=[\"templates/worker.yaml\"]\nmachine:\n  type: worker\n---\napiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs:\n  rotate-server-certificates: \"true\"\n"
+	if err := os.WriteFile(configFile, []byte(body), 0o644); err != nil {
+		t.Fatalf("write configFile: %v", err)
+	}
+
+	render := func(context.Context, *client.Client, engine.Options) ([]byte, error) {
+		return []byte("version: v1alpha1\nmachine:\n  type: worker\n---\napiVersion: v1alpha1\nkind: KubeletConfig\nimage: ghcr.io/siderolabs/kubelet:v1.37.0\n"), nil
+	}
+
+	applied := false
+	apply := func(context.Context, *client.Client, []byte) error {
+		applied = true
+
+		return nil
+	}
+
+	if err := applyTemplatesPerNode(engine.Options{TalosVersion: "v1.14"}, configFile, nil, []string{testNodeAddrA}, fakeAuthOpenClient(context.Background()), render, apply); err != nil {
+		t.Fatalf("applyTemplatesPerNode: %v", err)
+	}
+
+	if !applied {
+		t.Error("a node file in the typed shape was not applied")
+	}
+}
+
 // TestApplyTemplatesPerNode_NeverBatchesNodes guarantees no future tweak
 // can revert applyTemplatesPerNode to batching all nodes into a single
 // render call. Phrased against this helper directly, not against

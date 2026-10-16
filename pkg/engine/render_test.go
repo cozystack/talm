@@ -3057,6 +3057,170 @@ ingress:
 		}
 	})
 
+	// From contract v1.14 the charts write KubeNetworkConfig and, on
+	// cozystack with OIDC, KubeAuthenticationConfig into every node file.
+	// Both carry replace-tagged fields, keyed by kind because
+	// KubeAdmissionControlConfig has a `configuration` that merges.
+	const kubeDocsRendered = `version: v1alpha1
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - 10.244.0.0/16
+serviceSubnets:
+  - 10.96.0.0/16
+---
+apiVersion: v1alpha1
+kind: KubeAuthenticationConfig
+configuration:
+  anonymous:
+    enabled: true
+    conditions:
+      - path: /livez
+  jwt:
+    - issuer:
+        url: https://issuer.example.com
+        audiences:
+          - kubernetes
+`
+
+	mergeKubeDocsBody := func(t *testing.T, body string) string {
+		t.Helper()
+
+		nodeFile := filepath.Join(t.TempDir(), "node0.yaml")
+		if err := os.WriteFile(nodeFile, []byte(body), 0o644); err != nil {
+			t.Fatalf("write node file: %v", err)
+		}
+
+		merged, err := MergeFileAsPatch([]byte(kubeDocsRendered), nodeFile)
+		if err != nil {
+			t.Fatalf("MergeFileAsPatch: %v", err)
+		}
+
+		return string(merged)
+	}
+
+	t.Run("KubeNetworkConfig podSubnets partial edit preserves rendered subnet", func(t *testing.T) {
+		out := mergeKubeDocsBody(t, `# talm: nodes=["10.0.0.1"]
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - 10.244.0.0/16
+  - fd00:10:244::/56
+serviceSubnets:
+  - 10.96.0.0/16
+`)
+		for _, want := range []string{"10.244.0.0/16", "fd00:10:244::/56"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("podSubnet %s missing after a partial edit:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("KubeAuthenticationConfig partial edit preserves the rest of configuration", func(t *testing.T) {
+		out := mergeKubeDocsBody(t, `# talm: nodes=["10.0.0.1"]
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeAuthenticationConfig
+configuration:
+  anonymous:
+    enabled: true
+    conditions:
+      - path: /livez
+  jwt:
+    - issuer:
+        url: https://issuer.example.com
+        audiences:
+          - kubernetes
+          - dashboard
+`)
+		for _, want := range []string{"anonymous:", "path: /livez", "- dashboard", "- kubernetes"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%q missing after a partial edit of a replace-tagged configuration:\n%s", want, out)
+			}
+		}
+	})
+
+	// Component extraArgs merge per key, replacing the whole value of a key
+	// the body sets. A list-valued flag edited in the node file has to reach
+	// the patcher whole, or the replace drops the rendered entries.
+	for _, tc := range []struct{ name, rendered, body string }{
+		{
+			name: "v1alpha1 apiServer",
+			rendered: `machine:
+  type: controlplane
+cluster:
+  apiServer:
+    extraArgs:
+      feature-gates:
+        - A=true
+      max-requests-inflight: "400"
+`,
+			body: `# talm: nodes=["10.0.0.1"]
+machine:
+  type: controlplane
+cluster:
+  apiServer:
+    extraArgs:
+      feature-gates:
+        - A=true
+        - B=true
+      max-requests-inflight: "400"
+`,
+		},
+		{
+			name: "KubeAPIServerConfig",
+			rendered: `machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+extraArgs:
+  feature-gates:
+    - A=true
+  max-requests-inflight: "400"
+`,
+			body: `# talm: nodes=["10.0.0.1"]
+machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+extraArgs:
+  feature-gates:
+    - A=true
+    - B=true
+  max-requests-inflight: "400"
+`,
+		},
+	} {
+		t.Run(tc.name+" extraArgs list partial edit keeps rendered values", func(t *testing.T) {
+			nodeFile := filepath.Join(t.TempDir(), "node0.yaml")
+			if err := os.WriteFile(nodeFile, []byte(tc.body), 0o644); err != nil {
+				t.Fatalf("write node file: %v", err)
+			}
+
+			merged, err := MergeFileAsPatch([]byte(tc.rendered), nodeFile)
+			if err != nil {
+				t.Fatalf("MergeFileAsPatch: %v", err)
+			}
+
+			out := string(merged)
+			for _, want := range []string{"A=true", "B=true", "max-requests-inflight"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s missing after a partial edit of a list-valued flag:\n%s", want, out)
+				}
+			}
+		})
+	}
+
 	t.Run("auditPolicy partial edit preserves rendered map keys", func(t *testing.T) {
 		// cluster.apiServer.auditPolicy is an Unstructured map tagged
 		// `merge:"replace"`: upstream overwrites the entire map with

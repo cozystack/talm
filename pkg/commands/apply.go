@@ -1061,6 +1061,23 @@ func renderMergeAndApply(ctx context.Context, c *client.Client, opts engine.Opti
 		}
 	}
 
+	// The render was checked on its own; a node file written on an older
+	// contract can still bring back the v1alpha1 fields it superseded. The
+	// engine's hints are about the render, which passed, so they are dropped.
+	if err := engine.CheckSupersededFields(merged, opts.TalosVersion); err != nil {
+		files := strings.Join(append([]string{configFile}, sidePatches...), ", ")
+
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHintf(
+			errors.Newf("laying %s over the rendered config: %s", files, err.Error()),
+			"one of these files sets a v1alpha1 field next to the document that replaced it. A node file "+
+				"rendered on an earlier Talos contract does: save its hand-written body, re-render it with "+
+				"`talm template -I --file %s` and put the body back. "+
+				"Otherwise move the reported field out of v1alpha1 into that document.",
+			configFile,
+		)
+	}
+
 	return apply(ctx, c, merged)
 }
 
@@ -1249,7 +1266,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipResourceValidation, "skip-resource-validation", false, "skip the pre-apply check that declared host resources (links, disks) exist on the target node")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipDriftPreview, "skip-drift-preview", false, "skip the pre-apply diff of on-node vs rendered MachineConfig")
 	applyCmd.Flags().BoolVar(&applyCmdFlags.skipPostApplyVerify, "skip-post-apply-verify", true, "skip the post-apply structural verification of on-node vs sent MachineConfig (default skip until the Talos-mutated field allowlist lands)")
-	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers both the Talos bootstrap allowlist (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.")
+	applyCmd.Flags().BoolVar(&applyCmdFlags.showSecretsInDrift, "show-secrets-in-drift", false, "show secret-bearing field values verbatim in drift preview / post-apply verify output (default: redacted). Covers the fields Talos treats as secret (cluster.token, cluster.ca.key, machine.token, Wireguard private keys, the CA, service-account and etcd encryption keys in their own documents from Talos v1.14, registry credentials, etc.) and values from encrypted value files (*.encrypted.yaml). Counterpart on template is --show-secrets, which governs the same values in template's stdout render.")
 	helpers.AddModeFlags(&applyCmdFlags.Mode, applyCmd)
 
 	// Shell completion for `talm apply` flags. `--file` returns the

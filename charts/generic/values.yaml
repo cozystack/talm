@@ -71,11 +71,12 @@ podSubnets:
 serviceSubnets:
 - 10.96.0.0/16
 
-# Optional override for machine.kubelet.nodeIP.validSubnets and
-# cluster.etcd.advertisedSubnets. When left empty the chart derives
-# the value from the node's IPv4-default-gateway-bearing link at
-# render time (via talm.discovered.default_addresses_by_gateway), so
-# the generated machine config matches the node's actual network
+# Optional override for the kubelet node IP subnets
+# (machine.kubelet.nodeIP.validSubnets; KubeNodeConfig nodeIP.validSubnets
+# from Talos v1.14) and cluster.etcd.advertisedSubnets. When left empty
+# the chart derives the value from the node's IPv4-default-gateway-bearing
+# link at render time (via talm.discovered.default_addresses_by_gateway),
+# so the generated machine config matches the node's actual network
 # without any values.yaml edit. Set this only when you want to pin a
 # specific subnet — typically for multi-homed nodes where the
 # IPv4-default-gateway link is not the subnet you want kubelet/etcd
@@ -103,7 +104,9 @@ certSANs: []
 #         - bar=baz
 extraKernelModules: []
 
-# Kubelet command-line args, rendered as machine.kubelet.extraConfig.
+# Kubelet configuration (KubeletConfiguration fields, not command-line
+# flags), rendered as machine.kubelet.extraConfig
+# (KubeletConfig config from Talos v1.14).
 # Talos expects string values. Example:
 #   extraKubeletExtraArgs:
 #     maxPods: "256"
