@@ -16,8 +16,10 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -272,6 +274,51 @@ func printApplyResultsRedacted(resp *machineapi.ApplyConfigurationResponse, valu
 	}
 }
 
+// nodeSecretValues reads the config the node runs and collects its secret
+// values, for masking the node's side of the dry-run diff. It runs before the
+// apply, so a node config talm cannot read or decode costs only that masking.
+// A maintenance connection has no config to read and contributes nothing;
+// any other failure on a dry run is reported to w, so the unmasked side is
+// not a silent leak.
+func nodeSecretValues(ctx context.Context, read machineConfigReader, w io.Writer) map[string]struct{} {
+	// Talos puts the config diff into the response of a dry run only.
+	if applyCmdFlags.showSecretsInDrift || !applyCmdFlags.dryRun {
+		return nil
+	}
+
+	current, ok, err := read(ctx)
+	if err == nil && !ok {
+		return nil
+	}
+
+	var values map[string]struct{}
+	if err == nil {
+		values, err = collectConfigSecretValues(current)
+	}
+
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: the node's side of the dry-run diff is not masked, its config could not be read: %v\n", err)
+
+		return nil
+	}
+
+	return values
+}
+
+// modeDetailsSecretValues collects the secret values the node's dry-run diff
+// can show: the diff prints the node's own config next to the rendered one,
+// so with different secrets on the two sides both sets have to be masked.
+func modeDetailsSecretValues(rendered []byte, nodeValues map[string]struct{}) (map[string]struct{}, error) {
+	values, err := collectConfigSecretValues(rendered)
+	if err != nil {
+		return nil, err
+	}
+
+	maps.Copy(values, nodeValues)
+
+	return values, nil
+}
+
 // emitApplyResults is the redacting replacement for the two
 // helpers.PrintApplyResults call sites on the apply paths. It collects the
 // secret value set the dry-run diff must hide — Talos bootstrap material from
@@ -283,14 +330,18 @@ func printApplyResultsRedacted(resp *machineapi.ApplyConfigurationResponse, valu
 // path feeds value files into the applied config, so only it can leak a user
 // secret through ModeDetails; the direct-patch path renders none, so collecting
 // them there would be pure overhead and would wrongly require a talm.key.
-func emitApplyResults(resp *machineapi.ApplyConfigurationResponse, rendered []byte, rendersUserValues bool) error {
+//
+// nodeValues are the secrets of the config the node runs before the apply,
+// collected by nodeSecretValues: the diff prints that config next to the
+// rendered one, so its secrets are masked too.
+func emitApplyResults(resp *machineapi.ApplyConfigurationResponse, rendered []byte, nodeValues map[string]struct{}, rendersUserValues bool) error {
 	if applyCmdFlags.showSecretsInDrift {
 		printApplyResultsRedacted(resp, nil, os.Stderr)
 
 		return nil
 	}
 
-	values, err := collectConfigSecretValues(rendered)
+	values, err := modeDetailsSecretValues(rendered, nodeValues)
 	if err != nil {
 		return err
 	}

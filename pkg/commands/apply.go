@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -486,6 +487,8 @@ func buildApplyClosure() applyFunc {
 			return err
 		}
 
+		nodeValues := nodeSecretValues(cosiCtx, cosiMachineConfigReader(c, applyCmdFlags.insecure), os.Stderr)
+
 		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
 			Data:           data,
 			Mode:           applyCmdFlags.Mode.Mode,
@@ -496,7 +499,7 @@ func buildApplyClosure() applyFunc {
 			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 		}
 
-		if err := emitApplyResults(resp, data, true); err != nil {
+		if err := emitApplyResults(resp, data, nodeValues, true); err != nil {
 			return err
 		}
 
@@ -587,6 +590,8 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 
 		read := cosiVersionReader(c)
 
+		nodeValues := map[string]struct{}{}
+
 		for _, node := range targetNodes {
 			nodeCtx := client.WithNode(ctx, node)
 			preflightCheckTalosVersion(nodeCtx, read, applyCmdFlags.talosVersion, os.Stderr)
@@ -594,6 +599,8 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			if err := runPreApplyGates(nodeCtx, c, result, node, os.Stderr, false); err != nil {
 				return err
 			}
+
+			maps.Copy(nodeValues, nodeSecretValues(nodeCtx, cosiMachineConfigReader(c, applyCmdFlags.insecure), os.Stderr))
 		}
 
 		resp, err := c.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
@@ -614,7 +621,7 @@ func applyOneFileDirectPatchMode(configFile, withSecretsPath string) error {
 			return errors.Wrap(annotateApplyConfigError(err), "applying new configuration")
 		}
 
-		if err := emitApplyResults(resp, result, false); err != nil {
+		if err := emitApplyResults(resp, result, nodeValues, false); err != nil {
 			return err
 		}
 

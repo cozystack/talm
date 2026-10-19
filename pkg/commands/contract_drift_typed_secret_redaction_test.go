@@ -2,12 +2,15 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/cockroachdb/errors"
+	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
+	"github.com/siderolabs/talos/pkg/machinery/config/configdiff"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
@@ -60,7 +63,15 @@ encryption:
 func v114ControlPlaneWithSecrets(t *testing.T) []byte {
 	t.Helper()
 
-	configBundle, err := engine.InitializeConfigBundle(engine.Options{TalosVersion: "v1.14", KubernetesVersion: "v1.34.3"})
+	return append(controlPlaneWithSecrets(t, "v1.14"), []byte(typedSecretDocs)...)
+}
+
+// controlPlaneWithSecrets renders a control-plane config on the given
+// contract with its own freshly generated secrets.
+func controlPlaneWithSecrets(t *testing.T, talosVersion string) []byte {
+	t.Helper()
+
+	configBundle, err := engine.InitializeConfigBundle(engine.Options{TalosVersion: talosVersion, KubernetesVersion: "v1.34.3"})
 	if err != nil {
 		t.Fatalf("InitializeConfigBundle: %v", err)
 	}
@@ -70,7 +81,7 @@ func v114ControlPlaneWithSecrets(t *testing.T) []byte {
 		t.Fatalf("Serialize: %v", err)
 	}
 
-	return append(out, []byte(typedSecretDocs)...)
+	return out
 }
 
 // talosSecretLeaves returns every string leaf Talos itself masks in cfgBytes,
@@ -248,6 +259,159 @@ func TestModeDetails_EtcdEncryptionCollectsOnlySecretLeaves(t *testing.T) {
 	if strings.Contains(printed, modeDetailsRedactionSentinel) {
 		t.Errorf("plain diff lines were masked:\n%s", printed)
 	}
+}
+
+// The dry-run diff the node returns shows both its own config and the one
+// being applied. Every secret Talos redacts must be masked on both sides, as
+// printed: from v1.14 the CA and service-account keys are multi-line PEM,
+// which the diff splits into one prefixed line per line of the key.
+func TestModeDetails_PrintedDiffMasksSecretsOnBothSides(t *testing.T) {
+	for _, talosVersion := range []string{"v1.13", "v1.14"} {
+		t.Run(talosVersion, func(t *testing.T) {
+			onNode := controlPlaneWithSecrets(t, talosVersion)
+			rendered := controlPlaneWithSecrets(t, talosVersion)
+
+			diff := nodeDiff(t, onNode, rendered)
+
+			nodeValues, err := collectConfigSecretValues(onNode)
+			if err != nil {
+				t.Fatalf("collectConfigSecretValues: %v", err)
+			}
+
+			values, err := modeDetailsSecretValues(rendered, nodeValues)
+			if err != nil {
+				t.Fatalf("modeDetailsSecretValues: %v", err)
+			}
+
+			buf := &bytes.Buffer{}
+			printApplyResultsRedacted(&machineapi.ApplyConfigurationResponse{
+				Messages: []*machineapi.ApplyConfiguration{{ModeDetails: diff}},
+			}, values, buf)
+			printed := buf.String()
+
+			if !strings.Contains(printed, "@@") {
+				t.Fatalf("the two configs produced no diff to check:\n%s", printed)
+			}
+
+			for side, cfg := range map[string][]byte{"node": onNode, "rendered": rendered} {
+				for kind, leaves := range talosSecretLeaves(t, cfg) {
+					for path, value := range leaves {
+						if line, leaked := leakedSecretLine(printed, value); leaked {
+							t.Errorf("%s side: %s %s printed in the dry-run diff (%q)", side, kind, path, line)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// The node's secrets are collected before the apply, so a node config talm
+// cannot read or decode costs the masking of that side, never the apply. A
+// dry run says so instead of leaking silently; a maintenance connection has
+// no config to read and stays quiet.
+func TestNodeSecretValues(t *testing.T) {
+	origShow, origDryRun := applyCmdFlags.showSecretsInDrift, applyCmdFlags.dryRun
+	t.Cleanup(func() { applyCmdFlags.showSecretsInDrift, applyCmdFlags.dryRun = origShow, origDryRun })
+
+	applyCmdFlags.dryRun = true
+
+	onNode := controlPlaneWithSecrets(t, "v1.14")
+
+	reader := func(data []byte, ok bool, err error) machineConfigReader {
+		return func(context.Context) ([]byte, bool, error) { return data, ok, err }
+	}
+
+	for _, tc := range []struct {
+		name        string
+		show        bool
+		read        machineConfigReader
+		wantValues  bool
+		wantWarning bool
+	}{
+		{name: "read", read: reader(onNode, true, nil), wantValues: true},
+		{name: "read error", read: reader(nil, false, errors.New("rpc timeout")), wantWarning: true},
+		{name: "maintenance connection", read: reader(nil, false, nil)},
+		{name: "undecodable config", read: reader([]byte("machine: [unterminated"), true, nil), wantWarning: true},
+		{name: "show secrets", show: true, read: func(context.Context) ([]byte, bool, error) {
+			t.Error("--show-secrets-in-drift must not read the node's config")
+
+			return nil, false, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			applyCmdFlags.showSecretsInDrift = tc.show
+
+			buf := &bytes.Buffer{}
+			values := nodeSecretValues(context.Background(), tc.read, buf)
+
+			if got := len(values) > 0; got != tc.wantValues {
+				t.Errorf("collected secrets = %v, want %v", got, tc.wantValues)
+			}
+
+			if got := strings.Contains(buf.String(), "not masked"); got != tc.wantWarning {
+				t.Errorf("warning printed = %v, want %v: %q", got, tc.wantWarning, buf.String())
+			}
+		})
+	}
+
+	// Talos puts the config diff into the response of a dry run only, so a
+	// real apply has nothing of the node's to mask and skips the read.
+	t.Run("no read outside a dry run", func(t *testing.T) {
+		applyCmdFlags.showSecretsInDrift, applyCmdFlags.dryRun = false, false
+
+		buf := &bytes.Buffer{}
+		values := nodeSecretValues(context.Background(), func(context.Context) ([]byte, bool, error) {
+			t.Error("a real apply must not read the node's config for redaction")
+
+			return onNode, true, nil
+		}, buf)
+
+		if values != nil || buf.Len() != 0 {
+			t.Errorf("a real apply collected %d values and printed %q", len(values), buf.String())
+		}
+	})
+}
+
+func nodeDiff(t *testing.T, oldBytes, newBytes []byte) string {
+	t.Helper()
+
+	oldCfg, err := configloader.NewFromBytes(oldBytes)
+	if err != nil {
+		t.Fatalf("loading node config: %v", err)
+	}
+
+	newCfg, err := configloader.NewFromBytes(newBytes)
+	if err != nil {
+		t.Fatalf("loading rendered config: %v", err)
+	}
+
+	diff, err := configdiff.DiffConfigs(oldCfg, newCfg)
+	if err != nil {
+		t.Fatalf("DiffConfigs: %v", err)
+	}
+
+	return diff
+}
+
+// leakedSecretLine reports a line of value that shows up in printed. A
+// multi-line value is checked line by line, as the diff prints it; the PEM
+// armor lines are not secret.
+func leakedSecretLine(printed, value string) (string, bool) {
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "-----") {
+			continue
+		}
+
+		for _, out := range strings.Split(printed, "\n") {
+			if strings.TrimSpace(strings.TrimLeft(out, "+- ")) == line || (len(line) >= 16 && strings.Contains(out, line)) {
+				return line, true
+			}
+		}
+	}
+
+	return "", false
 }
 
 // The same field name is secret on one kind and harmless on another:
