@@ -6,20 +6,22 @@
 
 Leaving `templateOptions.talosVersion` empty means the version of Talos the `talm` binary was built against. It is not frozen at a release: upgrade talm, and an unpinned project follows it to whatever Talos that build carries.
 
-That is why the shipped presets pin it. The charts write Kubernetes settings as v1alpha1 fields (`machine.kubelet`, `machine.nodeLabels`), and from v1.14 Talos keeps each of those in a document of its own and rejects a config that carries both shapes. Rendering an unpinned project against v1.14 therefore produces a config the node refuses, with `kubelet config is already set in v1alpha1 config (.machine.kubelet)` and siblings. Network settings made the same move earlier, in v1.12.
+That is why the shipped presets pin it. The charts choose the config shape from the pinned version: from v1.14 Talos keeps the Kubernetes settings in documents of their own and rejects a config that also carries the v1alpha1 fields, and the charts only know to emit those documents when the version says so. An unpinned project renders the v1alpha1 shape against whatever contract the binary carries, and on v1.14 the node would refuse it with `kubelet config is already set in v1alpha1 config (.machine.kubelet)` and siblings. Network settings made the same move earlier, in v1.12.
 
 Rather than emit that config, the render stops. With both keys empty the Kubernetes version is reported first, since the bundle cannot be serialized without one; pin it and the contract conflict is reported next:
 
 ```text
 rendered config mixes v1alpha1 fields with the documents that superseded them: ...
-hint: templateOptions.talosVersion is unset, so the render targets the Talos version talm was built from.
-      Pin it to v1.13 or lower in Chart.yaml; above that contract Talos keeps these settings in documents of their own,
-      which the charts do not emit.
+hint: templateOptions.talosVersion is unset, so the render targets the Talos version talm was built from; above v1.13
+      Talos keeps these settings in documents of their own, and the charts emit them only for a pinned version. Pin it
+      in Chart.yaml to the Talos version the nodes run, or to v1.13 or lower to keep the v1alpha1 shape.
 ```
 
-A chart can also fail earlier than either guard: the cozystack preset deletes a default node label with `$patch: delete`, and on a contract where `machine.nodeLabels` has moved into `KubeNodeConfig` that path no longer exists, so patching stops with `failed to delete path ...: lookup failed` before any version check runs. The preset happens to pin `v1.12`, which predates that move and sidesteps it.
+A project pinned at v1.14 or newer can hit the same error from its own templates: templates vendored by an earlier talm still write the v1alpha1 fields. The hint then points at `talm init --update --preset <preset>`, which re-syncs them; it also offers `Chart.yaml` and `values.yaml`, so review those changes before accepting them (see [Keeping charts in sync](../operations/upgrading.md)).
 
-Pin `templateOptions.talosVersion` in `Chart.yaml`. The rule below still holds — the contract must not be newer than the Talos running on the node — and until the charts emit the typed documents there is a second bound on top of it: keep the pin at or below `v1.13`. Nodes running v1.14 are served by a v1.13 contract, which is the supported direction; the reverse is not. Projects created from the shipped presets already carry a pin.
+`talm apply` reports the conflict for a node file rendered before the project moved to v1.14, with a hint of its own: the file still carries `machine.kubelet`, `cluster.clusterName` and the rest, and laid over the v1.14 render they would reach the node as the mix it refuses. `talm template` alone does not catch it, because it renders from the templates and does not read the node file's body. `talm template -I` rewrites the file from the templates and keeps only its leading comments, so save any hand-written body first (per-node `LinkConfig` overlays, pinned settings), re-render, then put the saved settings back, moving v1alpha1 Kubernetes fields into the matching document.
+
+Pin `templateOptions.talosVersion` in `Chart.yaml`, and keep it no newer than the Talos running on the node (see [Version compatibility](#version-compatibility)). Projects created from the shipped presets already carry a pin.
 
 ## The Kubernetes version
 
@@ -31,7 +33,7 @@ From v1.14 the contract takes that choice away. The Kubernetes settings live in 
 
 Pin it in `Chart.yaml` when you want to choose the version yourself, which is what both shipped presets do. A pinned version reaches every component, kubelet included, so they never split across releases.
 
-The presets do not agree on a value. Generic pins `v1.36.2`, the default of the Talos line it targets, so a fresh project lands on what that line ships and a re-sync does not move the control plane. Cozystack pins `v1.34.3` against an older Talos line. Either way the pin is a starting point: set the key to the version your own cluster runs rather than inheriting the preset's.
+The presets do not agree on a value. Generic pins `v1.37.0`, the default of the Talos v1.14 line it targets, so a fresh project lands on what that line ships. Cozystack pins `v1.36.5`. Either way the pin is a starting point: set the key to the version your own cluster runs rather than inheriting the preset's.
 
 A project created before those pins existed carries empty values for this key and for `talosVersion`. On the first render after upgrading talm it stops with an error naming the key to set; add both pins to its `Chart.yaml` and it renders again.
 
@@ -41,7 +43,25 @@ Selected via `Chart.yaml` (`templateOptions.talosVersion`) or `--talos-version`:
 
 - **Talos < v1.12** — the machine config is a single v1alpha1 document with `machine.network` and `machine.registries` sections (the shape shown in [Node files](node-files.md)). Standalone documents that older Talos already accepts, such as the cozystack preset's `ExtensionServiceConfig`, follow it.
 - **Talos >= v1.12** — multi-document format with separate typed documents instead of the deprecated monolithic network and registry fields.
-- **Talos >= v1.14** — a second round of the same move, this time for the Kubernetes settings: `machine.kubelet`, `machine.nodeLabels` and the control-plane components each get a document of their own, and a config carrying both shapes is rejected. The shipped charts still write the v1alpha1 fields, which is why the presets pin below this.
+- **Talos >= v1.14** — a second round of the same move, this time for the Kubernetes settings: `machine.kubelet`, `machine.nodeLabels` and the control-plane components each get a document of their own, and a config carrying both shapes is rejected. The charts emit those documents, described below.
+
+## Kubernetes documents from v1.14
+
+On a v1.14 or newer contract the charts write the Kubernetes settings as typed documents, and only `cluster.etcd` stays in v1alpha1, since it has no typed counterpart:
+
+| Setting | Document |
+| --- | --- |
+| `clusterName`, `endpoint` | `KubeClusterConfig` |
+| `advertisedSubnets` for the kubelet node IP | `KubeNodeConfig` (`nodeIP.validSubnets`) |
+| `extraKubeletExtraArgs` | `KubeletConfig` (`config`) |
+| `podSubnets`, `serviceSubnets`, `clusterDomain` (cozystack) | `KubeNetworkConfig` |
+| `extraApiServerArgs`, `certSANs` | `KubeAPIServerConfig` (`extraArgs`, `certExtraSANs`) |
+| `extraControllerManagerArgs` | `KubeControllerManagerConfig` |
+| `extraSchedulerArgs` | `KubeSchedulerConfig` |
+
+These documents carry only what the chart sets. The config Talos generates already contains every one of them, with the component images, the control-plane node label and taint, and the other defaults, and talm merges the chart's documents into those rather than replacing them, the same way a `talosctl` patch would. A delete directive works the same way: the cozystack preset removes the flannel and discovery-service documents, the control-plane taint and the external-load-balancer exclusion label, and sets `KubeProxyConfig` to `enabled: false`, which is what it turned off on earlier contracts. Every other document kind the chart emits (`HostnameConfig`, `LinkConfig` and so on) still replaces the generated one of the same name. A default render keeps the chart's documents as written in the node file; apply merges them again.
+
+kube-apiserver no longer takes authentication or authorization flags on this contract. The cozystack preset's `oidcIssuerUrl` becomes a JWT authenticator in `KubeAuthenticationConfig` with the same audience (`kubernetes`), claims (`preferred_username`, `groups`) and username prefix (`<issuer>#`) the flags defaulted to, so existing RBAC bindings keep matching. An `extraApiServerArgs` key starting with `oidc-`, `anonymous-auth`, `authentication-config`, `authorization-config`, `authorization-mode` or `authorization-webhook-` fails the render; put the equivalent `KubeAuthenticationConfig` or `KubeAuthorizerConfig` document in a per-node patch instead.
 
 ## Documents emitted in multi-doc mode
 

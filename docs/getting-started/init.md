@@ -32,7 +32,7 @@ To set the Kubernetes control-plane URL at init time, pass `--cluster-endpoint`:
 talm init -p cozystack -N myawesomecluster --cluster-endpoint https://vip.example.test:6443
 ```
 
-`--cluster-endpoint` writes the URL into `values.yaml::endpoint`, which the chart renders into `cluster.controlPlane.endpoint` of every node's MachineConfig (the URL kubelet and kube-proxy dial).
+`--cluster-endpoint` writes the URL into `values.yaml::endpoint`, which the chart renders into every node's config as the URL kubelet and kube-proxy dial: `endpoint` of the `KubeClusterConfig` document on Talos v1.14 and newer (the preset default), `cluster.controlPlane.endpoint` below that.
 
 ## `--endpoints` vs `--cluster-endpoint`
 

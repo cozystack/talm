@@ -17,7 +17,7 @@ The apply-time safety gate matrix (Phase 1 / 2A / 2B / 2C, per-case triggers + e
 
    The commands in this plan assume `talm` is invokable by bare name. Adjust paths accordingly if you keep the binary elsewhere.
 
-2. Have a reachable Talos cluster (3 controlplane nodes recommended so you can exercise reset / etcd-member-removal without losing quorum). A small OCI / cloud / bare-metal v1.12.x stand is enough.
+2. Have a reachable Talos cluster (3 controlplane nodes recommended so you can exercise reset / etcd-member-removal without losing quorum). A small OCI / cloud / bare-metal stand is enough. Both presets pin `talosVersion: "v1.14"`, whose config a node on an older Talos cannot load: run the plan on a v1.14.x stand, or set `talosVersion` (and `kubernetesVersion`) in the project's `Chart.yaml` to what the stand runs right after A1.
 
 3. Work through the sections below in order. Each section lists a command, the expected outcome, and the failure modes to watch for. **Regression anchors** at the bottom of some sections call out specific behaviours to assert against — formulated as forward-looking checks the operator runs, not as a retrospective of past findings.
 
@@ -50,7 +50,7 @@ Watch for:
 
 ### A1a. Version pins on a project created before them
 
-Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.12"`).
+Run inside the A1 project (`--preset cozystack`, which pins `talosVersion: "v1.14"` and `kubernetesVersion: "v1.36.5"`).
 
 ```bash
 sed -i'' -e 's|talosVersion: .*|talosVersion: ""|' -e 's|kubernetesVersion: .*|kubernetesVersion: ""|' Chart.yaml
@@ -59,7 +59,7 @@ talm template --offline --full -t templates/controlplane.yaml
 
 Expected: the render stops with `templateOptions.kubernetesVersion is not set` and a hint naming the key.
 
-Restore `talosVersion: "v1.12"` alone and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore the preset's `kubernetesVersion: "v1.34.3"` too and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on that version.
+Restore `talosVersion: "v1.14"` alone and re-run: the render still stops with `templateOptions.kubernetesVersion is not set`, because from v1.14 the Kubernetes documents require an image. Set `talosVersion: "v1.13"` with `kubernetesVersion` still empty and re-run: the render succeeds and warns on stderr that no component images are pinned. Restore both preset pins and re-run: no warning, and the output carries `kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy` and `kube-scheduler` images on `v1.36.5`.
 
 `--full` matters here. A default render is a diff against the same bundle, so the images cancel out on both sides and never appear in a node file either way.
 
@@ -330,7 +330,7 @@ talm init --update --preset <your-preset> --force
 talm template -f nodes/node0.yaml --offline 2>&1 >/dev/null | grep '^WARN:.*preset' && echo "FAIL: preset drift not cleared" || echo "OK: preset drift cleared"
 ```
 
-`init --update` rewrites `.talm-preset.lock` to the current baseline, so the warning clears even if you declined individual preset-file diffs. Expected: `OK: preset drift cleared`. Note: `--force` auto-accepts every preset-file diff, overwriting the operator edit made earlier in this scenario — the "edits are preserved via the interactive diff" promise holds only without `--force`; this test stand is disposable, a real project should run the clear step interactively.
+`init --update` rewrites `.talm-preset.lock` to the current baseline, so the warning clears even if you declined individual preset-file diffs. Expected: `OK: preset drift cleared`. Note: `--force` accepts every preset file without asking, overwriting the operator edit made earlier in this scenario. Without `--force`, `init --update` asks `Overwrite? [y/N]` per file and shows no diff, so a real project declines its edited files and merges them by hand; this test stand is disposable.
 
 Regression anchors: `TestPresetLock_RoundTrip_NoDrift`, `TestCheckPresetDrift_StaleBaseline_Drift`, `TestCheckPresetDrift_OperatorEditedTemplates_NoDrift` (the false-positive guard), `TestCheckPresetDrift_NoLock_NoBaselineSentinel`, and `TestEvaluatePresetDrift` pin every branch above.
 
@@ -379,11 +379,11 @@ Pin both schema renders dropping kernel-managed scopes (`host` / `link` / `nowhe
 
 ```bash
 # Render the legacy v1.11 path first — explicit talosVersion pin:
-sed -i.bak 's/^talosVersion: "v1.12"/talosVersion: "v1.11"/' Chart.yaml
+sed -i.bak 's/talosVersion: .*/talosVersion: "v1.11"/' Chart.yaml
 talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.11" || echo "OK v1.11"
 mv Chart.yaml.bak Chart.yaml
 
-# Then render the v1.12 path (default):
+# Then render the preset's own pin (v1.12 or later):
 talm template -f nodes/node0.yaml | grep -E "address: 169\.254" && echo "FAIL: link-scoped leaked into v1.12" || echo "OK v1.12"
 ```
 
@@ -400,7 +400,8 @@ The cozystack preset ships hardcoded defaults for kernel modules, sysctls, kubel
 extraKernelModules:
   - name: nf_conntrack
 extraKubeletExtraArgs:
-  feature-gates: "NodeSwap=true"
+  featureGates:
+    NodeSwap: true
 extraSysctls:
   net.core.somaxconn: "65535"
 extraMachineFiles:
@@ -413,7 +414,7 @@ extraMachineFiles:
 ```bash
 talm template -f nodes/node0.yaml > /tmp/render.yaml
 yq '.machine.kernel.modules' /tmp/render.yaml
-yq '.machine.kubelet.extraConfig' /tmp/render.yaml
+yq 'select(.kind == "KubeletConfig") | .config' /tmp/render.yaml
 yq '.machine.sysctls' /tmp/render.yaml
 yq '.machine.files[].path' /tmp/render.yaml
 ```
@@ -421,7 +422,7 @@ yq '.machine.files[].path' /tmp/render.yaml
 Expected:
 
 - `.machine.kernel.modules` lists the built-in seven (`openvswitch`, `drbd` with `usermode_helper=disabled`, `drbd_transport_tcp`, `zfs`, `spl`, `vfio_pci`, `vfio_iommu_type1`) AND `nf_conntrack` — append, never override.
-- `.machine.kubelet.extraConfig` carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `feature-gates: NodeSwap=true`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
+- The `KubeletConfig` document's `config` (`.machine.kubelet.extraConfig` on a project pinned below v1.14) carries the built-ins (`cpuManagerPolicy: static`, `maxPods: 512`) AND `featureGates: {NodeSwap: true}`. Operator keys MUST NOT collide with built-ins; a collision fails the render at template time.
 - `.machine.sysctls` carries the built-in `gc_thresh1/2/3`, the always-on DRBD tuning (`net.ipv4.tcp_orphan_retries`, `net.ipv4.tcp_fin_timeout`, `net.core.netdev_max_backlog`, `net.core.netdev_budget`, `net.core.netdev_budget_usecs`), `vm.nr_hugepages` (when set), AND `net.core.somaxconn`. Same rejection-on-collision rule (the DRBD keys are preset-owned too). See B9 for the keepalive triplet and etcd quota.
 - `.machine.files[].path` lists `/etc/cri/conf.d/20-customization.part`, `/etc/lvm/lvm.conf`, AND `/etc/example/operator.conf`.
 
@@ -450,14 +451,14 @@ for k in kernel sysctls files; do
     echo "FAIL: $k block leaked into default generic render"
   fi
 done
-if [ "$(yq '.machine.kubelet.extraConfig' /tmp/render.yaml)" = "null" ]; then
-  echo "OK: no extraConfig"
+if [ -z "$(yq 'select(.kind == "KubeletConfig")' /tmp/render.yaml)" ]; then
+  echo "OK: no KubeletConfig"
 else
-  echo "FAIL: extraConfig leaked"
+  echo "FAIL: KubeletConfig leaked"
 fi
 ```
 
-Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`, `extraConfig: {}`) shows up as a non-`null` value and trips the FAIL branch.
+Expected: all four prints "OK". Set any single `extra*` key non-empty, re-render — only the matching block appears; the other three stay absent. The `yq ... = "null"` form is exact-match: `yq` emits the literal string `null` on a single line for an absent path, so a leaking empty block (`modules: []`) shows up as a non-`null` value and trips the FAIL branch.
 
 Regression anchor: contract tests `TestContract_Machine_Extra*_Generic_NonEmptyEmitsBlock` pin the on-state for each block; `TestContract_Machine_NoCozystackOpinionsOnGeneric` pins the off-state at default values. A regression that emits an empty `modules: []` / `sysctls: {}` / `files: []` block in the default render would fail the latter.
 
@@ -541,10 +542,10 @@ Regression anchor: `TestContract_Machine_TimeServers_RenderWhenSet` / `TestContr
 
 ```bash
 # values.yaml: extraApiServerArgs: { max-requests-inflight: "2000" }
-talm template -f nodes/controlplane-0.yaml | yq '.cluster.apiServer.extraArgs'
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "KubeAPIServerConfig") | .extraArgs'
 ```
 
-Expected: includes `max-requests-inflight: "2000"`. On cozystack the block appears even without `oidcIssuerUrl` (it is hoisted out of the OIDC guard). A key colliding with a preset built-in — controllerManager `bind-address`/`allocate-node-cidrs`/`cluster-cidr`, scheduler `bind-address`, or an apiServer `oidc-*` arg while `oidcIssuerUrl` is set — fails the render with a hinted message. Generic exposes the same three knobs as a plain passthrough with no built-ins to collide with.
+Expected: includes `max-requests-inflight: "2000"`. On cozystack it appears whenever `extraApiServerArgs` is set, with or without `oidcIssuerUrl`; with neither, a v1.14 render carries no `extraArgs` in `KubeAPIServerConfig` (OIDC goes to `KubeAuthenticationConfig`), while a render below v1.14 still emits the `apiServer` block. A key colliding with a preset built-in — controllerManager `bind-address`/`allocate-node-cidrs`/`cluster-cidr`, scheduler `bind-address`, or an apiServer `oidc-*` arg while `oidcIssuerUrl` is set — fails the render with a hinted message. Generic exposes the same three knobs as a plain passthrough with no built-ins to collide with.
 
 Regression anchor: `TestContract_Cluster_ExtraControlPlaneArgs_Merge_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_WithoutOIDC_Cozystack`, `TestContract_Cluster_ExtraControllerManagerArgs_Collision_Cozystack`, `TestContract_Cluster_ExtraApiServerArgs_OIDCCollision_Cozystack`, `TestContract_Cluster_ExtraControlPlaneArgs_Generic`.
 
@@ -718,6 +719,41 @@ Numeric and CIDR fields are checked before they reach the node, where the decode
 
 Regression anchor: `TestContract_NetworkMultidoc_ExtraLinks_BondTuning_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_VlanMtuAndRoutes_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_RouteNoGateway_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_CollidesWithPreserved_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_MtuOnly_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinks_AddressIsVIP_Fails_Cozystack`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveGetsNoOwnDocument`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveWithAddresses_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveAddressesMovedOntoBond`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveDefaultRouteNotMoved_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveScopedRouteIsNotDefault_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBondSlaveStaticRouteNotMoved_Fails`, `TestContract_NetworkMultidoc_ExtraLinksAddressBadPrefix_Fails`, `TestContract_NetworkMultidoc_ExtraLinksBadMTU_Fails`, `TestContract_NetworkMultidoc_ExtraLinksFractionalVlanID_Fails`.
 
+### B11. Kubernetes documents on the v1.14 contract
+
+Render both presets offline at their default pins (`talosVersion: "v1.14"`):
+
+```bash
+for p in generic cozystack; do
+  mkdir -p /tmp/talm-v114/$p && cd /tmp/talm-v114/$p
+  talm init --preset $p --name v114 --cluster-endpoint https://192.0.2.10:6443
+  sed -i'' -e 's|^advertisedSubnets: .*|advertisedSubnets: [192.0.2.0/24]|' values.yaml
+  echo '# talm: nodes=["192.0.2.10"], endpoints=["192.0.2.10"], templates=["templates/controlplane.yaml"]' > nodes/cp.yaml
+  talm template --offline --file nodes/cp.yaml > /tmp/talm-v114/$p.yaml
+  talm template --offline --full --file nodes/cp.yaml > /tmp/talm-v114/$p-full.yaml
+done
+```
+
+Expected for both:
+
+- The render succeeds. `yq '.machine.kubelet, .cluster.clusterName, .cluster.network, .cluster.apiServer' /tmp/talm-v114/$p.yaml` prints only `null`; `.cluster.etcd.advertisedSubnets` is `[192.0.2.0/24]`.
+- The node file carries `KubeClusterConfig` (`clusterName: "v114"`, the endpoint), `KubeNodeConfig` (`nodeIP.validSubnets`) and `KubeNetworkConfig`, each with only the fields the chart sets — no `image:` lines.
+- The `--full` render has exactly one document per `Kube*` kind and name (`KubeAuthorizerConfig` comes twice, as `node` and `rbac`), and the component documents carry `image:` on the pinned `kubernetesVersion`.
+
+Expected for cozystack only, on the node file: `KubeNodeConfig` deletes the `node.kubernetes.io/exclude-from-external-load-balancers` label and the `node-role.kubernetes.io/control-plane` taint, and `KubeFlannelCNIConfig` and `DiscoveryServiceConfig` (`name: default`) are delete selectors. In the `--full` render none of those four appear, `KubeProxyConfig` has `enabled: false`, and `KubeletConfig.config` holds `cpuManagerPolicy: static` and `maxPods: 512`.
+
+OIDC on cozystack: set `oidcIssuerUrl: https://issuer.example.com` and re-render. Expected: no `oidc-` key anywhere; a `KubeAuthenticationConfig` document holds a `jwt` entry with `issuer.url: "https://issuer.example.com"`, `audiences: [kubernetes]`, username claim `preferred_username` with prefix `"https://issuer.example.com#"`, groups claim `groups` with prefix `""`, and the `anonymous` block allowing `/livez`, `/readyz` and `/healthz`.
+
+Refused flags, either preset: set `extraApiServerArgs: { oidc-issuer-url: x }` and re-render. Expected: the render fails naming `extraApiServerArgs.oidc-issuer-url` and pointing at `KubeAuthenticationConfig` or a pin at v1.13 or lower. The same key renders on a project pinned at v1.13.
+
+Node files from an earlier contract, on a node running Talos v1.14: in a project pinned at `v1.13`, run `talm template -I --file nodes/<node>.yaml`, then set `talosVersion: "v1.14"` and `kubernetesVersion` to what the cluster runs, and run `talm apply --dry-run -f nodes/<node>.yaml`. Expected: the apply stops before contacting the node's apply API with `rendered config mixes v1alpha1 fields with the documents that superseded them`, naming the node file, and a hint to re-render with `talm template -I`. `talm template --file nodes/<node>.yaml` without `-I` succeeds at this point, since it does not read the node file's body. Run `talm template -I --file nodes/<node>.yaml`: the node file is rewritten in the v1.14 shape and the dry-run passes.
+
+On a node running Talos v1.14 (any preset): `talm apply --dry-run -f nodes/<node>.yaml`, then apply. Expected: the drift preview lists `Kube*` documents rather than `cluster.*` fields, the node accepts the config, and `talm get kubeletconfig` / `talm get staticpods` show the kubelet and control-plane args from values. On cozystack, `kubectl get ds --namespace kube-system` lists neither `kube-flannel` nor `kube-proxy`, and control-plane nodes carry no `node-role.kubernetes.io/control-plane:NoSchedule` taint.
+
+Partial edits of replace-tagged typed fields, on a node running Talos v1.14. A list-valued flag needs a rendered list to edit, and `extraApiServerArgs` takes scalars only, so first, on generic, set `extraApiServerArgs: { max-requests-inflight: "400" }` in `values.yaml`, add `feature-gates: [A=true]`, indented two spaces, on the line after the `extraApiServerArgs` include under `kind: KubeAPIServerConfig` in the project's `templates/_helpers.tpl`, and re-render the node file with `talm template -I`. Then, in a v1.14 node file, add a second entry to `podSubnets` of the `KubeNetworkConfig` document (keep the rendered one); on cozystack with `oidcIssuerUrl` set, add a second audience to the `KubeAuthenticationConfig` jwt entry; and in the generic node file change the flag to `feature-gates: [A=true, B=true]`. Run `talm apply --dry-run -f nodes/<node>.yaml`. Expected: the config sent keeps the rendered pod subnet next to the added one, and `KubeAuthenticationConfig` still carries the `anonymous` block with `/livez`, `/readyz` and `/healthz` next to both audiences, and the flag keeps both entries.
+
+Regression anchor: `TestContract_ShippedChartsRenderValidConfig` loads both presets through the engine on v1.12, v1.13 and v1.14, at defaults and with every Kubernetes knob set, and validates the full render and the applied node file in machinery; `TestContract_ApiServerAuthFlagsRefusedFromV114` pins the refused flags; `TestApplyTemplatesPerNode_RefusesNodeFileWithSupersededFields` pins the apply-time check on an old node file; `TestContract_ChartKubeDocumentMergesIntoBundle`, `TestContract_ChartDeleteSelectorRemovesBundleDocument` and `TestContract_NonFullRenderKeepsChartKubeDocumentsVerbatim` pin the merge; the `KubeNetworkConfig` and `KubeAuthenticationConfig` cases of `TestMergeFileAsPatch`, `TestPruneIdenticalKeys_ReplacePathsAreKeyedByKind` and `TestPruneIdenticalKeys_KeepsReplaceTaggedNetworkAndCRIFields` (the same rule for `BGPInstanceConfig` and `CRIBaseRuntimeSpecConfig` body documents) pin the partial edits.
+
 ## C. Apply (auth path)
 
 This section is the smoke-test for the apply pipe itself; the per-gate matrix lives in **Section C-safety** below.
@@ -793,6 +829,8 @@ Expected: the drift preview line for `machine.token` reads `machine.token: ***re
 
 Regression anchor: rotating any field in the allowlist (`cluster.{secret,token,aescbcEncryptionSecret,secretboxEncryptionSecret}`, `cluster.{ca,aggregatorCA,serviceAccount,etcd.ca}.key`, `cluster.acceptedCAs[].key`, `machine.{token,ca.key}`, `machine.acceptedCAs[].key`) MUST redact. A regression that silently leaks a secret value into stderr is a security-class bug — verify the substring with `grep -F` against the captured output.
 
+On a project pinned at `talosVersion: "v1.14"` the same material lives in typed documents. Regenerate `secrets.yaml` (keep a copy of the original) and run `talm apply --dry-run -f nodes/node0.yaml`. Expected: the `~ KubeAPIServerCAConfig`, `~ KubeAggregatorCAConfig`, `~ KubeServiceAccountConfig`, `~ KubeEtcdEncryptionConfig` and `~ DiscoveryIdentityConfig` entries show `issuingCA.key`, `issuer.privateKey`, `config.resources` and `clusterSecret` as `***redacted (len=N)***`, and no key from either `secrets.yaml` appears anywhere in stderr, the `Config diff:` block included. Restore the original `secrets.yaml` before applying anything.
+
 ### C5a. Drift preview redacts user secret values (encrypted value files)
 
 With an encrypted value file in scope (B2a) injecting a secret into a NON-allowlisted field (e.g. a `machine.pods[]` env, or `machine.registries.config.<reg>.auth.password`):
@@ -819,7 +857,9 @@ talm apply --dry-run --show-secrets-in-drift -f nodes/node0.yaml 2>&1 | grep -cF
 
 Expected: in the `Config diff:` block, a user secret renders as `value: ***` and a bootstrap `*.key` / `token` / encryption-secret renders as `key: ***` (etc.) by default. `--show-secrets-in-drift` prints the block verbatim (the same flag that governs the structured drift preview governs this surface too). A leak here is a security-class bug: `talm` prints the server-computed diff verbatim, so an unredacted `ModeDetails` would expose CA private keys and user secrets in CI logs.
 
-Regression anchor: the `Config diff:` shows secrets as context lines too (an unchanged `key:` adjacent to a change hunk), not only on `+`/`-` lines — value-based masking covers both. Public material adjacent to a secret slice (an `acceptedCAs[].crt`) is redacted alongside its key by design (the slice is masked whole); `--show-secrets-in-drift` restores it.
+Both sides, on a project pinned at `talosVersion: "v1.14"`: keep a copy of `secrets.yaml`, regenerate it so the rendered secrets differ from the ones the node runs, and run `talm apply --dry-run -f nodes/node0.yaml 2>&1`. Expected: none of the `-` lines (the node's current keys) and none of the `+` lines (the regenerated ones) shows key material. The CA and service-account keys are multi-line PEM there, so every line between `-----BEGIN` and `-----END` in the `issuingCA.key` and `issuer.privateKey` blocks reads `***`, while the armor lines stay. If talm cannot read the node's config (a COSI timeout, an RPC error), the dry run prints `warning: the node's side of the dry-run diff is not masked` and the apply itself is unaffected. Restore the original `secrets.yaml` before applying anything.
+
+Regression anchor: the `Config diff:` shows secrets as context lines too (an unchanged `key:` adjacent to a change hunk), not only on `+`/`-` lines — value-based masking covers both. `TestModeDetails_PrintedDiffMasksSecretsOnBothSides` runs a real Talos config diff between two configs with different secrets through the print path, on v1.13 and v1.14. Public material adjacent to a secret slice (an `acceptedCAs[].crt`) is redacted alongside its key by design (the slice is masked whole); `--show-secrets-in-drift` restores it.
 
 ### C6. Drift preview shows secrets with explicit opt-in
 
@@ -1025,7 +1065,7 @@ The Phase 1 walker validates the syntactic shape of net-addr fields in three v1a
 | Identical desired/on-node | First-run apply after the same render | `0 addition, 0 removal, 0 update, N unchanged.` |
 | Removed doc | Apply config that drops a previously-emitted doc (e.g. dropping a LinkConfig that was on-node) | `- LinkConfig{name: …}` line |
 | Added doc | Apply config that adds a fresh doc | `+ LinkConfig{name: …}` line |
-| Updated leaf | Change one nested field (e.g. `clusterDomain`) | `~ MachineConfig` plus `cluster.network.dnsDomain: cozy.local -> cozy.example` |
+| Updated leaf | Change one nested field (e.g. `clusterDomain`) | `~ KubeNetworkConfig` plus `dnsDomain: cozy.local -> cozy.example` (below v1.14: `~ MachineConfig` plus `cluster.network.dnsDomain: …`) |
 | Identical inputs include Equal entries | Verified via Diff API; OpEqual entries returned, FilterChanged drops them | — |
 | Distinguish absent vs null | YAML `extraField: null` added to one side | FieldChange.HasOld=false / HasNew=true; formatter renders `(absent) -> <nil>` |
 | Stable ordering | Re-run on same inputs | Identical output bytes |
@@ -1048,7 +1088,7 @@ The Phase 1 walker validates the syntactic shape of net-addr fields in three v1a
 
 #### Secret-bearing field redaction
 
-The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`).
+The drift preview redacts allowlisted paths by default. The opt-out is operator-explicit: `--show-secrets-in-drift`. Allowlist lives in `secretFieldPaths` and, per typed document kind, `secretTypedFieldPaths` (`pkg/commands/preflight_apply_safety_redact.go`); `TestDriftPreview_MasksEverySecretTalosRedacts` and `TestModeDetails_CollectsEverySecretTalosRedacts` check both against what Talos itself redacts.
 
 | Case | Trigger | Expected |
 | --- | --- | --- |
@@ -1067,12 +1107,12 @@ The drift preview redacts allowlisted paths by default. The opt-out is operator-
 
 | Case | Trigger | Expected |
 | --- | --- | --- |
-| Scalar field change | Change `clusterDomain` in values | `cluster.network.dnsDomain: cozy.local -> cozy.example` inline |
-| Map field change | Add a key to `machine.nodeLabels` | YAML flow mapping `{role: control-plane, tier: primary}`, NOT `map[role:control-plane tier:primary]` |
-| Multi-element slice add-or-remove | Add a SAN to `cluster.apiServer.certSANs` | `cluster.apiServer.certSANs: added [192.0.2.6]` — set-diff form, NOT a full-slice dump |
-| Duplicate-cleanup on slice | Remove a duplicate entry from `certSANs` | `cluster.apiServer.certSANs: removed [127.0.0.1]` — multiset semantics surface a single removal |
-| Both add and remove | Replace one SAN with another | `cluster.apiServer.certSANs: removed [old.example], added [new.example]` |
-| Reorder-only change | Same elements in a different order | `cluster.apiServer.certSANs: reordered (3 element(s))` — explicit signal, NOT silent OpUpdate |
+| Scalar field change | Change `clusterDomain` in values | `dnsDomain: cozy.local -> cozy.example` inline under `~ KubeNetworkConfig` |
+| Map field change | Add a key to `labels` in a `KubeNodeConfig` body document | YAML flow mapping `{role: control-plane, tier: primary}`, NOT `map[role:control-plane tier:primary]` |
+| Multi-element slice add-or-remove | Add a SAN via `certSANs` in values | `certExtraSANs: added [192.0.2.6]` — set-diff form, NOT a full-slice dump |
+| Duplicate-cleanup on slice | Remove a duplicate entry from `certSANs` | `certExtraSANs: removed [127.0.0.1]` — multiset semantics surface a single removal |
+| Both add and remove | Replace one SAN with another | `certExtraSANs: removed [old.example], added [new.example]` |
+| Reorder-only change | Same elements in a different order | `certExtraSANs: reordered (3 element(s))` — explicit signal, NOT silent OpUpdate |
 | Slice appearing from absent | Field added that wasn't there before | `(absent) -> [a, b, c]` — flow-style list, NOT `[a b c]` |
 
 ### Phase 2B — post-apply state verification
@@ -1767,8 +1807,9 @@ Each command should return promptly (sub-second) for read-only paths.
 ### K1. Preflight version-mismatch warning
 
 ```bash
-# Bump talosVersion in Chart.yaml to one minor ahead of running.
-sed -i 's|talosVersion: "v1.12"|talosVersion: "v1.13"|' Chart.yaml
+# Section K needs a stand one minor behind the version it upgrades to; this step assumes v1.12.x.
+# Pin talosVersion one minor ahead of the node's running Talos.
+sed -i 's|talosVersion: .*|talosVersion: "v1.13"|' Chart.yaml
 talm apply --dry-run -f nodes/node0.yaml | head -5
 ```
 
@@ -1781,7 +1822,7 @@ Expected: `warning: pre-flight: configured talosVersion=v1.13 is newer than the 
 Run an intentionally-bad cross-vendor upgrade and expect a hint-bearing blocker:
 
 ```bash
-sed -i 's|cozystack/cozystack/talos:v1.12.6|siderolabs/installer:v1.13.0|' values.yaml
+sed -i 's|^image: .*|image: "ghcr.io/siderolabs/installer:v1.13.0"|' values.yaml
 talm upgrade -f nodes/node0.yaml
 ```
 

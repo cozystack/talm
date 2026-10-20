@@ -134,6 +134,32 @@ func TestContract_RedactValuesInText(t *testing.T) {
 	}
 }
 
+// A multi-line secret, such as a PEM key in a typed document, reaches the diff
+// as one prefixed line per line of the key and is masked line by line. A
+// base64 line can itself start with `+`, so only one diff marker is dropped;
+// the armor lines are not secret and stay.
+func TestContract_RedactValuesInText_MultiLineSecret(t *testing.T) {
+	const key = "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIAp+Ue3pzd6MDqVdJK5WfuOx4abcdefghijklmnopqrstuv\n+k0sbpQwkE50w/5mixhKjerqWCXabcdefghijklmnopqrstuvwxyz01\n-----END EC PRIVATE KEY-----\n"
+
+	text := "@@ -1,6 +1,6 @@\n issuingCA:\n-    key: |\n+    key: |\n+        -----BEGIN EC PRIVATE KEY-----\n+        MHcCAQEEIAp+Ue3pzd6MDqVdJK5WfuOx4abcdefghijklmnopqrstuv\n+        +k0sbpQwkE50w/5mixhKjerqWCXabcdefghijklmnopqrstuvwxyz01\n+        -----END EC PRIVATE KEY-----\n"
+
+	got := redactValuesInText(text, secretSetOf(key))
+
+	for _, leaked := range []string{"MHcCAQEEIAp", "k0sbpQwkE50w"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("a line of the key survived redaction:\n%s", got)
+		}
+	}
+
+	if strings.Count(got, "+        "+modeDetailsRedactionSentinel) != 2 {
+		t.Errorf("each key line must become the sentinel behind its marker and indentation:\n%s", got)
+	}
+
+	if !strings.Contains(got, "-----BEGIN EC PRIVATE KEY-----") {
+		t.Errorf("armor lines are not secret and must stay:\n%s", got)
+	}
+}
+
 // TestContract_PrintApplyResultsRedacted pins the end-to-end print path: a
 // ModeDetails diff carrying a secret is masked when the value is in scope and
 // printed verbatim when the value set is empty (show-secrets).

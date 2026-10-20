@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -292,7 +293,7 @@ func SerializeConfiguration(configBundle *bundle.Bundle, machineType machine.Typ
 		return nil, err
 	}
 
-	if err := checkSupersededFields(serialized, talosVersion); err != nil {
+	if err := CheckSupersededFields(serialized, talosVersion); err != nil {
 		return nil, err
 	}
 
@@ -823,8 +824,8 @@ func isPatchDeleteDirective(n *yaml.Node) bool {
 
 	k, v := n.Content[0], n.Content[1]
 
-	return k.Kind == yaml.ScalarNode && k.Value == "$patch" &&
-		v.Kind == yaml.ScalarNode && v.Value == "delete"
+	return k.Kind == yaml.ScalarNode && k.Value == patchDirectiveKey &&
+		v.Kind == yaml.ScalarNode && v.Value == patchDirectiveDelete
 }
 
 // pruneBodyIdentitiesAgainstRendered removes from body every key whose value
@@ -955,14 +956,20 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // body is the zero value, in which case rendered survives. Each entry
 // mirrors a struct field tagged `merge:"replace"` in the upstream
 // machinery types (collected from
-// pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and
-// pkg/machinery/config/types/network/rule_config.go):
+// pkg/machinery/config/types/v1alpha1/v1alpha1_types.go and the typed
+// documents under pkg/machinery/config/types/{network,k8s,cri}):
 //
 //   - cluster/network/podSubnets — v1alpha1 `PodSubnet []string ... merge:"replace"`
 //   - cluster/network/serviceSubnets — v1alpha1 `ServiceSubnet []string ... merge:"replace"`
 //   - cluster/apiServer/auditPolicy — v1alpha1 `AuditPolicyConfig Unstructured ... merge:"replace"`
-//   - ingress — typed NetworkRuleConfig `Ingress IngressConfig ... merge:"replace"`
-//   - portSelector/ports — typed NetworkRuleConfig `Ports PortRanges ... merge:"replace"`
+//   - NetworkRuleConfig/ingress — `Ingress IngressConfig ... merge:"replace"`
+//   - NetworkRuleConfig/portSelector/ports — `Ports PortRanges ... merge:"replace"`
+//   - BGPInstanceConfig/advertise, BGPInstanceConfig/importRoutes,
+//     BGPInstanceConfig/neighbors
+//   - CRIBaseRuntimeSpecConfig/overrides
+//   - KubeNetworkConfig/podSubnets, KubeNetworkConfig/serviceSubnets
+//   - KubeAuthenticationConfig/configuration, KubeAuditPolicyConfig/configuration,
+//     KubeCredentialProviderConfig/configuration, KubeStaticPodConfig/pod
 //
 // At these paths the prune must NOT subtract rendered-side entries from
 // body's primitive list, recurse into body's map, or descend into body's
@@ -973,13 +980,13 @@ func pruneBodyIdentitiesAgainstRendered(body, rendered []byte) ([]byte, bool, er
 // original; a partial-edit on auditPolicy that adds a rule loses the
 // rendered apiVersion/kind/other rules.
 //
-// Paths are walked relative to the document root that owns the field,
-// so the typed NetworkRuleConfig entries appear without an apiVersion/
-// kind prefix — pruneBodyIdentitiesAgainstRendered pairs body and
-// rendered docs by identity tuple before calling pruneIdenticalKeys, so
-// each walk sees only its own document's keys. The bare paths above do
-// not collide with anything in the v1alpha1 root (no `ingress` or
-// `portSelector` keys exist there), so a flat lookup is sufficient.
+// Paths are walked relative to the document that owns the field:
+// pruneBodyIdentitiesAgainstRendered pairs body and rendered docs by
+// identity tuple before calling pruneIdenticalKeys, so each walk sees
+// only its own document's keys. A typed document's paths start with its
+// kind, because the same field is replace-tagged on one kind and merged
+// on another (KubeAdmissionControlConfig's `configuration` merges); the
+// v1alpha1 document has no kind, so its paths start at the root.
 //
 // The deep-equal short-circuit at the top of pruneIdenticalKeysAt is
 // still safe for replace paths: when body byte-equals rendered, deleting
@@ -992,8 +999,88 @@ var replaceSemanticPaths = map[string]struct{}{
 	"cluster/network/podSubnets":     {},
 	"cluster/network/serviceSubnets": {},
 	"cluster/apiServer/auditPolicy":  {},
-	"ingress":                        {},
-	"portSelector/ports":             {},
+
+	"NetworkRuleConfig/ingress":            {},
+	"NetworkRuleConfig/portSelector/ports": {},
+	"BGPInstanceConfig/advertise":          {},
+	"BGPInstanceConfig/importRoutes":       {},
+	"BGPInstanceConfig/neighbors":          {},
+	"CRIBaseRuntimeSpecConfig/overrides":   {},
+
+	"KubeNetworkConfig/podSubnets":               {},
+	"KubeNetworkConfig/serviceSubnets":           {},
+	"KubeAuthenticationConfig/configuration":     {},
+	"KubeAuditPolicyConfig/configuration":        {},
+	"KubeCredentialProviderConfig/configuration": {},
+	"KubeStaticPodConfig/pod":                    {},
+}
+
+// keyReplaceMapPaths lists the maps Talos merges key by key, replacing the
+// whole value of every key the patch sets: the component extraArgs, typed
+// meta.Args, whose Merge is a maps.Copy. At these paths the prune drops a
+// key only when body restates it exactly; a key whose value differs goes
+// to the patcher whole, or a list-valued flag edited in the node file
+// would be cut to the operator's delta and replace the rendered entries.
+//
+//nolint:gochecknoglobals // immutable lookup table consulted by pruneIdenticalKeysAt.
+var keyReplaceMapPaths = map[string]struct{}{
+	"machine/kubelet/extraArgs":           {},
+	"cluster/apiServer/extraArgs":         {},
+	"cluster/controllerManager/extraArgs": {},
+	"cluster/proxy/extraArgs":             {},
+	"cluster/scheduler/extraArgs":         {},
+	"cluster/etcd/extraArgs":              {},
+
+	"KubeletConfig/extraArgs":               {},
+	"KubeAPIServerConfig/extraArgs":         {},
+	"KubeControllerManagerConfig/extraArgs": {},
+	"KubeSchedulerConfig/extraArgs":         {},
+	"KubeProxyConfig/extraArgs":             {},
+}
+
+// pruneAtReplacePath handles body[key] when Talos replaces rather than merges
+// at childPath, and reports whether it did. Under `merge:"replace"` the value
+// is left whole: any prune leaks rendered-side entries out of the final
+// config (see replaceSemanticPaths). Under a per-key replace only exactly
+// restated keys go (see keyReplaceMapPaths).
+func pruneAtReplacePath(body map[string]any, key string, bodyV, renderedV any, childPath string) bool {
+	if _, replace := replaceSemanticPaths[childPath]; replace {
+		return true
+	}
+
+	if _, perKey := keyReplaceMapPaths[childPath]; perKey {
+		pruneEqualMapKeys(body, key, bodyV, renderedV)
+
+		return true
+	}
+
+	return false
+}
+
+// pruneEqualMapKeys drops from body[key] the entries rendered carries with
+// the same value, and body[key] itself once nothing is left in it.
+func pruneEqualMapKeys(body map[string]any, key string, bodyV, renderedV any) {
+	bodySub, ok := bodyV.(map[string]any)
+	if !ok {
+		return
+	}
+
+	renderedSub, ok := renderedV.(map[string]any)
+	if !ok {
+		return
+	}
+
+	before := len(bodySub)
+
+	for k, v := range bodySub {
+		if rv, exists := renderedSub[k]; exists && reflect.DeepEqual(v, rv) {
+			delete(bodySub, k)
+		}
+	}
+
+	if before > 0 && len(bodySub) == 0 {
+		delete(body, key)
+	}
 }
 
 // objectArrayMergeKeys lists the identity fields Talos's upstream
@@ -1084,7 +1171,10 @@ var objectArrayMergeKeys = map[string][]string{
 // threads the YAML path so the object-array descent can look up the
 // identity key for the current location.
 func pruneIdenticalKeys(body, rendered map[string]any) {
-	pruneIdenticalKeysAt(body, rendered, "")
+	// A typed document's paths are rooted at its kind: the same field name
+	// can be replace-tagged on one kind and merged on another.
+	kind, _ := body[k8sKeyKind].(string)
+	pruneIdenticalKeysAt(body, rendered, kind)
 }
 
 // pruneIdenticalKeysAt is pruneIdenticalKeys's recursive workhorse.
@@ -1111,10 +1201,7 @@ func pruneIdenticalKeysAt(body, rendered map[string]any, yamlPath string) {
 		}
 
 		childPath := joinYAMLPath(yamlPath, key)
-		if _, replace := replaceSemanticPaths[childPath]; replace {
-			// Upstream `merge:"replace"` overwrites rendered with body
-			// verbatim. Any prune at this path leaks rendered-side
-			// entries out of the final config — see replaceSemanticPaths.
+		if pruneAtReplacePath(body, key, bodyV, renderedV, childPath) {
 			continue
 		}
 
@@ -1469,6 +1556,10 @@ const (
 	// k8sKeyKind is the standard Kubernetes/COSI document key
 	// used as part of the (apiVersion, kind, name) identity tuple.
 	k8sKeyKind = "kind"
+	// patchDirectiveKey and patchDirectiveDelete spell a strategic-merge
+	// delete directive, `$patch: delete`.
+	patchDirectiveKey    = "$patch"
+	patchDirectiveDelete = "delete"
 	// k8sAPIVersionV1 is the value of apiVersion for the synthetic
 	// List envelope newLookupFunction emits when wrapping multi-item
 	// COSI lookup results.
@@ -1899,6 +1990,39 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 	return talosPatches, extraDocs, nil
 }
 
+// splitMergedDocuments picks out the chart documents that patch the bundle
+// instead of replacing a document of the same identity: every Kube* kind and
+// delete selectors. From contract v1.14 the bundle generates the Kubernetes
+// documents with values only the generator knows (component images, the
+// control-plane label and taint), so a chart writes just what it sets. The
+// KubeSpan kinds match the prefix too; the generator emits none of them, so
+// for those a merge is the same as a replace. A delete selector is
+// meaningless anywhere but in the patcher. Every other kind keeps
+// replace semantics: the bundle's HostnameConfig carries `auto: stable`, which
+// Talos refuses next to the chart's hostname.
+func splitMergedDocuments(extraDocs []string) ([]string, []string, error) {
+	var merged, replacing []string
+
+	for _, doc := range extraDocs {
+		var parsed map[string]any
+
+		if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
+			return nil, nil, errors.Wrap(err, "unmarshaling extra document")
+		}
+
+		kind, _ := parsed[k8sKeyKind].(string)
+		selector, _ := parsed[patchDirectiveKey].(string)
+
+		if strings.HasPrefix(kind, "Kube") || selector == patchDirectiveDelete {
+			merged = append(merged, doc)
+		} else {
+			replacing = append(replacing, doc)
+		}
+	}
+
+	return merged, replacing, nil
+}
+
 // applyPatchesAndRenderConfig assembles the final Talos config bytes
 // for the non-Full template path: split out extra documents, run two
 // bundle-rebuild passes (TypeUnknown then resolved machine type),
@@ -1908,6 +2032,11 @@ func extractExtraDocuments(patches []string) ([]string, []string, error) {
 func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, error) {
 	// Separate Talos config patches from extra documents (like UserVolumeConfig)
 	talosPatches, extraDocs, err := extractExtraDocuments(configPatches)
+	if err != nil {
+		return nil, err
+	}
+
+	mergedDocs, replacingDocs, err := splitMergedDocuments(extraDocs)
 	if err != nil {
 		return nil, err
 	}
@@ -1949,7 +2078,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 		return nil, errors.Wrap(err, "creating initial config bundle")
 	}
 
-	patches, err := configpatcher.LoadPatches(talosPatches)
+	patches, err := configpatcher.LoadPatches(append(slices.Clone(talosPatches), mergedDocs...))
 	if err != nil {
 		if opts.Debug {
 			debugPhase(opts, configPatches, "", "", machine.TypeUnknown)
@@ -2061,18 +2190,21 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	//
 	// A non-full render returns a patch rather than a config, so what it returns
 	// is deliberately not what gets checked here.
-	assembled, err := assembleTargetDocuments(configFull, nil, extraDocs)
+	assembled, err := assembleTargetDocuments(configFull, nil, replacingDocs)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := checkSupersededFields(assembled.Bytes(), opts.TalosVersion); err != nil {
+	if err := CheckSupersededFields(assembled.Bytes(), opts.TalosVersion); err != nil {
 		return nil, err
 	}
 
+	// The merged documents are already inside configFull. The node file keeps
+	// them as the chart wrote them, and apply merges them again.
 	var target []byte
 	if opts.Full {
 		target = configFull
+		extraDocs = replacingDocs
 	} else {
 		target, err = yamltools.DiffYAMLs(configOrigin, configFull)
 		if err != nil {
@@ -2088,7 +2220,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 	return buf.Bytes(), nil
 }
 
-// checkSupersededFields fails the render when the config sets a v1alpha1 field
+// CheckSupersededFields fails the render when the config sets a v1alpha1 field
 // that the targeted contract has moved into a document of its own. Talos rejects
 // such a config outright, so catching it here turns an apply-time rejection into
 // a render-time error naming the way out.
@@ -2101,7 +2233,7 @@ func applyPatchesAndRenderConfig(opts Options, configPatches []string) ([]byte, 
 //
 // Only that class is reported: a render is legitimately incomplete in other ways
 // (no install disk yet, no endpoint), and those are the operator's to fill in.
-func checkSupersededFields(rendered []byte, talosVersion string) error {
+func CheckSupersededFields(rendered []byte, talosVersion string) error {
 	cfg, err := configloader.NewFromBytes(rendered)
 	if err != nil {
 		// Not this check's job to decide the config is unloadable; the render
@@ -2137,15 +2269,19 @@ func checkSupersededFields(rendered []byte, talosVersion string) error {
 		return nil
 	}
 
+	return withSupersededFieldsHint(errors.Wrap(
+		errors.Join(conflicts...),
+		"rendered config mixes v1alpha1 fields with the documents that superseded them",
+	), talosVersion)
+}
+
+// withSupersededFieldsHint attaches the way out of a v1alpha1/typed-document
+// mix, which depends on the contract and on whether the version is pinned.
+func withSupersededFieldsHint(conflict error, talosVersion string) error {
 	pinned := talosVersion
 	if pinned == "" {
 		pinned = "unset, so the render targets the Talos version talm was built from"
 	}
-
-	conflict := errors.Wrap(
-		errors.Join(conflicts...),
-		"rendered config mixes v1alpha1 fields with the documents that superseded them",
-	)
 
 	// Above the boundary the contract is what moved the settings, so lowering it
 	// resolves the conflict. At or below it the contract is innocent: something
@@ -2163,12 +2299,32 @@ func checkSupersededFields(rendered []byte, talosVersion string) error {
 		)
 	}
 
+	// The charts pick the shape from the pinned version, so unpinned they write
+	// v1alpha1 on every contract and only a pin helps.
+	if talosVersion == "" {
+		//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
+		return errors.WithHintf(
+			conflict,
+			"templateOptions.talosVersion is %s; above %s Talos keeps these settings in documents of their own, "+
+				"and the charts emit them only for a pinned version. Pin it in Chart.yaml to the Talos version "+
+				"the nodes run, or to %s or lower to keep the v1alpha1 shape.",
+			pinned,
+			config.TalosVersion1_13,
+			config.TalosVersion1_13,
+		)
+	}
+
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return errors.WithHintf(
 		conflict,
-		"templateOptions.talosVersion is %s. Pin it to %s or lower in Chart.yaml; above that "+
-			"contract Talos keeps these settings in documents of their own, which the charts do not emit.",
+		"templateOptions.talosVersion is %s; above %s Talos keeps these settings in documents of their own. "+
+			"Templates vendored by an earlier talm still write them in v1alpha1: re-sync them with "+
+			"`talm init --update --preset <preset>`, accepting the templates but reviewing the Chart.yaml and "+
+			"values.yaml changes it also offers (they move the version pins and the install image), "+
+			"and move the reported fields out of v1alpha1 in your own "+
+			"templates and patches. Pin it to %s or lower in Chart.yaml to keep the v1alpha1 shape.",
 		pinned,
+		config.TalosVersion1_13,
 		config.TalosVersion1_13,
 	)
 }

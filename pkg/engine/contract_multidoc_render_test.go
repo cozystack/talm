@@ -286,3 +286,159 @@ func TestContract_BundleSerializesV1Alpha1First(t *testing.T) {
 		})
 	}
 }
+
+// From contract v1.14 the bundle generates every Kubernetes document with the
+// values only the generator knows: component images pinned to
+// kubernetesVersion, the control-plane node label and taint, the kubelet
+// seccomp default. A chart writes only what it sets, so its Kubernetes
+// documents merge into the bundle's instead of replacing them.
+func TestContract_ChartKubeDocumentMergesIntoBundle(t *testing.T) {
+	patch := `machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeClusterConfig
+clusterName: prod
+endpoint: https://192.0.2.10:6443
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+extraArgs:
+  oidc-issuer-url: https://issuer.example.com
+`
+
+	out, err := applyPatchesAndRenderConfig(
+		Options{KubernetesVersion: "v1.34.3", TalosVersion: "v1.14", Full: true},
+		[]string{patch})
+	if err != nil {
+		t.Fatalf("applyPatchesAndRenderConfig: %v", err)
+	}
+
+	rendered := string(out)
+
+	for _, kind := range []string{"KubeAPIServerConfig", "KubeClusterConfig"} {
+		if got := strings.Count(rendered, "kind: "+kind+"\n"); got != 1 {
+			t.Errorf("render carries %d %s documents, want 1\n--- rendered ---\n%s", got, kind, rendered)
+		}
+	}
+
+	for _, want := range []string{
+		"registry.k8s.io/kube-apiserver:v1.34.3",
+		"oidc-issuer-url: https://issuer.example.com",
+		"clusterName: prod",
+		// The bundle is regenerated from the chart's endpoint, so documents
+		// derived from it agree with KubeClusterConfig.
+		"issuerURL: https://192.0.2.10:6443",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("render is missing %q\n--- rendered ---\n%s", want, rendered)
+		}
+	}
+
+	if _, err := configloader.NewFromBytes(out); err != nil {
+		t.Errorf("Talos refuses the rendered config: %v", err)
+	}
+}
+
+// A delete selector only means something to the patcher. Appended verbatim to a
+// full render it would leave the bundle's document in place and add a document
+// Talos cannot load.
+func TestContract_ChartDeleteSelectorRemovesBundleDocument(t *testing.T) {
+	patch := `machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeClusterConfig
+clusterName: prod
+endpoint: https://192.0.2.10:6443
+---
+apiVersion: v1alpha1
+kind: KubeFlannelCNIConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: DiscoveryServiceConfig
+name: default
+$patch: delete
+`
+
+	out, err := applyPatchesAndRenderConfig(
+		Options{KubernetesVersion: "v1.34.3", TalosVersion: "v1.14", Full: true},
+		[]string{patch})
+	if err != nil {
+		t.Fatalf("applyPatchesAndRenderConfig: %v", err)
+	}
+
+	rendered := string(out)
+
+	for _, unwanted := range []string{"kind: KubeFlannelCNIConfig", "kind: DiscoveryServiceConfig", "$patch"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("render still carries %q\n--- rendered ---\n%s", unwanted, rendered)
+		}
+	}
+
+	if _, err := configloader.NewFromBytes(out); err != nil {
+		t.Errorf("Talos refuses the rendered config: %v", err)
+	}
+}
+
+// A non-full render is the node file: the chart's Kubernetes documents and
+// selectors stay as written, and apply merges them into the bundle again.
+func TestContract_NonFullRenderKeepsChartKubeDocumentsVerbatim(t *testing.T) {
+	patch := `machine:
+  type: controlplane
+---
+apiVersion: v1alpha1
+kind: KubeClusterConfig
+clusterName: prod
+endpoint: https://192.0.2.10:6443
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+extraArgs:
+  oidc-issuer-url: https://issuer.example.com
+---
+apiVersion: v1alpha1
+kind: KubeFlannelCNIConfig
+$patch: delete
+`
+
+	opts := Options{KubernetesVersion: "v1.34.3", TalosVersion: "v1.14"}
+
+	out, err := applyPatchesAndRenderConfig(opts, []string{patch})
+	if err != nil {
+		t.Fatalf("applyPatchesAndRenderConfig: %v", err)
+	}
+
+	rendered := string(out)
+
+	if !strings.Contains(rendered, "kind: KubeAPIServerConfig\nextraArgs:\n  oidc-issuer-url: https://issuer.example.com") {
+		t.Errorf("the chart's KubeAPIServerConfig did not survive verbatim\n--- rendered ---\n%s", rendered)
+	}
+
+	if strings.Contains(rendered, "registry.k8s.io/kube-apiserver") {
+		t.Errorf("the node file picked up the bundle's image\n--- rendered ---\n%s", rendered)
+	}
+
+	if !strings.Contains(rendered, "kind: KubeFlannelCNIConfig\n$patch: delete") {
+		t.Errorf("the delete selector was dropped from the node file\n--- rendered ---\n%s", rendered)
+	}
+
+	configBundle, machineType, err := FullConfigProcess(opts, []string{rendered})
+	if err != nil {
+		t.Fatalf("FullConfigProcess on the node file: %v", err)
+	}
+
+	applied, err := SerializeConfiguration(configBundle, machineType, opts.TalosVersion, opts.KubernetesVersion)
+	if err != nil {
+		t.Fatalf("SerializeConfiguration: %v", err)
+	}
+
+	if strings.Contains(string(applied), "kind: KubeFlannelCNIConfig") {
+		t.Errorf("applying the node file kept flannel\n--- applied ---\n%s", applied)
+	}
+
+	if !strings.Contains(string(applied), "oidc-issuer-url: https://issuer.example.com") {
+		t.Errorf("applying the node file lost the chart's apiserver args\n--- applied ---\n%s", applied)
+	}
+}

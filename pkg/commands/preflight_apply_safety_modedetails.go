@@ -16,8 +16,10 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -55,12 +57,13 @@ var secretLeafNames = map[string]struct{}{
 
 // collectConfigSecretValues walks the rendered (multi-doc) MachineConfig and
 // returns the set of secret string VALUES it carries: every leaf whose dotted
-// path is on the Talos bootstrap allowlist (isSecretPath) plus every Wireguard
-// key leaf (secretLeafNames). It exists to redact the server-computed dry-run
-// diff (ModeDetails), which talm prints verbatim and which would otherwise leak
-// ca.key / token / encryption-secret material by value — the structured drift
-// preview redacts these by PATH, but ModeDetails is opaque diff text, so the
-// only handle talm has on it is the value itself.
+// path is on the Talos bootstrap allowlist or a typed document's secret field
+// (isSecretFieldOf) plus every Wireguard key leaf (secretLeafNames). It exists
+// to redact the server-computed dry-run diff (ModeDetails), which talm prints
+// verbatim and which would otherwise leak ca.key / token / encryption-secret
+// material by value — the structured drift preview redacts these by PATH,
+// but ModeDetails is opaque diff text, so the only handle talm has on it is
+// the value itself.
 //
 // Over-collection is bounded and harmless: an acceptedCAs entry contributes its
 // public crt alongside the key, so a cert rotation renders as the sentinel in
@@ -87,7 +90,8 @@ func collectConfigSecretValues(rendered []byte) (map[string]struct{}, error) {
 			return nil, errors.Wrap(err, "decoding rendered config for dry-run diff redaction")
 		}
 
-		walkConfigSecretValues(doc, "", out)
+		kind, _ := doc["kind"].(string)
+		walkConfigSecretValues(doc, kind, "", out)
 	}
 
 	return out, nil
@@ -98,7 +102,7 @@ func collectConfigSecretValues(rendered []byte) (map[string]struct{}, error) {
 // name. When a node matches, the whole subtree's string leaves are taken
 // (collectStringLeaves) so a slice-valued secret path like cluster.acceptedCAs
 // is covered without descending further.
-func walkConfigSecretValues(node any, path string, out map[string]struct{}) {
+func walkConfigSecretValues(node any, kind, path string, out map[string]struct{}) {
 	switch typed := node.(type) {
 	case map[string]any:
 		for key, val := range typed {
@@ -113,17 +117,53 @@ func walkConfigSecretValues(node any, path string, out map[string]struct{}) {
 				continue
 			}
 
-			if isSecretPath(child) {
-				collectStringLeaves(val, out)
+			if isSecretFieldOf(kind, child) {
+				if leafKey, ok := secretTypedLeafKeys[kind]; ok {
+					collectNamedStringLeaves(val, leafKey, out)
+				} else {
+					collectStringLeaves(val, out)
+				}
 
 				continue
 			}
 
-			walkConfigSecretValues(val, child, out)
+			walkConfigSecretValues(val, kind, child, out)
 		}
 	case []any:
 		for i, item := range typed {
-			walkConfigSecretValues(item, fmt.Sprintf("%s[%d]", path, i), out)
+			walkConfigSecretValues(item, kind, fmt.Sprintf("%s[%d]", path, i), out)
+		}
+	}
+}
+
+// secretTypedLeafKeys narrows the values collected under a kind's secret
+// field to the leaves with this key. The etcd encryption config is a whole
+// EncryptionConfiguration whose provider key names and resource names are
+// plain words; masking them by value would cut them out of every diff line.
+// Talos redacts only its `secret` leaves.
+//
+//nolint:gochecknoglobals // static map of secret leaf keys per typed document.
+var secretTypedLeafKeys = map[string]string{
+	kindKubeEtcdEncryptionConfig: "secret",
+}
+
+// collectNamedStringLeaves adds every string leaf under value whose map key
+// is leafKey.
+func collectNamedStringLeaves(value any, leafKey string, out map[string]struct{}) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if s, ok := item.(string); ok && key == leafKey && s != "" {
+				out[s] = struct{}{}
+
+				continue
+			}
+
+			collectNamedStringLeaves(item, leafKey, out)
+		}
+	case []any:
+		for _, item := range typed {
+			collectNamedStringLeaves(item, leafKey, out)
 		}
 	}
 }
@@ -133,17 +173,33 @@ func walkConfigSecretValues(node any, path string, out map[string]struct{}) {
 // substring of another, the longer match is consumed first and no fragment of
 // the longer value survives. An empty value set returns text unchanged, which
 // is exactly the --show-secrets-in-drift behaviour (no values collected).
+//
+// A multi-line value, such as a PEM key, never appears whole: the diff prints
+// each of its lines on a line of its own, behind a `+`/`-` marker and the
+// indentation. Its lines are matched one diff line at a time instead.
 func redactValuesInText(text string, values map[string]struct{}) string {
 	if len(values) == 0 {
 		return text
 	}
 
 	ordered := make([]string, 0, len(values))
+	secretLines := map[string]struct{}{}
+
 	for value := range values {
-		if value != "" {
-			ordered = append(ordered, value)
+		if value == "" {
+			continue
 		}
+
+		if strings.Contains(value, "\n") {
+			addSecretLines(secretLines, value)
+
+			continue
+		}
+
+		ordered = append(ordered, value)
 	}
+
+	text = redactSecretLines(text, secretLines)
 
 	sort.Slice(ordered, func(i, j int) bool {
 		if len(ordered[i]) != len(ordered[j]) {
@@ -158,6 +214,46 @@ func redactValuesInText(text string, values map[string]struct{}) string {
 	}
 
 	return text
+}
+
+// addSecretLines adds the lines of a multi-line secret to set. PEM armor
+// lines name the key type and are not secret.
+func addSecretLines(set map[string]struct{}, value string) {
+	for line := range strings.SplitSeq(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "-----") {
+			continue
+		}
+
+		set[line] = struct{}{}
+	}
+}
+
+// redactSecretLines masks every diff line whose content, after the `+`, `-`
+// or space marker and the indentation, is a line of a multi-line secret.
+// Exactly one marker character is dropped: base64 lines can start with `+`.
+func redactSecretLines(text string, secretLines map[string]struct{}) string {
+	if len(secretLines) == 0 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		body := line
+		if body != "" && strings.ContainsRune("+- ", rune(body[0])) {
+			body = body[1:]
+		}
+
+		content := strings.TrimSpace(body)
+		if _, secret := secretLines[content]; !secret {
+			continue
+		}
+
+		indent := len(body) - len(strings.TrimLeft(body, " \t"))
+		lines[i] = line[:len(line)-len(body)+indent] + modeDetailsRedactionSentinel
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // printApplyResultsRedacted mirrors talosctl's helpers.PrintApplyResults
@@ -178,6 +274,51 @@ func printApplyResultsRedacted(resp *machineapi.ApplyConfigurationResponse, valu
 	}
 }
 
+// nodeSecretValues reads the config the node runs and collects its secret
+// values, for masking the node's side of the dry-run diff. It runs before the
+// apply, so a node config talm cannot read or decode costs only that masking.
+// A maintenance connection has no config to read and contributes nothing;
+// any other failure on a dry run is reported to w, so the unmasked side is
+// not a silent leak.
+func nodeSecretValues(ctx context.Context, read machineConfigReader, w io.Writer) map[string]struct{} {
+	// Talos puts the config diff into the response of a dry run only.
+	if applyCmdFlags.showSecretsInDrift || !applyCmdFlags.dryRun {
+		return nil
+	}
+
+	current, ok, err := read(ctx)
+	if err == nil && !ok {
+		return nil
+	}
+
+	var values map[string]struct{}
+	if err == nil {
+		values, err = collectConfigSecretValues(current)
+	}
+
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: the node's side of the dry-run diff is not masked, its config could not be read: %v\n", err)
+
+		return nil
+	}
+
+	return values
+}
+
+// modeDetailsSecretValues collects the secret values the node's dry-run diff
+// can show: the diff prints the node's own config next to the rendered one,
+// so with different secrets on the two sides both sets have to be masked.
+func modeDetailsSecretValues(rendered []byte, nodeValues map[string]struct{}) (map[string]struct{}, error) {
+	values, err := collectConfigSecretValues(rendered)
+	if err != nil {
+		return nil, err
+	}
+
+	maps.Copy(values, nodeValues)
+
+	return values, nil
+}
+
 // emitApplyResults is the redacting replacement for the two
 // helpers.PrintApplyResults call sites on the apply paths. It collects the
 // secret value set the dry-run diff must hide — Talos bootstrap material from
@@ -189,14 +330,18 @@ func printApplyResultsRedacted(resp *machineapi.ApplyConfigurationResponse, valu
 // path feeds value files into the applied config, so only it can leak a user
 // secret through ModeDetails; the direct-patch path renders none, so collecting
 // them there would be pure overhead and would wrongly require a talm.key.
-func emitApplyResults(resp *machineapi.ApplyConfigurationResponse, rendered []byte, rendersUserValues bool) error {
+//
+// nodeValues are the secrets of the config the node runs before the apply,
+// collected by nodeSecretValues: the diff prints that config next to the
+// rendered one, so its secrets are masked too.
+func emitApplyResults(resp *machineapi.ApplyConfigurationResponse, rendered []byte, nodeValues map[string]struct{}, rendersUserValues bool) error {
 	if applyCmdFlags.showSecretsInDrift {
 		printApplyResultsRedacted(resp, nil, os.Stderr)
 
 		return nil
 	}
 
-	values, err := collectConfigSecretValues(rendered)
+	values, err := modeDetailsSecretValues(rendered, nodeValues)
 	if err != nil {
 		return err
 	}
