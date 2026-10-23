@@ -7168,7 +7168,10 @@ func freshNicLookup() func(string, string, string) (map[string]any, error) {
 // against the supplied LookupFunc and values overrides, returning the
 // final template output or failing the test. Mirrors the pattern used
 // by the existing TestMultiDoc* suites.
-func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any) string {
+//
+// Variadic talosVersion: defaults to v1.12 (multi-doc path); pass
+// "v1.11" or earlier to exercise the legacy schema path.
+func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[string]any, error), overrides map[string]any, talosVersion ...string) string {
 	t.Helper()
 	origLookup := helmEngine.LookupFunc
 	t.Cleanup(func() { helmEngine.LookupFunc = origLookup })
@@ -7189,10 +7192,15 @@ func renderCozystackWith(t *testing.T, lookup func(string, string, string) (map[
 	}
 	maps.Copy(values, overrides)
 
+	version := "v1.12"
+	if len(talosVersion) > 0 && talosVersion[0] != "" {
+		version = talosVersion[0]
+	}
+
 	eng := helmEngine.Engine{}
 	out, err := eng.Render(chrt, common.Values{
 		"Values":       values,
-		"TalosVersion": "v1.12",
+		"TalosVersion": version,
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)

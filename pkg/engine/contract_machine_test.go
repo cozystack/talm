@@ -31,6 +31,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1285,6 +1286,373 @@ func TestContract_Machine_RegistryMirrors_FallbackKey_Legacy_Cozystack(t *testin
 	var v any
 	if err := yaml.Unmarshal([]byte(out), &v); err != nil {
 		t.Fatalf("legacy render with a fallback mirror must be valid YAML, got %v", err)
+	}
+}
+
+// harborStyleMirror returns the pull-through-cache shape that needs
+// overridePath: the endpoint URL already carries /v2 and the registry
+// name in its path, so containerd must not append /v2 again. Two
+// endpoints on purpose: a regression that stamps the per-mirror
+// overridePath onto the first endpoint only must fail the contract
+// tests, so the fixture always carries a second endpoint to omit.
+func harborStyleMirror() map[string]any {
+	return map[string]any{
+		"docker.io": map[string]any{
+			"endpoints": []any{
+				"https://mirror.example.com/v2/proxy-docker.io",
+				"https://mirror2.example.com/v2/proxy-docker.io",
+			},
+			"overridePath": true,
+			"skipFallback": true,
+		},
+	}
+}
+
+// machineDoc splits a rendered patch stream into documents and returns
+// the one carrying the legacy machine: section. yaml.Unmarshal alone
+// would read only the first document, silently ignoring a render whose
+// machine block moved or vanished.
+func machineDoc(t *testing.T, out string) map[string]any {
+	t.Helper()
+	for _, doc := range strings.Split(out, "\n---\n") {
+		var v map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
+			t.Fatalf("rendered document must be valid YAML, got %v in:\n%s", err, doc)
+		}
+		if _, ok := v["machine"]; ok {
+			return v
+		}
+	}
+	t.Fatalf("render must contain a document with a machine: section:\n%s", out)
+	return nil
+}
+
+// nestedMap walks a decoded YAML mapping along keys, reporting whether
+// every hop exists and the final value is itself a mapping.
+func nestedMap(doc map[string]any, keys ...string) (map[string]any, bool) {
+	cur := doc
+	for _, k := range keys {
+		next, ok := cur[k].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur = next
+	}
+	return cur, true
+}
+
+// registryMirrorConfigView is the generic decode target for a rendered
+// RegistryMirrorConfig document: typed enough to assert where keys sit
+// (a wrong indent moves overridePath out of the endpoint entry), without
+// depending on machinery internals the strict loader already covers.
+type registryMirrorConfigView struct {
+	Endpoints []struct {
+		URL          string `yaml:"url"`
+		OverridePath *bool  `yaml:"overridePath"`
+	} `yaml:"endpoints"`
+	SkipFallback *bool `yaml:"skipFallback"`
+}
+
+// Contract: a per-mirror overridePath renders onto every endpoint of the
+// multidoc RegistryMirrorConfig (the typed document has no mirror-level
+// form), and skipFallback lands at mirror level. This is the Harbor
+// proxy-cache shape from the Talos pull-through-cache guide.
+func TestContract_Machine_RegistryMirrors_OverridePath_Multidoc_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   harborStyleMirror(),
+	})
+	assertContains(t, out, "kind: RegistryMirrorConfig")
+
+	// Pin the shape by parsing, not by substring: overridePath stamped
+	// on the first endpoint only, or at an indent that lifts it out of
+	// the endpoint entry, must fail here.
+	var parsed *registryMirrorConfigView
+	for _, doc := range strings.Split(out, "\n---\n") {
+		if !strings.Contains(doc, "kind: RegistryMirrorConfig") {
+			continue
+		}
+		var v registryMirrorConfigView
+		if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
+			t.Fatalf("rendered RegistryMirrorConfig must be valid YAML, got %v in:\n%s", err, doc)
+		}
+		if parsed != nil {
+			t.Fatal("expected exactly one RegistryMirrorConfig document — asserting only the last one would silently weaken the test")
+		}
+		parsed = &v
+
+		// Pin decode validity too: the rendered RegistryMirrorConfig
+		// document must load under machinery's strict decoder, or the
+		// node would reject it. (The full render is a patch stream with
+		// discovery placeholders, so only the typed document is fed to
+		// the loader.)
+		if _, err := configloader.NewFromBytes([]byte(doc)); err != nil {
+			t.Fatalf("rendered RegistryMirrorConfig with overridePath must decode, got %v in:\n%s", err, doc)
+		}
+	}
+	if parsed == nil {
+		t.Fatal("render must contain a RegistryMirrorConfig document")
+	}
+	if len(parsed.Endpoints) != 2 {
+		t.Fatalf("fixture carries two endpoints, got %d — the test stops detecting a first-endpoint-only overridePath regression without the second", len(parsed.Endpoints))
+	}
+	for i, ep := range parsed.Endpoints {
+		if ep.OverridePath == nil || !*ep.OverridePath {
+			t.Errorf("endpoint %d (%s) must carry overridePath: true stamped from the per-mirror key", i, ep.URL)
+		}
+	}
+	if parsed.SkipFallback == nil || !*parsed.SkipFallback {
+		t.Error("skipFallback: true must sit at mirror level")
+	}
+}
+
+// Contract: on the legacy schema the same values land as per-mirror
+// siblings of endpoints — machine.registries.mirrors.<name>.overridePath,
+// the only shape the legacy schema has for them.
+func TestContract_Machine_RegistryMirrors_OverridePath_Legacy_Cozystack(t *testing.T) {
+	out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors":   harborStyleMirror(),
+	})
+
+	// Pin the shape by parsing, not by substring: a wrong indent turns
+	// the keys into a YAML error or a mirror named "skipFallback" —
+	// either way the navigation below fails, where substring checks
+	// stayed green.
+	doc := machineDoc(t, out)
+	mirror, ok := nestedMap(doc, "machine", "registries", "mirrors", "docker.io")
+	if !ok {
+		t.Fatalf("machine.registries.mirrors[\"docker.io\"] must be a mapping in:\n%s", out)
+	}
+	endpoints, ok := mirror["endpoints"].([]any)
+	if !ok || len(endpoints) != 2 {
+		t.Fatalf("mirror must list both fixture endpoints, got %v", mirror["endpoints"])
+	}
+	got := make([]string, 0, len(endpoints))
+	for _, e := range endpoints {
+		s, ok := e.(string)
+		if !ok {
+			t.Fatalf("endpoint entries must be plain URL strings, got %v", e)
+		}
+		got = append(got, s)
+	}
+	for _, want := range []string{
+		"https://mirror.example.com/v2/proxy-docker.io",
+		"https://mirror2.example.com/v2/proxy-docker.io",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("endpoints must contain %s, got %v", want, got)
+		}
+	}
+	if v, ok := mirror["overridePath"].(bool); !ok || !v {
+		t.Errorf("overridePath: true must sit next to endpoints, got %v", mirror["overridePath"])
+	}
+	if v, ok := mirror["skipFallback"].(bool); !ok || !v {
+		t.Errorf("skipFallback: true must sit next to endpoints, got %v", mirror["skipFallback"])
+	}
+}
+
+// Contract: with neither key set the rendered output carries neither —
+// existing values files render byte-identical output to before the knob
+// existed.
+func TestContract_Machine_RegistryMirrors_OverridePath_Unset_Omitted_Cozystack(t *testing.T) {
+	t.Run("multidoc", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		})
+		assertNotContains(t, out, "overridePath")
+		assertNotContains(t, out, "skipFallback")
+	})
+	t.Run("legacy", func(t *testing.T) {
+		out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		})
+		assertNotContains(t, out, "overridePath")
+		assertNotContains(t, out, "skipFallback")
+	})
+}
+
+// Contract: false is a stated choice and is emitted verbatim, matching the
+// registryTLS.insecureSkipVerify behaviour — the knob can pin the default
+// explicitly against a future chart default change.
+func TestContract_Machine_RegistryMirrors_OverridePath_FalseIsEmitted_Cozystack(t *testing.T) {
+	out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"overridePath": false,
+			},
+		},
+	})
+	assertContains(t, out, "overridePath: false")
+}
+
+// Contract: same stated-choice emission for skipFallback — an explicit
+// false must survive the render on both schemas, not be dropped by a
+// truthiness check, so the knob can pin the default against a future
+// chart default change. Mirrors the overridePath contract above.
+func TestContract_Machine_RegistryMirrors_SkipFallback_FalseIsEmitted_Cozystack(t *testing.T) {
+	mirror := map[string]any{
+		"docker.io": map[string]any{
+			"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+			"skipFallback": false,
+		},
+	}
+	t.Run("multidoc", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   mirror,
+		})
+		assertContains(t, out, "skipFallback: false")
+	})
+	t.Run("legacy", func(t *testing.T) {
+		out := renderLegacyChart(t, cozystackChartPath, "cozystack/templates/controlplane.yaml", simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors":   mirror,
+		})
+		doc := machineDoc(t, out)
+		m, ok := nestedMap(doc, "machine", "registries", "mirrors", "docker.io")
+		if !ok {
+			t.Fatalf("machine.registries.mirrors[\"docker.io\"] must be a mapping in:\n%s", out)
+		}
+		if v, ok := m["skipFallback"].(bool); !ok || v {
+			t.Errorf("skipFallback: false must be emitted verbatim, got %v", m["skipFallback"])
+		}
+	})
+}
+
+// Contract: a non-bool overridePath (e.g. the YAML-ambiguous "yes") fails
+// at render rather than emitting a scalar Talos rejects on decode.
+func TestContract_Machine_RegistryMirrors_NonBoolOverridePath_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"overridePath": "yes",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-bool overridePath")
+	}
+	if !strings.Contains(err.Error(), "overridePath") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: same fail-fast for a non-bool skipFallback — the guard is
+// structurally identical to the overridePath one.
+func TestContract_Machine_RegistryMirrors_NonBoolSkipFallback_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"skipFallback": "yes",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a non-bool skipFallback")
+	}
+	if !strings.Contains(err.Error(), "skipFallback") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+}
+
+// Contract: a mapping endpoint ({url: ..., overridePath: ...}) is the
+// shape the multidoc DOCUMENT uses, but the values knob keeps endpoints
+// as plain strings with per-mirror settings next to them — the legacy
+// schema has no per-endpoint form, so a per-endpoint values shape could
+// not render there. The guard names the right shape instead of the
+// confusing scheme message a map used to produce.
+func TestContract_Machine_RegistryMirrors_MapEndpoint_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints": []any{map[string]any{"url": "https://mirror.example.com/v2/proxy-docker.io", "overridePath": true}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a fail-fast for a mapping endpoint")
+	}
+	if !strings.Contains(err.Error(), "plain URL strings") {
+		t.Errorf("error should point at the per-mirror shape, got %v", err)
+	}
+}
+
+// Contract: skipFallback is an unknown key to Talos older than v1.9, and
+// the strict node-side decode would reject the whole config for it, so
+// the render fails fast on a pinned pre-1.9 contract. overridePath needs
+// no such guard — it exists in the legacy schema since v1.3.
+func TestContract_Machine_RegistryMirrors_SkipFallback_Pre19Contract_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"skipFallback": true,
+			},
+		},
+	}, "v1.8")
+	if err == nil {
+		t.Fatal("expected a fail-fast for skipFallback on a pre-1.9 contract")
+	}
+	if !strings.Contains(err.Error(), "skipFallback") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "v1.9") {
+		t.Errorf("error should name the version that introduced the key, got %v", err)
+	}
+}
+
+// Contract: the skipFallback version guard must also stay green on the
+// passing side, or a widened/dropped condition (<1.10.0-0, or dropping
+// the skipFallback-is-set term) would ship silently: v1.8 renders with
+// default mirrors, and v1.9/v1.11 render with skipFallback set. These
+// versions take the legacy schema path, so the guard fires against
+// $.TalosVersion there, not on the multidoc documents.
+func TestContract_Machine_RegistryMirrors_SkipFallback_GuardPassingSide_Cozystack(t *testing.T) {
+	t.Run("v1.8 default mirrors", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		}, "v1.8")
+		assertContains(t, out, "- https://mirror.gcr.io")
+		assertNotContains(t, out, "skipFallback")
+	})
+	for _, version := range []string{"v1.9", "v1.11"} {
+		t.Run(version+" with skipFallback", func(t *testing.T) {
+			out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"registryMirrors": map[string]any{
+					"docker.io": map[string]any{
+						"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+						"skipFallback": true,
+					},
+				},
+			}, version)
+			doc := machineDoc(t, out)
+			mirror, ok := nestedMap(doc, "machine", "registries", "mirrors", "docker.io")
+			if !ok {
+				t.Fatalf("machine.registries.mirrors[\"docker.io\"] must be a mapping in:\n%s", out)
+			}
+			if v, ok := mirror["skipFallback"].(bool); !ok || !v {
+				t.Errorf("skipFallback: true must render on a %s contract, got %v", version, mirror["skipFallback"])
+			}
+		})
 	}
 }
 

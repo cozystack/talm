@@ -563,6 +563,21 @@ Expected (multidoc): one `RegistryMirrorConfig` document per host. The legacy sc
 
 Regression anchor: `TestContract_Machine_RegistryMirrors_CustomMirror_Cozystack`, `TestContract_Machine_Registries_DockerMirror_LegacyCozystack` (default), `TestContract_Machine_NoRegistriesOnGeneric`.
 
+A Harbor-style pull-through cache puts the registry name in the pull path and already carries `/v2` in the endpoint URL, so containerd must not append `/v2` again — that is the per-mirror `overridePath` setting (Talos documents it in the pull-through-cache guide). `skipFallback` pins "never fall back to the upstream registry":
+
+```bash
+# values.yaml:
+#   registryMirrors:
+#     docker.io: { endpoints: [https://mirror.example.com/v2/proxy-docker.io], overridePath: true, skipFallback: true }
+talm template -f nodes/controlplane-0.yaml | yq 'select(.kind == "RegistryMirrorConfig")'
+# legacy schema: re-render with templateOptions.talosVersion pinned to v1.11
+talm template -f nodes/controlplane-0.yaml | yq '.machine.registries.mirrors'
+```
+
+Expected (multidoc): every endpoint of the mirror carries `overridePath: true`, and the document carries `skipFallback: true`. Expected (legacy): both keys sit as siblings of `endpoints` under the mirror name. With neither key set the output is byte-identical to before the knob existed. A non-bool value, or `skipFallback` on a pinned pre-v1.9 contract (the key does not exist there), fails the render fast. A mapping endpoint (`{url: ..., overridePath: ...}` — the shape the DOCUMENT uses) is refused with a message pointing at the per-mirror keys, because the legacy schema has no per-endpoint form to render it into.
+
+Regression anchor: `TestContract_Machine_RegistryMirrors_OverridePath_Multidoc_Cozystack`, `TestContract_Machine_RegistryMirrors_OverridePath_Legacy_Cozystack`, `TestContract_Machine_RegistryMirrors_OverridePath_Unset_Omitted_Cozystack`, `TestContract_Machine_RegistryMirrors_OverridePath_FalseIsEmitted_Cozystack`, `TestContract_Machine_RegistryMirrors_NonBoolOverridePath_Fails_Cozystack`, `TestContract_Machine_RegistryMirrors_NonBoolSkipFallback_Fails_Cozystack`, `TestContract_Machine_RegistryMirrors_MapEndpoint_Fails_Cozystack`, `TestContract_Machine_RegistryMirrors_SkipFallback_Pre19Contract_Fails_Cozystack`.
+
 A self-signed pull-through mirror also needs its TLS posture stated. `registryTLS` is keyed by the endpoint HOST, not the mirror name:
 
 ```bash
