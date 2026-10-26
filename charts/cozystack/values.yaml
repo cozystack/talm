@@ -257,7 +257,8 @@ extraSchedulerArgs: {}
 #     with its HTML portal — pulls fail with "unexpected media type
 #     text/html". On the multidoc schema it is stamped onto every
 #     endpoint of the mirror (the typed document has no mirror-level
-#     form); on the legacy schema it is a sibling of endpoints.
+#     form); on the legacy schema it is a sibling of endpoints. Requires
+#     Talos v1.3+; an older pinned talosVersion contract fails fast.
 #   skipFallback — do not fall back to the upstream registry when no
 #     mirror serves the image. Requires Talos v1.9+; on an older pinned
 #     talosVersion contract the render fails fast (an UNPINNED contract

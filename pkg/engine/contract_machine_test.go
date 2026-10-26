@@ -1591,10 +1591,70 @@ func TestContract_Machine_RegistryMirrors_MapEndpoint_Fails_Cozystack(t *testing
 	}
 }
 
+// Contract: overridePath is an unknown key to Talos older than v1.3, and
+// the strict node-side decode would reject the whole config for it, so
+// the render fails fast on a pinned pre-1.3 contract.
+func TestContract_Machine_RegistryMirrors_OverridePath_Pre13Contract_Fails_Cozystack(t *testing.T) {
+	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
+		"advertisedSubnets": []any{testAdvertisedSubnet},
+		"registryMirrors": map[string]any{
+			"docker.io": map[string]any{
+				"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+				"overridePath": true,
+			},
+		},
+	}, "v1.2")
+	if err == nil {
+		t.Fatal("expected a fail-fast for overridePath on a pre-1.3 contract")
+	}
+	if !strings.Contains(err.Error(), "overridePath") {
+		t.Errorf("error should name the offending key, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "v1.3") {
+		t.Errorf("error should name the version that introduced the key, got %v", err)
+	}
+}
+
+// Contract: the overridePath version guard must also stay green on the
+// passing side, so widening its boundary or dropping the overridePath-is-set
+// term cannot ship silently. These versions take the legacy schema path.
+func TestContract_Machine_RegistryMirrors_OverridePath_GuardPassingSide_Cozystack(t *testing.T) {
+	t.Run("v1.2 default mirrors", func(t *testing.T) {
+		out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+			"advertisedSubnets": []any{testAdvertisedSubnet},
+			"registryMirrors": map[string]any{
+				"docker.io": map[string]any{"endpoints": []any{"https://mirror.gcr.io"}},
+			},
+		}, "v1.2")
+		assertContains(t, out, "- https://mirror.gcr.io")
+		assertNotContains(t, out, "overridePath")
+	})
+	for _, version := range []string{"v1.3", "v1.11"} {
+		t.Run(version+" with overridePath", func(t *testing.T) {
+			out := renderCozystackWith(t, simpleNicLookup(), map[string]any{
+				"advertisedSubnets": []any{testAdvertisedSubnet},
+				"registryMirrors": map[string]any{
+					"docker.io": map[string]any{
+						"endpoints":    []any{"https://mirror.example.com/v2/proxy-docker.io"},
+						"overridePath": true,
+					},
+				},
+			}, version)
+			doc := machineDoc(t, out)
+			mirror, ok := nestedMap(doc, "machine", "registries", "mirrors", "docker.io")
+			if !ok {
+				t.Fatalf("machine.registries.mirrors[\"docker.io\"] must be a mapping in:\n%s", out)
+			}
+			if v, ok := mirror["overridePath"].(bool); !ok || !v {
+				t.Errorf("overridePath: true must render on a %s contract, got %v", version, mirror["overridePath"])
+			}
+		})
+	}
+}
+
 // Contract: skipFallback is an unknown key to Talos older than v1.9, and
 // the strict node-side decode would reject the whole config for it, so
-// the render fails fast on a pinned pre-1.9 contract. overridePath needs
-// no such guard — it exists in the legacy schema since v1.3.
+// the render fails fast on a pinned pre-1.9 contract.
 func TestContract_Machine_RegistryMirrors_SkipFallback_Pre19Contract_Fails_Cozystack(t *testing.T) {
 	err := renderCozystackExpectError(t, simpleNicLookup(), map[string]any{
 		"advertisedSubnets": []any{testAdvertisedSubnet},

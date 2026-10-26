@@ -146,9 +146,9 @@ extraSchedulerArgs: {}
 # mirror also accepts optional per-mirror `overridePath` (use the
 # endpoint URL as written, without appending /v2 — required by Harbor
 # proxy-cache endpoints such as
-# https://registry.example.com/v2/proxy-docker.io) and `skipFallback`
-# (never fall back to the upstream registry; Talos v1.9+ — the fail-fast
-# guard only applies when templateOptions.talosVersion pins a contract). Example:
+# https://registry.example.com/v2/proxy-docker.io; Talos v1.3+) and
+# `skipFallback` (never fall back to the upstream registry; Talos v1.9+).
+# Older pinned templateOptions.talosVersion contracts fail fast. Example:
 #   registryMirrors:
 #     docker.io: { endpoints: [https://registry.example.com/v2/proxy-docker.io], overridePath: true }
 registryMirrors: {}

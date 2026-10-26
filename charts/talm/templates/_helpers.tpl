@@ -339,10 +339,12 @@ busPath: {{ .spec.busPath }}
 {{- if and (not (kindIs "invalid" $cfg.skipFallback)) (not (kindIs "bool" $cfg.skipFallback)) }}
 {{- fail (printf "talm: registryMirrors.%s skipFallback must be true or false (got %s). It decides whether a pull falls back to the upstream registry when no mirror serves it, so an ambiguous YAML scalar is refused." $name (kindOf $cfg.skipFallback)) }}
 {{- end }}
-{{- /* skipFallback is an unknown key to Talos older than v1.9, and the
-       strict node-side decode rejects the whole config for it. overridePath
-       needs no such guard: it exists in the legacy schema since v1.3 and in
-       RegistryMirrorConfig since the document's introduction (v1.12). */}}
+{{- /* overridePath and skipFallback are unknown keys to Talos older than
+       v1.3 and v1.9 respectively, and the strict node-side decode rejects
+       the whole config for them. */}}
+{{- if and (not (kindIs "invalid" $cfg.overridePath)) $.TalosVersion (semverCompare "<1.3.0-0" $.TalosVersion) }}
+{{- fail (printf "talm: registryMirrors.%s sets overridePath, which Talos only understands from v1.3 on; templateOptions.talosVersion pins %s. Drop the key or raise the contract." $name $.TalosVersion) }}
+{{- end }}
 {{- if and (not (kindIs "invalid" $cfg.skipFallback)) $.TalosVersion (semverCompare "<1.9.0-0" $.TalosVersion) }}
 {{- fail (printf "talm: registryMirrors.%s sets skipFallback, which Talos only understands from v1.9 on; templateOptions.talosVersion pins %s. Drop the key or raise the contract." $name $.TalosVersion) }}
 {{- end }}
