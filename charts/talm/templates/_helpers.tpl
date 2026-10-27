@@ -310,7 +310,8 @@ busPath: {{ .spec.busPath }}
        route, matching what the discovery path emits. */ -}}
 {{- /* Shared registry knobs, used by every preset so a values file stays
        portable between them. registryMirrors is keyed by registry host and
-       maps to endpoint URLs; registryTLS is keyed by the ENDPOINT host and
+       maps to endpoint URLs plus the optional per-mirror overridePath /
+       skipFallback settings; registryTLS is keyed by the ENDPOINT host and
        carries the TLS posture for it. Guards here rather than per preset,
        so the two copies cannot drift. */ -}}
 {{- define "talm.guard.registries" }}
@@ -325,9 +326,27 @@ busPath: {{ .spec.busPath }}
 {{- fail (printf "talm: registryMirrors.%s endpoints must be a list (got %s) — a bare URL is the missing-dash typo. Example: %q: { endpoints: [https://mirror.example.com] }." $name (kindOf $cfg.endpoints) $name) }}
 {{- end }}
 {{- range $cfg.endpoints }}
+{{- if kindIs "map" . }}
+{{- fail (printf "talm: registryMirrors.%s endpoints entries are plain URL strings, not mappings (got %s). Per-mirror settings go next to endpoints: %q: { endpoints: [https://mirror.example.com], overridePath: true }." $name (kindOf .) $name) }}
+{{- end }}
 {{- if not (or (hasPrefix "http://" (. | toString)) (hasPrefix "https://" (. | toString))) }}
 {{- fail (printf "talm: registryMirrors.%s endpoint %q has no scheme. Talos rejects it with \"unsupported scheme\"; write the full URL, e.g. https://%s." $name (. | toString) (. | toString)) }}
 {{- end }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $cfg.overridePath)) (not (kindIs "bool" $cfg.overridePath)) }}
+{{- fail (printf "talm: registryMirrors.%s overridePath must be true or false (got %s). It tells containerd not to append /v2 to the endpoint path — required by pull-through caches that put the registry name in the path (Harbor proxy cache, e.g. https://mirror.example.com/v2/proxy-docker.io)." $name (kindOf $cfg.overridePath)) }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $cfg.skipFallback)) (not (kindIs "bool" $cfg.skipFallback)) }}
+{{- fail (printf "talm: registryMirrors.%s skipFallback must be true or false (got %s). It decides whether a pull falls back to the upstream registry when no mirror serves it, so an ambiguous YAML scalar is refused." $name (kindOf $cfg.skipFallback)) }}
+{{- end }}
+{{- /* overridePath and skipFallback are unknown keys to Talos older than
+       v1.3 and v1.9 respectively, and the strict node-side decode rejects
+       the whole config for them. */}}
+{{- if and (not (kindIs "invalid" $cfg.overridePath)) $.TalosVersion (semverCompare "<1.3.0-0" $.TalosVersion) }}
+{{- fail (printf "talm: registryMirrors.%s sets overridePath, which Talos only understands from v1.3 on; templateOptions.talosVersion pins %s. Drop the key or raise the contract." $name $.TalosVersion) }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $cfg.skipFallback)) $.TalosVersion (semverCompare "<1.9.0-0" $.TalosVersion) }}
+{{- fail (printf "talm: registryMirrors.%s sets skipFallback, which Talos only understands from v1.9 on; templateOptions.talosVersion pins %s. Drop the key or raise the contract." $name $.TalosVersion) }}
 {{- end }}
 {{- end }}
 {{- range $host, $cfg := .Values.registryTLS }}
@@ -446,6 +465,17 @@ name: {{ $name | toYaml }}
 endpoints:
 {{- range $cfg.endpoints }}
   - url: {{ . }}
+{{- /* RegistryMirrorConfig carries overridePath per endpoint; the values
+       knob is per-mirror (mirroring the legacy schema, which has no
+       per-endpoint form), so it is stamped onto every endpoint of the
+       mirror. All endpoints of one mirror share the same path layout in
+       practice, so the granularity loss is not observable. */}}
+{{- if not (kindIs "invalid" $cfg.overridePath) }}
+    overridePath: {{ $cfg.overridePath }}
+{{- end }}
+{{- end }}
+{{- if not (kindIs "invalid" $cfg.skipFallback) }}
+skipFallback: {{ $cfg.skipFallback }}
 {{- end }}
 {{- end }}
 {{- range $host, $cfg := .Values.registryTLS }}
@@ -483,6 +513,14 @@ insecureSkipVerify: {{ $cfg.insecureSkipVerify }}
         endpoints:
 {{- range $cfg.endpoints }}
         - {{ . }}
+{{- end }}
+{{- /* The legacy schema carries both settings as per-mirror siblings of
+       endpoints — the exact shape the values knob mirrors. */}}
+{{- if not (kindIs "invalid" $cfg.overridePath) }}
+        overridePath: {{ $cfg.overridePath }}
+{{- end }}
+{{- if not (kindIs "invalid" $cfg.skipFallback) }}
+        skipFallback: {{ $cfg.skipFallback }}
 {{- end }}
 {{- end }}
 {{- end }}

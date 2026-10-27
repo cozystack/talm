@@ -147,9 +147,15 @@ extraSchedulerArgs: {}
 
 # Container registry mirrors, keyed by registry host. The generic preset
 # ships no default (cozystack mirrors docker.io through gcr); this key
-# exists so a values file stays portable between the two presets. Example:
+# exists so a values file stays portable between the two presets. Each
+# mirror also accepts optional per-mirror `overridePath` (use the
+# endpoint URL as written, without appending /v2 — required by Harbor
+# proxy-cache endpoints such as
+# https://registry.example.com/v2/proxy-docker.io; Talos v1.3+) and
+# `skipFallback` (never fall back to the upstream registry; Talos v1.9+).
+# Older pinned templateOptions.talosVersion contracts fail fast. Example:
 #   registryMirrors:
-#     docker.io: { endpoints: [https://registry.example.com/v2/docker.io] }
+#     docker.io: { endpoints: [https://registry.example.com/v2/proxy-docker.io], overridePath: true }
 registryMirrors: {}
 
 # TLS posture per registry ENDPOINT host — the hostname of the endpoint
