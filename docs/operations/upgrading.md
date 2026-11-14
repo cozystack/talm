@@ -21,8 +21,10 @@ Render commands (`template`, `apply`, `upgrade`) read this **local** copy, never
 Re-sync the vendored library with `talm init --update`:
 
 ```bash
-talm init --update --preset <your-preset>
+talm init --update
 ```
+
+`--update` takes the preset from `--preset` if given, otherwise from the preset chart in `Chart.yaml`'s dependencies, otherwise from the preset pinned in `.talm-preset.lock`. A project from before preset pinning has no lock, so pass `--preset <your-preset>` (the one you ran `talm init` with) explicitly.
 
 This refreshes `charts/talm/` (always) and offers to update the preset files — the templates, `Chart.yaml` and `values.yaml` — one at a time, interactively, since you may have edited them. Secrets and node files are left untouched.
 
@@ -32,7 +34,7 @@ To catch drift automatically, a release build compares the vendored `charts/talm
 WARN: project's vendored charts/talm/ library differs from the copy built into talm <version> (modified: templates/_helpers.tpl); run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)
 ```
 
-The remediation needs the preset name because `talm init --update` resolves the preset from `Chart.yaml`, which an init'd project does not record — pass `--preset <your-preset>` (the one you ran `talm init` with) explicitly.
+When the project has a `.talm-preset.lock`, the warning names the preset it records (`--preset cozystack`), so the command can be pasted as printed. Without a lock it keeps the `<preset>` placeholder — fill in the preset you ran `talm init` with.
 
 Teams that want this enforced can turn the warning into a hard error (exit 1): set `strictCharts: true` in `Chart.yaml` so the whole team and CI inherit it, or pass `--strict-charts` for a single run. Strict mode applies to every config-loading command, including read-only ones such as `talm get` — run `talm init --update --preset <preset>`, or drop the flag / unset `strictCharts`, to unblock. Strict mode also escalates a check that cannot run at all — an unreadable `charts/talm/` or a corrupted `.talm-preset.lock` — into the same hard error, where the default behaviour degrades it to a `WARN: could not check drift` line: an unverifiable baseline passing silently would defeat the enforcement. A *missing* baseline (no `charts/talm/`, no `.talm-preset.lock`) blocks under strict for the same reason — deleting the baseline must not be a quieter bypass than corrupting it — while staying silent without strict, so projects generated before baseline pinning are not nagged. The check stays silent for `dev`/source builds, whose embedded charts are a moving target the developer controls.
 

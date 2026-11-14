@@ -193,10 +193,10 @@ name: empty-project
 version: 0.1.0
 dependencies: []
 EOF
-talm init --update
+talm init --update   # in a project with no .talm-preset.lock
 ```
 
-Expected: single-wrapped error with hint. Inner cause `preset not found in Chart.yaml dependencies` is surfaced verbatim with hint `add a preset chart (e.g. cozystack) to Chart.yaml dependencies or pass --preset`. No outer rewrap line like `preset is required: use --preset flag or ensure Chart.yaml has a preset dependency` — the rewrap was double-messaging the same condition before the fix.
+Expected (no `.talm-preset.lock`; with one, `--update` takes the preset it records instead): single-wrapped error with hint. Inner cause `preset not found in Chart.yaml dependencies` is surfaced verbatim with hint `add a preset chart (e.g. cozystack) to Chart.yaml dependencies or pass --preset`. No outer rewrap line like `preset is required: use --preset flag or ensure Chart.yaml has a preset dependency` — the rewrap was double-messaging the same condition before the fix.
 
 Regression anchor: `errors.GetAllHints(err)` (or `2>&1 | grep "^hint:"`) MUST still surface the inner `add a preset chart` hint after the unwrap. A regression that drops the hint along with the rewrap is a UX regression.
 

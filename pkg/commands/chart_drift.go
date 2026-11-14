@@ -106,7 +106,8 @@ func vendoredTalmFiles(rootDir string) (map[string]string, bool, error) {
 // binary's embedded charts. Upgrading the binary therefore leaves
 // charts/talm/ frozen at the version that last ran init. CheckChartDrift
 // surfaces that staleness so the operator can re-run
-// `talm init --update --preset <preset>`.
+// `talm init --update --preset <preset>`, naming the preset recorded in
+// .talm-preset.lock when there is one.
 //
 // The comparison is by content: the Chart.yaml version stamp is normalized
 // away on both sides, so a pure version bump that left the library
@@ -139,9 +140,41 @@ func CheckChartDrift(rootDir, binaryVersion string) (bool, string, error) {
 
 	return true, fmt.Sprintf(
 		"project's vendored charts/talm/ library differs from the copy built into talm %s (%s); "+
-			"run `talm init --update --preset <preset>` to re-sync (or ignore if this is intentional)",
-		binaryVersion, summarizeChartDiff(vendored, embedded),
+			"run `talm init --update --preset %s` to re-sync (or ignore if this is intentional)",
+		binaryVersion, summarizeChartDiff(vendored, embedded), presetHintName(rootDir),
 	), nil
+}
+
+// presetPlaceholder stands in for the preset name in remediation hints when
+// the project does not record one.
+const presetPlaceholder = "<preset>"
+
+// readPresetLockName returns the preset recorded in rootDir/.talm-preset.lock.
+// The bool is false when the lock is absent, unreadable, unparseable or has no
+// preset: callers use it as a best-effort fallback and keep their previous
+// behavior without it. Use CheckPresetDrift when a damaged lock must surface.
+func readPresetLockName(rootDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(rootDir, presetLockName))
+	if err != nil {
+		return "", false
+	}
+
+	var lock presetLock
+	if err := yaml.Unmarshal(data, &lock); err != nil || lock.Preset == "" {
+		return "", false
+	}
+
+	return lock.Preset, true
+}
+
+// presetHintName is the preset name to substitute into a remediation hint:
+// the one pinned in the project's lock, or presetPlaceholder without it.
+func presetHintName(rootDir string) string {
+	if name, ok := readPresetLockName(rootDir); ok {
+		return name
+	}
+
+	return presetPlaceholder
 }
 
 // diffSampleLimit caps how many differing paths the drift message carries.

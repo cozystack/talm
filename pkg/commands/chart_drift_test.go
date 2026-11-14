@@ -438,3 +438,71 @@ func TestWritePresetLock_UnknownPreset_Errors(t *testing.T) {
 		t.Errorf("error should name the offending preset; got: %v", err)
 	}
 }
+
+// writePresetLockFile writes a .talm-preset.lock naming preset into root.
+func writePresetLockFile(t *testing.T, root, preset string) {
+	t.Helper()
+
+	lock := "preset: " + preset + "\npresetHash: 0000\n"
+	if err := os.WriteFile(filepath.Join(root, presetLockName), []byte(lock), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+}
+
+// TestCheckChartDrift_LockNamesPreset_HintCarriesPreset pins that the library
+// drift hint substitutes the preset recorded in .talm-preset.lock for the
+// <preset> placeholder, so the operator can paste the command as printed.
+func TestCheckChartDrift_LockNamesPreset_HintCarriesPreset(t *testing.T) {
+	root := writeVendoredTalmLibrary(t, "0.1.0")
+	if err := os.WriteFile(filepath.Join(root, "charts", "talm", "templates", "_helpers.tpl"), []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	writePresetLockFile(t, root, "cozystack")
+
+	drift, msg, err := CheckChartDrift(root, "0.30.0")
+	if err != nil {
+		t.Fatalf("CheckChartDrift: %v", err)
+	}
+	if !drift {
+		t.Fatal("expected drift")
+	}
+	if !strings.Contains(msg, "talm init --update --preset cozystack") {
+		t.Errorf("hint must name the locked preset; got %q", msg)
+	}
+	if strings.Contains(msg, "<preset>") {
+		t.Errorf("hint must not keep the placeholder when the lock names the preset; got %q", msg)
+	}
+}
+
+// TestCheckChartDrift_UnusableLock_HintKeepsPlaceholder pins the best-effort
+// contract: a missing, corrupt or preset-less lock never fails the drift
+// check and leaves the placeholder in the hint.
+func TestCheckChartDrift_UnusableLock_HintKeepsPlaceholder(t *testing.T) {
+	for name, lock := range map[string]*string{
+		"missing":      nil,
+		"corrupt":      ptr(":\n  bad:\n: yaml"),
+		"empty preset": ptr("presetHash: abc\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := writeVendoredTalmLibrary(t, "0.1.0")
+			if err := os.WriteFile(filepath.Join(root, "charts", "talm", "templates", "_helpers.tpl"), []byte("tampered"), 0o644); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+			if lock != nil {
+				if err := os.WriteFile(filepath.Join(root, presetLockName), []byte(*lock), 0o644); err != nil {
+					t.Fatalf("write lock: %v", err)
+				}
+			}
+
+			drift, msg, err := CheckChartDrift(root, "0.30.0")
+			if err != nil {
+				t.Fatalf("CheckChartDrift: %v", err)
+			}
+			if !drift || !strings.Contains(msg, "--preset <preset>") {
+				t.Errorf("expected drift with the placeholder hint; got drift=%v msg=%q", drift, msg)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

@@ -944,6 +944,11 @@ func pruneVendoredTalmLibrary(presetFiles map[string]string) error {
 	return nil
 }
 
+// errPresetNotInChart marks a readable Chart.yaml whose dependencies name no
+// preset chart, as opposed to an unreadable or malformed one. `init --update`
+// falls back to .talm-preset.lock only for the former.
+var errPresetNotInChart = errors.New("preset not found in Chart.yaml dependencies")
+
 // readChartYamlPreset reads Chart.yaml and determines the preset name from dependencies.
 func readChartYamlPreset() (string, error) {
 	chartYamlPath := filepath.Join(Config.RootDir, chartYamlName)
@@ -972,7 +977,7 @@ func readChartYamlPreset() (string, error) {
 
 	//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 	return "", errors.WithHint(
-		errors.New("preset not found in Chart.yaml dependencies"),
+		errPresetNotInChart,
 		"add a preset chart (e.g. cozystack) to Chart.yaml's dependencies, or pass --preset on the command line",
 	)
 }
@@ -1439,7 +1444,8 @@ func updateTalmLibraryChart() error {
 		)
 	}
 
-	// Determine preset: use -p flag if provided, otherwise try to read from Chart.yaml
+	// Determine preset: use -p flag if provided, otherwise try Chart.yaml
+	// dependencies, then the preset pinned in .talm-preset.lock
 	var presetName string
 
 	if initCmdFlags.preset != "" {
@@ -1463,6 +1469,16 @@ func updateTalmLibraryChart() error {
 		var err error
 
 		presetName, err = readChartYamlPreset()
+		if errors.Is(err, errPresetNotInChart) {
+			// Chart.yaml does not record the preset (talm init never
+			// writes it as a dependency); fall back to the preset pinned
+			// in .talm-preset.lock. Projects without a lock keep the
+			// original error.
+			if lockPreset, ok := readPresetLockName(Config.RootDir); ok {
+				presetName, err = lockPreset, nil
+			}
+		}
+
 		if err != nil {
 			// readChartYamlPreset already returns errors.WithHint("preset
 			// not found in Chart.yaml dependencies", "add a preset chart…");
@@ -1483,7 +1499,7 @@ func updateTalmLibraryChart() error {
 		if !isValidPreset(presetName, availablePresets) {
 			//nolint:wrapcheck // cockroachdb/errors.WithHint at boundary.
 			return errors.WithHint(
-				errors.Newf("preset %q from Chart.yaml is not embedded in this talm binary. Valid presets are: %v", presetName, availablePresets),
+				errors.Newf("preset %q recorded in the project is not embedded in this talm binary. Valid presets are: %v", presetName, availablePresets),
 				"pass --preset with one of the embedded presets, or use a talm build that ships your project's preset",
 			)
 		}
