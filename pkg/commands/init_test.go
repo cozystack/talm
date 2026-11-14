@@ -998,3 +998,81 @@ func TestWriteSecretsBundleToFile_StillRefusesOverwrite(t *testing.T) {
 		t.Errorf("original content changed: %q", got)
 	}
 }
+
+// TestInitUpdate_PresetFromLock pins the inference chain's last link: with no
+// --preset and no preset dependency in Chart.yaml, `init --update` takes the
+// preset pinned in .talm-preset.lock instead of failing.
+func TestInitUpdate_PresetFromLock(t *testing.T) {
+	imageOrig := initCmdFlags.image
+	presetOrig := initCmdFlags.preset
+	forceOrig := initCmdFlags.force
+	rootOrig := Config.RootDir
+	t.Cleanup(func() {
+		initCmdFlags.image = imageOrig
+		initCmdFlags.preset = presetOrig
+		initCmdFlags.force = forceOrig
+		Config.RootDir = rootOrig
+	})
+
+	initCmdFlags.image = ""
+	initCmdFlags.preset = ""
+	initCmdFlags.force = true
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+
+	chartYaml := "apiVersion: v2\nname: test\nversion: 0.1.0\n" +
+		"dependencies:\n  - name: talm\n    version: 0.1.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(chartYaml), 0o644); err != nil {
+		t.Fatalf("seed Chart.yaml: %v", err)
+	}
+
+	if err := WritePresetLock(dir, "cozystack"); err != nil {
+		t.Fatalf("WritePresetLock: %v", err)
+	}
+
+	if err := updateTalmLibraryChart(); err != nil {
+		t.Fatalf("init --update with a lock and no --preset must succeed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "templates")); err != nil {
+		t.Errorf("preset templates were not refreshed from the locked preset: %v", err)
+	}
+}
+
+// TestInitUpdate_UnknownLockPreset_FailsBeforeWrites pins that a lock naming a
+// preset this binary does not embed is rejected up front, like an unknown
+// Chart.yaml preset, rather than half-updating the project.
+func TestInitUpdate_UnknownLockPreset_FailsBeforeWrites(t *testing.T) {
+	imageOrig := initCmdFlags.image
+	presetOrig := initCmdFlags.preset
+	rootOrig := Config.RootDir
+	t.Cleanup(func() {
+		initCmdFlags.image = imageOrig
+		initCmdFlags.preset = presetOrig
+		Config.RootDir = rootOrig
+	})
+
+	initCmdFlags.image = ""
+	initCmdFlags.preset = ""
+
+	dir := t.TempDir()
+	Config.RootDir = dir
+
+	chartYaml := "apiVersion: v2\nname: test\nversion: 0.1.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(chartYaml), 0o644); err != nil {
+		t.Fatalf("seed Chart.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".talm-preset.lock"), []byte("preset: nonesuch\npresetHash: abc\n"), 0o644); err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+
+	err := updateTalmLibraryChart()
+	if err == nil || !strings.Contains(err.Error(), "nonesuch") {
+		t.Fatalf("expected an error naming the unknown preset, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "charts")); statErr == nil {
+		t.Error("charts/ was written before the preset was validated")
+	}
+}
